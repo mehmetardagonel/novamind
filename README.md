@@ -1,7 +1,5 @@
 # novamind
 
-# novamind
-
 ## GIT RULES AND MANDATORY PRACTICES
 
 ### NEVER DO THIS
