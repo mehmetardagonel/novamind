@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NovaMind AI Assistant - Text Chat</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .chat-container {
+            width: 90%;
+            max-width: 800px;
+            height: 90vh;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #4CAF50;
+            display: inline-block;
+            margin-right: 10px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .session-info { font-size: 12px; opacity: 0.8; }
+        #chat-box {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .message {
+            margin: 15px 0;
+            padding: 12px 16px;
+            border-radius: 18px;
+            max-width: 70%;
+            animation: fadeIn 0.3s;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .user-message {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+        .ai-message {
+            background: white;
+            color: #333;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .system-message {
+            background: #fff3cd;
+            color: #856404;
+            margin: 10px auto;
+            text-align: center;
+            max-width: 80%;
+        }
+        .action-result-message {
+            background: #d4edda;
+            color: #155724;
+            margin: 10px auto;
+            text-align: center;
+            max-width: 80%;
+            border: 1px solid #c3e6cb;
+        }
+        .timestamp {
+            font-size: 10px;
+            opacity: 0.6;
+            margin-top: 5px;
+        }
+        
+        /* EMAIL LIST STYLES */
+        .email-list-container {
+            margin: 10px 0;
+            max-width: 85%;
+        }
+        
+        .email-item {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 12px;
+            margin: 8px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        
+        .email-item:hover {
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+        
+        .email-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        
+        .email-from {
+            font-weight: 600;
+            color: #667eea;
+            font-size: 14px;
+        }
+        
+        .email-time {
+            font-size: 11px;
+            color: #999;
+        }
+        
+        .email-subject {
+            font-weight: 600;
+            color: #333;
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+        
+        .email-preview {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.4;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+        
+        .email-badges {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .badge {
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-weight: 500;
+        }
+        
+        .badge-important {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .badge-label {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .badge-work {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+        
+        .badge-personal {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+        
+        .badge-promotions {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+        
+        .badge-spam {
+            background: #ffebee;
+            color: #c62828;
+        }
+        
+        /* ✅ NEW: Updated badge */
+        .badge-updated {
+            background: #e8f5e9;
+            color: #2e7d32;
+            font-weight: 600;
+        }
+        
+        /* ✅ NEW: Version badge */
+        .badge-version {
+            background: #e0e0e0;
+            color: #424242;
+        }
+        
+        .email-count-header {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 8px;
+            padding-left: 4px;
+        }
+        
+        /* DRAFT STYLES */
+        .draft-toggle-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 6px;
+            font-size: 12px;
+            transition: opacity 0.2s, transform 0.1s;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .draft-toggle-btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+        .draft-toggle-btn:active {
+            transform: translateY(0);
+        }
+        
+        .draft-preview-box {
+            background: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 10px;
+            margin-top: 6px;
+            display: none;
+        }
+        .draft-preview-box.expanded {
+            display: block;
+            animation: slideDown 0.2s ease;
+        }
+        
+        /* ✅ NEW: Updated draft style */
+        .draft-preview-box.updated {
+            border-left: 4px solid #4CAF50;
+            background: #f1f8f4;
+        }
+        
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-3px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .draft-header {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 6px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .draft-field {
+            margin: 2px 0;
+            font-size: 11px;
+            line-height: 1.4;
+            display: flex;
+            gap: 8px;
+        }
+        
+        .draft-field-label {
+            font-weight: 600;
+            color: #666;
+            min-width: 50px;
+            flex-shrink: 0;
+        }
+        
+        .draft-field-value {
+            color: #333;
+            word-break: break-all;
+        }
+        
+        .draft-body {
+            background: white;
+            padding: 8px;
+            border-radius: 5px;
+            margin: 6px 0 8px 0;
+            white-space: pre-wrap;
+            font-size: 11px;
+            max-height: 120px;
+            overflow-y: auto;
+            color: #333;
+            line-height: 1.5;
+            border: 1px solid #e8e8e8;
+        }
+        
+        .draft-body::-webkit-scrollbar {
+            width: 5px;
+        }
+        .draft-body::-webkit-scrollbar-thumb {
+            background: #ccc;
+            border-radius: 3px;
+        }
+        .draft-body::-webkit-scrollbar-track {
+            background: #f0f0f0;
+        }
+        
+        .draft-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .draft-action-btn {
+            padding: 4px 8px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 10px;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+        .draft-action-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .draft-action-btn:active {
+            transform: translateY(0);
+        }
+        
+        .btn-read-full {
+            background: #667eea;
+            color: white;
+        }
+        .btn-read-full:hover {
+            background: #5568d3;
+        }
+        
+        .btn-open-drafts {
+            background: white;
+            color: #667eea;
+            border: 1px solid #667eea;
+        }
+        .btn-open-drafts:hover {
+            background: #f0f3ff;
+        }
+        
+        .btn-hide {
+            background: #f0f0f0;
+            color: #666;
+        }
+        .btn-hide:hover {
+            background: #e0e0e0;
+        }
+        
+        /* ✅ NEW: Update draft button */
+        .btn-update-draft {
+            background: #4CAF50;
+            color: white;
+        }
+        .btn-update-draft:hover {
+            background: #45a049;
+        }
+        
+        .typing-indicator {
+            display: none;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .typing-indicator.active { display: block; }
+        .typing-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #999;
+            margin: 0 2px;
+            animation: typing 1.4s infinite;
+        }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-10px); }
+        }
+        .input-container {
+            display: flex;
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e0e0e0;
+            gap: 10px;
+        }
+        #message-input {
+            flex: 1;
+            padding: 12px 20px;
+            font-size: 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+        #message-input:focus { border-color: #667eea; }
+        #send-button {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+        #send-button:hover:not(:disabled) { transform: scale(1.05); }
+        #send-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .connection-status {
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            text-align: center;
+            font-size: 14px;
+        }
+        .connection-status.disconnected { background: #f44336; }
+        .connection-status.connecting { background: #ff9800; }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <div>
+                <h2><span class="status-indicator" id="status-dot"></span>NovaMind AI Assistant</h2>
+                <div class="session-info" id="session-info">Initializing...</div>
+            </div>
+        </div>
+        <div id="connection-status" class="connection-status connecting">Connecting...</div>
+        <div id="chat-box"></div>
+        <div class="typing-indicator" id="typing-indicator">
+            <span class="typing-dot"></span>
+            <span class="typing-dot"></span>
+            <span class="typing-dot"></span>
+        </div>
+        <div class="input-container">
+            <input type="text" id="message-input" placeholder="Type your message..." disabled>
+            <button id="send-button" disabled>Send</button>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let sessionToken = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+
+        async function createSession() {
+            try {
+                const response = await fetch('/api/session/create', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    sessionToken = data.session_token;
+                    document.getElementById('session-info').textContent = 
+                        `Session: ${sessionToken.substring(0, 8)}...`;
+                    connectWebSocket();
+                }
+            } catch (error) {
+                console.error('Error creating session:', error);
+                updateConnectionStatus('Failed to create session', 'disconnected');
+            }
+        }
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/chat/${sessionToken}`;
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = function() {
+                console.log('✅ WebSocket connected');
+                updateConnectionStatus('Connected', 'connected');
+                document.getElementById('message-input').disabled = false;
+                document.getElementById('send-button').disabled = false;
+                reconnectAttempts = 0;
+            };
+
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                handleMessage(data);
+            };
+
+            ws.onerror = function(error) {
+                console.error('❌ WebSocket error:', error);
+                updateConnectionStatus('Connection error', 'disconnected');
+            };
+
+            ws.onclose = function(event) {
+                updateConnectionStatus('Disconnected', 'disconnected');
+                document.getElementById('message-input').disabled = true;
+                document.getElementById('send-button').disabled = true;
+                
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    setTimeout(() => {
+                        updateConnectionStatus(`Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`, 'connecting');
+                        connectWebSocket();
+                    }, 2000 * reconnectAttempts);
+                }
+            };
+        }
+
+        function handleMessage(data) {
+            if (data.type === 'system') {
+                addMessage('system', data.message, data.timestamp);
+            } else if (data.type === 'message' && data.sender === 'assistant') {
+                if (data.draft_data) {
+                    // ✅ Check if this is an update or new draft
+                    const isUpdate = data.intent === 'update_draft';
+                    addDraftMessage(data.message, data.draft_data, data.timestamp, isUpdate);
+                } else {
+                    addMessage('ai', data.message, data.timestamp);
+                }
+            } else if (data.type === 'action_result') {
+                addMessage('action-result', data.message, data.timestamp);
+                
+                if (data.data && data.data.emails && data.data.emails.length > 0) {
+                    displayEmailList(data.data.emails);
+                }
+            } else if (data.type === 'typing') {
+                showTypingIndicator(data.is_typing);
+            } else if (data.type === 'history') {
+                data.messages.forEach(msg => {
+                    addMessage(msg.sender === 'user' ? 'user' : 'ai', msg.message, msg.timestamp);
+                });
+            }
+        }
+
+        function addMessage(type, message, timestamp) {
+            const chatBox = document.getElementById('chat-box');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}-message`;
+            const time = new Date(timestamp).toLocaleTimeString('en-US', {
+                hour: '2-digit', minute: '2-digit'
+            });
+            messageDiv.innerHTML = `${escapeHtml(message)}<div class="timestamp">${time}</div>`;
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function displayEmailList(emails) {
+            const chatBox = document.getElementById('chat-box');
+            const container = document.createElement('div');
+            container.className = 'email-list-container';
+            
+            const countHeader = document.createElement('div');
+            countHeader.className = 'email-count-header';
+            countHeader.textContent = `📧 ${emails.length} email${emails.length > 1 ? 's' : ''} found:`;
+            container.appendChild(countHeader);
+            
+            emails.forEach((email, index) => {
+                const emailDiv = document.createElement('div');
+                emailDiv.className = 'email-item';
+                
+                const emailTime = new Date(email.timestamp).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+                
+                let labelClass = 'badge-label';
+                if (email.label) {
+                    labelClass = `badge-${email.label.toLowerCase()}`;
+                }
+                
+                emailDiv.innerHTML = `
+                    <div class="email-header">
+                        <div class="email-from">${escapeHtml(email.from)}</div>
+                        <div class="email-time">${emailTime}</div>
+                    </div>
+                    <div class="email-subject">${escapeHtml(email.subject)}</div>
+                    <div class="email-preview">${escapeHtml(email.preview)}</div>
+                    <div class="email-badges">
+                        ${email.important ? '<span class="badge badge-important">⭐ Important</span>' : ''}
+                        ${email.label ? `<span class="badge ${labelClass}">${escapeHtml(email.label)}</span>` : ''}
+                    </div>
+                `;
+                
+                emailDiv.onclick = () => {
+                    console.log('Email clicked:', email);
+                };
+                
+                container.appendChild(emailDiv);
+            });
+            
+            chatBox.appendChild(container);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        // ✅ UPDATED: Added isUpdate parameter
+        function addDraftMessage(message, draftData, timestamp, isUpdate = false) {
+            const chatBox = document.getElementById('chat-box');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ai-message';
+            
+            const time = new Date(timestamp).toLocaleTimeString('en-US', {
+                hour: '2-digit', minute: '2-digit'
+            });
+            
+            const draftId = 'draft-' + Date.now();
+            const updatedClass = isUpdate ? 'updated' : '';
+            
+            messageDiv.innerHTML = `
+                ${escapeHtml(message)}
+                <div class="timestamp">${time}</div>
+                
+                <button class="draft-toggle-btn" id="toggle-btn-${draftId}" onclick="toggleDraftPreview('${draftId}')">
+                    <span>📧</span>
+                    <span id="toggle-text-${draftId}">Show Draft</span>
+                    <span id="toggle-icon-${draftId}">▼</span>
+                </button>
+                
+                <div id="${draftId}" class="draft-preview-box ${updatedClass}">
+                    <div class="draft-header">
+                        <span>📧</span>
+                        <span>${isUpdate ? 'Updated Draft' : 'Draft Email'}</span>
+                        ${draftData.version ? `<span class="badge badge-version">v${draftData.version}</span>` : ''}
+                        ${isUpdate ? '<span class="badge badge-updated">✓ Updated</span>' : ''}
+                    </div>
+                    
+                    <div class="draft-field">
+                        <span class="draft-field-label">To:</span>
+                        <span class="draft-field-value">${escapeHtml(draftData.to)}</span>
+                    </div>
+                    
+                    <div class="draft-field">
+                        <span class="draft-field-label">Subject:</span>
+                        <span class="draft-field-value">${escapeHtml(draftData.subject)}</span>
+                    </div>
+                    
+                    <div class="draft-body" id="${draftId}-body">
+                        ${escapeHtml(draftData.body_preview)}
+                    </div>
+                    
+                    <div class="draft-actions">
+                        <button class="draft-action-btn btn-hide" onclick="toggleDraftPreview('${draftId}')">
+                            Hide
+                        </button>
+                        <button class="draft-action-btn btn-read-full" id="${draftId}-btn" onclick="showFullDraft('${draftId}')">
+                            Read Full
+                        </button>
+                        <button class="draft-action-btn btn-open-drafts" onclick="openDraftsPage()">
+                            Open Drafts
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            messageDiv.querySelector(`#${draftId}-body`).dataset.fullBody = draftData.body_full;
+            
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function toggleDraftPreview(draftId) {
+            const preview = document.getElementById(draftId);
+            const text = document.getElementById('toggle-text-' + draftId);
+            const icon = document.getElementById('toggle-icon-' + draftId);
+            
+            if (preview.classList.contains('expanded')) {
+                preview.classList.remove('expanded');
+                text.textContent = 'Show Draft';
+                icon.textContent = '▼';
+            } else {
+                preview.classList.add('expanded');
+                text.textContent = 'Hide Draft';
+                icon.textContent = '▲';
+            }
+        }
+
+        function showFullDraft(draftId) {
+            const bodyDiv = document.getElementById(draftId + '-body');
+            const fullBody = bodyDiv.dataset.fullBody;
+            bodyDiv.textContent = fullBody;
+            bodyDiv.style.maxHeight = '300px';
+            
+            const btn = document.getElementById(draftId + '-btn');
+            btn.style.display = 'none';
+        }
+
+        function openDraftsPage() {
+            alert('Opening Drafts page... (Not implemented yet)');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function showTypingIndicator(show) {
+            const indicator = document.getElementById('typing-indicator');
+            if (show) {
+                indicator.classList.add('active');
+                document.getElementById('chat-box').scrollTop = document.getElementById('chat-box').scrollHeight;
+            } else {
+                indicator.classList.remove('active');
+            }
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const message = input.value.trim();
+            if (message && ws && ws.readyState === WebSocket.OPEN) {
+                addMessage('user', message, new Date().toISOString());
+                ws.send(JSON.stringify({ type: 'message', message: message }));
+                input.value = '';
+                input.focus();
+            }
+        }
+
+        function updateConnectionStatus(message, status) {
+            document.getElementById('connection-status').textContent = message;
+            document.getElementById('connection-status').className = `connection-status ${status}`;
+            const statusDot = document.getElementById('status-dot');
+            statusDot.style.background = status === 'connected' ? '#4CAF50' :
+            status === 'connecting' ? '#ff9800' : '#f44336';
+        }
+
+        document.getElementById('send-button').onclick = sendMessage;
+        document.getElementById('message-input').onkeypress = function(e) {
+            if (e.key === 'Enter') sendMessage();
+        };
+
+        setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000);
+
+        window.onload = createSession;
+        window.onbeforeunload = function() {
+            if (ws) ws.close();
+        };
+    </script>
+</body>
+</html>
