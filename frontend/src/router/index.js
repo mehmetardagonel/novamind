@@ -3,21 +3,24 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
-  // Your other routes go here
   {
-    path: '/login', // Make sure you have a route for /login
+    path: '/',
+    redirect: '/login'
+  },
+  {
+    path: '/login',
     name: 'Login',
     component: () => import(/* webpackChunkName: "login" */ '../components/LoginScreen.vue')
   },
   {
-    path: '/App', // Your MainApp path
+    path: '/app',
     name: 'App',
     component: () => import(/* webpackChunkName: "main" */ '../components/MainApp.vue')
   },
   {
-    path: '/signup', // Your MainApp path
+    path: '/signup',
     name: 'SignUp',
-    component: () => import(/* webpackChunkName: "main" */ '../components/SignUpScreen.vue')
+    component: () => import(/* webpackChunkName: "signup" */ '../components/SignUpScreen.vue')
   },
 ]
 

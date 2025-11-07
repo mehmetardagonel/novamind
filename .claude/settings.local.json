@@ -4,7 +4,10 @@
       "Bash(git checkout:*)",
       "Bash(git pull:*)",
       "Bash(git merge:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Bash(uvicorn:*)"
     ],
     "deny": [],
     "ask": []

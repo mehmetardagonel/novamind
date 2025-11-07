@@ -1,27 +1,18 @@
-from datetime import datetime, timedelta
-from typing import List, Optional
+from datetime import datetime
+from typing import List
 
-from fastapi import FastAPI, Depends, HTTPException, Query, status
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 from simplegmail import Gmail
 from simplegmail.query import construct_query
 
 from models import EmailOut, EmailRequest
 from filters import EmailFilters
-from database import get_db, init_db, User
 from auth import (
-    authenticate_user,
-    create_access_token,
-    create_user,
     get_current_active_user,
-    UserCreate,
     UserOut,
-    Token,
-    ACCESS_TOKEN_EXPIRE_MINUTES
+    SupabaseUser
 )
 
 # Initialize FastAPI app
@@ -35,9 +26,11 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",  # Vite dev server
+        "http://localhost:5173",  # Vite dev server default
+        "http://localhost:5179",  # Vite dev server current
         "http://localhost:3000",  # Alternative frontend port
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:5179",
         "http://127.0.0.1:3000"
     ],
     allow_credentials=True,
@@ -45,14 +38,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize database on startup
+# Initialize on startup
 @app.on_event("startup")
 def startup_event():
-    init_db()
-    print("✅ Database initialized")
+    print("✅ Supabase authentication configured")
     print("🚀 NovaMind Email Assistant API is running")
 
-gmail = Gmail()  # loads credentials + token.json automatically
+# Lazy load Gmail client
+_gmail_client = None
+
+def get_gmail_client() -> Gmail:
+    """Lazy load Gmail client to avoid startup errors if credentials are missing"""
+    global _gmail_client
+    if _gmail_client is None:
+        try:
+            _gmail_client = Gmail()
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Gmail API not configured. Please set up client_secret.json and gmail_token.json. Error: {str(e)}"
+            )
+    return _gmail_client
 
 def to_out(msg) -> EmailOut:
     return EmailOut(
@@ -70,83 +76,35 @@ def read_root():
         "message": "NovaMind Email Assistant API",
         "version": "1.0.0",
         "status": "running",
+        "auth": "Supabase",
         "endpoints": {
             "auth": {
-                "signup": "POST /api/auth/signup",
-                "login": "POST /api/auth/login",
-                "me": "GET /api/auth/me"
+                "me": "GET /api/auth/me (requires Supabase token)"
             },
             "emails": {
-                "read": "GET /backend/read-email",
-                "send": "POST /backend/send-email"
+                "read": "GET /backend/read-email (requires auth)",
+                "send": "POST /backend/send-email (requires auth)"
             }
         }
     }
 
 # ==================== AUTHENTICATION ENDPOINTS ====================
-@app.post("/api/auth/signup", response_model=Token, status_code=status.HTTP_201_CREATED)
-def signup(user: UserCreate, db: Session = Depends(get_db)):
-    """Create a new user account"""
-    try:
-        db_user = create_user(db, user)
-
-        # Create access token
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": db_user.username}, expires_delta=access_token_expires
-        )
-
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user": UserOut.from_orm(db_user)
-        }
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating user: {str(e)}"
-        )
-
-@app.post("/api/auth/login", response_model=Token)
-def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
-):
-    """Login with username and password"""
-    user = authenticate_user(db, form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # Create access token
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
-    )
-
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": UserOut.from_orm(user)
-    }
-
 @app.get("/api/auth/me", response_model=UserOut)
-async def get_me(current_user: User = Depends(get_current_active_user)):
-    """Get current logged-in user information"""
-    return UserOut.from_orm(current_user)
+async def get_me(current_user: SupabaseUser = Depends(get_current_active_user)):
+    """Get current logged-in user information from Supabase"""
+    return UserOut(
+        id=current_user.id,
+        email=current_user.email,
+        created_at=datetime.utcnow().isoformat()
+    )
 
 # ==================== EMAIL ENDPOINTS ====================
 @app.get("/backend/read-email", response_model=List[EmailOut])
 def list_emails(
     filters: EmailFilters = Depends(),
-    current_user: User = Depends(get_current_active_user)
+    current_user: SupabaseUser = Depends(get_current_active_user)
 ):
-    """Fetch emails from Gmail with optional filters (requires authentication)"""
+    """Fetch emails from Gmail with optional filters (requires Supabase authentication)"""
     # Build query from filters
     qdict = filters.to_simplegmail_query()
 
@@ -157,6 +115,7 @@ def list_emails(
 
     try:
         # Fetch messages
+        gmail = get_gmail_client()
         messages = gmail.get_messages(query=q)
         return [to_out(m) for m in messages]
     except Exception as e:
@@ -168,10 +127,11 @@ def list_emails(
 @app.post("/backend/send-email")
 def send_email(
     req: EmailRequest,
-    current_user: User = Depends(get_current_active_user)
+    current_user: SupabaseUser = Depends(get_current_active_user)
 ):
-    """Send email via Gmail (requires authentication)"""
+    """Send email via Gmail (requires Supabase authentication)"""
     try:
+        gmail = get_gmail_client()
         user_info = gmail.service.users().getProfile(userId="me").execute()
         sender_email = user_info["emailAddress"]
 

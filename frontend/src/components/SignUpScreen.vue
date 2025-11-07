@@ -6,25 +6,9 @@
     <div class="signup-form">
       <label>Email</label>
       <input
-        type="email"
+        type="text"
         v-model="email"
-        placeholder="Enter your email"
-        @keyup.enter="signup"
-      />
-
-      <label>Username</label>
-      <input
-        type="text"
-        v-model="username"
-        placeholder="Choose a username"
-        @keyup.enter="signup"
-      />
-
-      <label>Full Name (Optional)</label>
-      <input
-        type="text"
-        v-model="fullName"
-        placeholder="Enter your full name"
+        placeholder="Enter your email or username"
         @keyup.enter="signup"
       />
 
@@ -60,14 +44,12 @@
 </template>
 
 <script>
-import { useAuthStore } from '../stores/auth'
+import { supabase } from '@/database/supabaseClient'
 
 export default {
   data() {
     return {
       email: '',
-      username: '',
-      fullName: '',
       password: '',
       confirmPassword: '',
       errorMessage: '',
@@ -75,23 +57,25 @@ export default {
       loading: false,
     }
   },
-  setup() {
-    const authStore = useAuthStore()
-    return { authStore }
-  },
   methods: {
     async signup() {
       this.errorMessage = ''
       this.successMessage = ''
 
       // Validation
-      if (!this.email || !this.username || !this.password || !this.confirmPassword) {
+      if (!this.email || !this.password || !this.confirmPassword) {
         this.errorMessage = 'Please fill in all required fields!'
         return
       }
 
+      // Append @gmail.com suffix if not present
+      let fullEmail = this.email.trim()
+      if (fullEmail && !fullEmail.includes('@')) {
+        fullEmail = fullEmail + '@gmail.com'
+      }
+
       const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-      if (!emailPattern.test(this.email)) {
+      if (!emailPattern.test(fullEmail)) {
         this.errorMessage = 'Please enter a valid email!'
         return
       }
@@ -108,23 +92,24 @@ export default {
 
       try {
         this.loading = true
-        await this.authStore.signup({
-          email: this.email,
-          username: this.username,
+
+        const { data, error } = await supabase.auth.signUp({
+          email: fullEmail,
           password: this.password,
-          full_name: this.fullName || undefined,
         })
 
-        this.successMessage = 'Account created successfully! Redirecting...'
-        console.log('Signup successful')
+        if (error) throw error
 
-        // Redirect after 1 second
+        this.successMessage = 'Account created successfully! Please check your email to verify your account.'
+        console.log('Signup successful', data)
+
+        // Redirect to verification pending page after 2 seconds
         setTimeout(() => {
-          this.$router.push('/app')
-        }, 1000)
+          this.$router.push('/login')
+        }, 2000)
       } catch (error) {
         console.error('Signup error:', error)
-        this.errorMessage = error.detail || 'Signup failed. Please try again.'
+        this.errorMessage = error.message || 'Signup failed. Please try again.'
       } finally {
         this.loading = false
       }

@@ -4,11 +4,11 @@
     <h3>Your personal AI Email Assistant</h3>
 
     <div class="login-form">
-      <label>Username</label>
+      <label>Email</label>
       <input
         type="text"
-        v-model="username"
-        placeholder="Enter your username"
+        v-model="email"
+        placeholder="Enter your email or username"
         @keyup.enter="login"
       />
 
@@ -35,38 +35,47 @@
 </template>
 
 <script>
-import { useAuthStore } from '../stores/auth'
+import { supabase } from '@/database/supabaseClient'
 
 export default {
   data() {
     return {
-      username: '',
+      email: '',
       password: '',
       errorMessage: '',
       loading: false,
     }
   },
-  setup() {
-    const authStore = useAuthStore()
-    return { authStore }
-  },
   methods: {
     async login() {
       this.errorMessage = ''
 
-      if (!this.username || !this.password) {
-        this.errorMessage = 'Please enter both username and password!'
+      if (!this.email || !this.password) {
+        this.errorMessage = 'Please enter both email and password!'
         return
       }
 
       try {
         this.loading = true
-        await this.authStore.login(this.username, this.password)
-        console.log('Login successful')
+
+        // Append @gmail.com suffix if not present
+        let fullEmail = this.email.trim()
+        if (fullEmail && !fullEmail.includes('@')) {
+          fullEmail = fullEmail + '@gmail.com'
+        }
+
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: fullEmail,
+          password: this.password,
+        })
+
+        if (error) throw error
+
+        console.log('Login successful', data)
         this.$router.push('/app')
       } catch (error) {
         console.error('Login error:', error)
-        this.errorMessage = error.detail || 'Login failed. Please check your credentials.'
+        this.errorMessage = error.message || 'Login failed. Please check your credentials.'
       } finally {
         this.loading = false
       }

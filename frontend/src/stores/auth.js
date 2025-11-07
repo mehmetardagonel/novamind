@@ -1,84 +1,117 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import * as authAPI from '../api/auth'
+import { supabase } from '@/database/supabaseClient'
 
 export const useAuthStore = defineStore('auth', () => {
   // State
   const user = ref(null)
-  const token = ref(null)
+  const session = ref(null)
   const loading = ref(false)
   const error = ref(null)
 
   // Getters
-  const isAuthenticated = computed(() => !!token.value)
+  const isAuthenticated = computed(() => !!session.value)
   const currentUser = computed(() => user.value)
 
   // Actions
-  const initialize = () => {
-    // Load user and token from localStorage on app startup
-    const storedUser = authAPI.getStoredUser()
-    const storedToken = localStorage.getItem('access_token')
+  const initialize = async () => {
+    try {
+      // Get current Supabase session
+      const { data: { session: currentSession } } = await supabase.auth.getSession()
 
-    if (storedUser && storedToken) {
-      user.value = storedUser
-      token.value = storedToken
+      if (currentSession) {
+        session.value = currentSession
+        user.value = currentSession.user
+      }
+
+      // Listen for auth state changes
+      supabase.auth.onAuthStateChange((_event, newSession) => {
+        session.value = newSession
+        user.value = newSession?.user || null
+      })
+    } catch (err) {
+      console.error('Failed to initialize auth:', err)
     }
   }
 
-  const login = async (username, password) => {
+  const login = async (email, password) => {
     try {
       loading.value = true
       error.value = null
 
-      const response = await authAPI.login(username, password)
+      // Append @gmail.com suffix if not present
+      let fullEmail = email.trim()
+      if (fullEmail && !fullEmail.includes('@')) {
+        fullEmail = fullEmail + '@gmail.com'
+      }
 
-      user.value = response.user
-      token.value = response.access_token
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
+        email: fullEmail,
+        password: password,
+      })
 
-      return response
+      if (loginError) throw loginError
+
+      session.value = data.session
+      user.value = data.user
+
+      return data
     } catch (err) {
-      error.value = err.detail || 'Login failed'
+      error.value = err.message || 'Login failed'
       throw err
     } finally {
       loading.value = false
     }
   }
 
-  const signup = async (userData) => {
+  const signup = async (email, password) => {
     try {
       loading.value = true
       error.value = null
 
-      const response = await authAPI.signup(userData)
+      // Append @gmail.com suffix if not present
+      let fullEmail = email.trim()
+      if (fullEmail && !fullEmail.includes('@')) {
+        fullEmail = fullEmail + '@gmail.com'
+      }
 
-      user.value = response.user
-      token.value = response.access_token
+      const { data, error: signupError } = await supabase.auth.signUp({
+        email: fullEmail,
+        password: password,
+      })
 
-      return response
+      if (signupError) throw signupError
+
+      session.value = data.session
+      user.value = data.user
+
+      return data
     } catch (err) {
-      error.value = err.detail || 'Signup failed'
+      error.value = err.message || 'Signup failed'
       throw err
     } finally {
       loading.value = false
     }
   }
 
-  const logout = () => {
-    authAPI.logout()
-    user.value = null
-    token.value = null
-    error.value = null
+  const logout = async () => {
+    try {
+      await supabase.auth.signOut()
+      user.value = null
+      session.value = null
+      error.value = null
+    } catch (err) {
+      console.error('Logout error:', err)
+    }
   }
 
   const refreshUser = async () => {
     try {
-      const userData = await authAPI.getCurrentUser()
+      const { data: { user: userData } } = await supabase.auth.getUser()
       user.value = userData
-      localStorage.setItem('user', JSON.stringify(userData))
     } catch (err) {
       console.error('Failed to refresh user:', err)
-      // If refresh fails, logout
-      logout()
+      await logout()
     }
   }
 
@@ -88,7 +121,7 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     // State
     user,
-    token,
+    session,
     loading,
     error,
     // Getters

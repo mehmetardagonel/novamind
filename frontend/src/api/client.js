@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { supabase } from '@/database/supabaseClient'
 
 // Get API base URL from environment variables or use default
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
@@ -12,12 +13,14 @@ const apiClient = axios.create({
   },
 })
 
-// Request interceptor - add auth token to requests
+// Request interceptor - add Supabase auth token to requests
 apiClient.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('access_token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
+  async (config) => {
+    // Get current Supabase session
+    const { data: { session } } = await supabase.auth.getSession()
+
+    if (session?.access_token) {
+      config.headers.Authorization = `Bearer ${session.access_token}`
     }
     return config
   },
@@ -36,9 +39,8 @@ apiClient.interceptors.response.use(
       // Server responded with error
       switch (error.response.status) {
         case 401:
-          // Unauthorized - clear token and redirect to login
-          localStorage.removeItem('access_token')
-          localStorage.removeItem('user')
+          // Unauthorized - sign out from Supabase and redirect to login
+          supabase.auth.signOut()
           window.location.href = '/login'
           break
         case 403:

@@ -1,138 +1,78 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 from jose import JWTError, jwt
-from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
+from fastapi import Depends, HTTPException, status, Header
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 import os
 from dotenv import load_dotenv
-
-from database import get_db, User
+from supabase import create_client, Client
 
 load_dotenv()
 
-# Security configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production-please")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+# Supabase configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "your-jwt-secret-here")
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+# Initialize Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Security scheme for bearer tokens
+security = HTTPBearer()
 
 # Pydantic models
-class UserCreate(BaseModel):
-    email: EmailStr
-    username: str
-    password: str
-    full_name: Optional[str] = None
-
-class UserLogin(BaseModel):
-    username: str
-    password: str
-
 class UserOut(BaseModel):
-    id: int
+    id: str
     email: str
-    username: str
-    full_name: Optional[str]
-    is_active: bool
-    created_at: datetime
+    created_at: str
 
-    class Config:
-        from_attributes = True
+class SupabaseUser(BaseModel):
+    id: str
+    email: str
+    user_metadata: dict = {}
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-    user: UserOut
-
-class TokenData(BaseModel):
-    username: Optional[str] = None
-
-# Password hashing
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-
-# User authentication
-def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
-        return None
-    if not verify_password(password, user.hashed_password):
-        return None
-    return user
-
-# JWT token creation
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-# Get current user from token
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
-) -> User:
+# Verify Supabase JWT token
+async def verify_supabase_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> SupabaseUser:
+    """
+    Verify the Supabase JWT token from the Authorization header
+    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
+        token = credentials.credentials
+
+        # Get user from Supabase using the token
+        user_response = supabase.auth.get_user(token)
+
+        if not user_response or not user_response.user:
             raise credentials_exception
-        token_data = TokenData(username=username)
-    except JWTError:
+
+        user_data = user_response.user
+
+        return SupabaseUser(
+            id=user_data.id,
+            email=user_data.email,
+            user_metadata=user_data.user_metadata or {}
+        )
+    except Exception as e:
+        print(f"Token verification error: {e}")
         raise credentials_exception
 
-    user = db.query(User).filter(User.username == token_data.username).first()
-    if user is None:
-        raise credentials_exception
-    return user
+# Get current user (alias for verify_supabase_token)
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> SupabaseUser:
+    """
+    Get the current authenticated user from Supabase
+    """
+    return await verify_supabase_token(credentials)
 
 # Get current active user
-async def get_current_active_user(
-    current_user: User = Depends(get_current_user)
-) -> User:
-    if not current_user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+async def get_current_active_user(current_user: SupabaseUser = Depends(get_current_user)) -> SupabaseUser:
+    """
+    Get current active user (Supabase users are active by default if authenticated)
+    """
     return current_user
-
-# Create user
-def create_user(db: Session, user: UserCreate) -> User:
-    # Check if user already exists
-    existing_user = db.query(User).filter(
-        (User.email == user.email) | (User.username == user.username)
-    ).first()
-
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email or username already registered"
-        )
-
-    # Create new user
-    db_user = User(
-        email=user.email,
-        username=user.username,
-        hashed_password=get_password_hash(user.password),
-        full_name=user.full_name,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
