@@ -33,3 +33,21 @@ export default {
   },
 }
 </script>
+
+<style>
+
+html, body {
+  /* 1. Remove default outer spacing */
+  margin: 0;
+  padding: 0;
+  
+  /* 2. Ensure the body takes up the full browser height */
+  height: 100%; 
+  width: 100%;
+}
+
+/* Ensure the root element of your Vue app is also full height */
+#app {
+  height: 100%;
+  width: 100%;
+}</style>
