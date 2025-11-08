@@ -483,17 +483,11 @@ input[placeholder='Password'] {
     box-shadow: 0 0 0 1px red !important; 
 }
 
-/* FIX: Remove complex error box-shadows for the suffix's old box look */
-.input-email-wrapper .error-border {
-    /* Revert to standard error glow */
-    box-shadow: 0 0 0 1px red !important;
-}
-
-.input-email-wrapper .error-border + .email-suffix {
-    /* Reset all box-related error styling */
+.input-wrapper .error-border + .email-suffix{
+    color: red !important;
+    /* Resetting any accidental box/border styling just in case */
     border-color: transparent !important;
     box-shadow: none !important; 
-    color: red !important
 }
 
 /* FIX 2: Restored absolute positioning to match Signup's visual style and added 2px offset for readability */
