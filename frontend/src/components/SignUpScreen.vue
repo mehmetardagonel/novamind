@@ -122,7 +122,7 @@
         <div class="signup-link-wrapper">
           <p>
             Already have an account?
-            <a @click="goToLogin" class="link-button" href="#">Log In</a>
+            <a @click.prevent="goToLogin" class="link-button" href="#">Log In</a>
           </p>
           <p v-if="successMessage" class="success-message">{{ successMessage }}</p>
         </div>
@@ -156,7 +156,7 @@ export default {
   methods: {
     // NEW: Home navigation method
     goToHome() {
-      this.$router.push('/'); 
+        this.$router.push('/home');
     },
 
     togglePasswordVisibility() {
@@ -268,7 +268,7 @@ export default {
     },
 
     goToLogin() {
-      this.$router.push('/login')
+      this.$router.push('/login');
     },
   },
 }
@@ -341,6 +341,8 @@ body {
 /* --- 4. Login Form Container --- */
 .login-container {
   width: 100%;
+  max-width: 28rem;
+  min-height: 28rem;
   border-radius: 0.75rem;
   border: 1px solid var(--primary-border-10);
   background-color: #ffffff;

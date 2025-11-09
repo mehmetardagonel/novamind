@@ -15,11 +15,11 @@
             </div>
         </div>
         <div class="header-right">
-          <button class="btn btn-secondary">
-            <span class="btn-text" @click="goToLogin" >Log In</span>
+          <button class="btn btn-secondary" @click="goToLogin">
+            <span class="btn-text">Log In</span>
           </button>
-          <button class="btn btn-primary">
-            <span class="btn-text" @click="goToSignUp">Sign Up</span>
+          <button class="btn btn-primary" @click="goToSignUp">
+            <span class="btn-text">Sign Up</span>
           </button>
         </div>
       </div>
@@ -43,8 +43,8 @@
                 </h2>
               </div>
               <div class="hero-cta">
-                <button class="btn btn-primary btn-lg">
-                  <span class="btn-text" @click="goToLogin" >Try Novamind for Free</span>
+                <button class="btn btn-primary btn-lg" @click="goToLogin">
+                  <span class="btn-text" >Try Novamind for Free</span>
                 </button>
               </div>
             </div>
@@ -120,8 +120,8 @@
               <h2 class="cta-title">Ready to Transform Your Inbox?</h2>
               <p class="cta-subtitle">Join thousands of professionals who are writing better emails faster. Get started with Novamind for free today—no credit card required.</p>
               <div class="cta-button-wrapper">
-                <button class="btn btn-primary btn-lg">
-                  <span class="btn-text" @click="goToLogin" >Start Writing for Free</span>
+                <button class="btn btn-primary btn-lg"  @click="goToLogin" >
+                  <span class="btn-text">Start Writing for Free</span>
                 </button>
               </div>
             </div>
@@ -147,10 +147,10 @@
 export default{
     methods: {
         goToLogin() {
-        this.$router.push('/login')
+          this.$router.push('/login');
         },
         goToSignUp() {
-        this.$router.push('/signup')
+          this.$router.push('/signup');
         }
     },
 }

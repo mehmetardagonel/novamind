@@ -96,7 +96,7 @@
         <div class="signup-link-wrapper">
           <p>
             Don't have an account? 
-            <a @click="goToSignup" class="link-button" href="#">Sign Up</a>
+            <a @click.prevent="goToSignup" class="link-button" href="#">Sign Up</a>
           </p>
         </div>
       </main>
@@ -123,7 +123,7 @@ export default {
   methods: {
     // Home navigation method
     goToHome() {
-      this.$router.push('/'); 
+         this.$router.push('/home');
     },
 
     togglePasswordVisibility() {
@@ -199,7 +199,7 @@ export default {
     },
 
     goToSignup() {
-      this.$router.push('/signup')
+        this.$router.push('/signup');
     }
   },
 }
@@ -271,6 +271,8 @@ body {
 /* --- 4. Login Form Container --- */
 .login-container {
   width: 100%;
+  max-width: 28rem;
+  min-height: 28rem;
   border-radius: 0.75rem; /* 12px, from rounded-xl */
   border: 1px solid var(--primary-border-10);
   background-color: #ffffff;
