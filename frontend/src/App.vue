@@ -14,7 +14,7 @@ export default {
     // Optional: Redirect / to /login if it's the very first load and no path is specified
     onMounted(() => {
       if (router.currentRoute.value.path === '/') {
-        router.push('/login')
+        router.push('/home')
       }
     })
 

@@ -164,7 +164,7 @@ export default {
     // Logout
     const exitApp = async () => {
       await authStore.logout()
-      router.push('/login')
+      router.push('/home')
     }
 
     return {

@@ -9,17 +9,33 @@
     <div class="content-wrapper">
       <main class="login-container">
         <div class="login-header">
-          <div class="header-logo-wrapper">
-            <div class="logo-svg">
-              <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-                <path
-                  d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
-                  fill="currentColor"
-                ></path>
-              </svg>
+          <a @click.prevent="goToHome" class="header-logo-wrapper logo-link" href="/">
+            
+            <div class="logo-icon-container">
+              <div class="logo-svg novamind-logo">
+                <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                  <path
+                    d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
+                    fill="currentColor"
+                  ></path>
+                </svg>
+              </div>
+              
+              <div class="logo-svg home-icon-overlay">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path
+                    d="M10 20V14H14V20H19V12H22L12 3L2 12H5V20H10Z"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </div>
             </div>
-            <h1>Novamind.AI</h1>
-          </div>
+            
+            <h1 class="logo-text">Novamind.AI</h1>
+          </a>
           <p class="header-subtitle">Your Personal AI Email Assistant</p>
         </div>
 
@@ -105,6 +121,10 @@ export default {
     }
   },
   methods: {
+    // Home navigation method
+    goToHome() {
+      this.$router.push('/'); 
+    },
 
     togglePasswordVisibility() {
       this.passwordVisible = !this.passwordVisible
@@ -126,7 +146,6 @@ export default {
 
       // --- Validation Checks ---
       if (!this.email.trim()) { 
-        // Changed error message for consistency with the new design's 'Username' placeholder
         this.emailError = 'Please enter your username!'
         hasError = true
       } else if (!emailPattern.test(fullEmail)) { 
@@ -138,7 +157,7 @@ export default {
         this.passwordError = 'Please enter your password!'
         hasError = true
       }
-      
+
       if (hasError) {
           return
       }
@@ -155,14 +174,14 @@ export default {
         if (error) {
           throw new Error(error.message); 
         }
-        
+
         console.log('Login successful:', data.user);
         this.$router.push('/app'); 
       } catch (error) {
         console.error('Login error:', error)
-        
+
         const errorMessage = error.message || 'Login failed. Please try again.';
-        
+
         // Handle common Supabase error messages
         if (errorMessage.toLowerCase().includes('invalid login credentials')) {
           this.emailError = 'Invalid username or password.';
@@ -170,7 +189,7 @@ export default {
         } else if (errorMessage.toLowerCase().includes('email not confirmed')) {
           this.emailError = 'Please verify your email address before logging in.';
         } else {
-           // Fallback for any other unexpected errors
+            // Fallback for any other unexpected errors
           this.emailError = errorMessage;
         }
 
@@ -234,7 +253,6 @@ body {
   position: absolute;
   inset: 0;
   z-index: 0;
-  /* From bg-background-dark/50 */
   background-color: rgba(19, 16, 34, 0.5);
 }
 
@@ -257,39 +275,99 @@ body {
   border: 1px solid var(--primary-border-10);
   background-color: #ffffff;
   padding: 2.5rem; /* 40px, from p-8 */
-  /* From shadow-2xl shadow-primary/10 */
   box-shadow: 0 25px 50px -12px var(--primary-shadow-10);
   box-sizing: border-box;
+  position: relative; 
 }
 
-/* --- 5. Header & Logo --- */
+/* --- 5. Header & Logo (UPDATED FOR ICON-ONLY MORPH) --- */
 .login-header {
   width: 100%;
 }
 
-.header-logo-wrapper {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem; /* 8px, from gap-2 */
-  margin-bottom: 0.5rem; /* 8px, from mb-2 */
+/* The logo-link is the primary interactive area */
+.logo-link {
+    text-decoration: none;
+    cursor: pointer;
+    position: relative; 
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem; 
+    transition: color 0.3s ease;
+    margin-bottom: 0.5rem; 
 }
 
+/* NEW: Container to manage the two layered icons */
+.logo-icon-container {
+    position: relative;
+    width: 2rem; /* Keep a fixed width for the icons */
+    height: 2rem; /* Keep a fixed height for the icons */
+}
+
+/* Base style for both icons inside the container */
 .logo-svg {
-  color: var(--primary-color);
-  width: 2rem; /* 32px, from size-8 */
-  height: 2rem; /* 32px, from size-8 */
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    color: var(--primary-color);
+    transition: opacity 0.3s ease, transform 0.3s ease;
 }
 
-.login-container h1 {
-  font-size: 1.875rem; /* 30px, from text-3xl */
-  line-height: 2.25rem; /* 36px */
-  font-weight: 700;
-  letter-spacing: -0.025em; /* from tracking-tight */
-  color: var(--text-primary);
-  margin: 0;
+/* 1. Novamind Logo (Default State) */
+.novamind-logo {
+    opacity: 1; 
+    transform: scale(1); 
+    z-index: 2; /* On top when visible */
 }
+
+/* 2. Home Icon (Hidden State) */
+.home-icon-overlay {
+    opacity: 0; 
+    transform: scale(0.5); /* Start small */
+    z-index: 1; /* Below the Novamind logo by default */
+}
+
+/* The Novamind.AI Text Label (STATIC) */
+.logo-text {
+    font-size: 1.875rem; /* 30px, from text-3xl */
+    line-height: 2.25rem; /* 36px */
+    font-weight: 700;
+    letter-spacing: -0.025em; /* from tracking-tight */
+    margin: 0;
+    transition: color 0.3s ease; /* Only the color changes */
+    opacity: 1; /* Ensure text remains fully visible */
+    color: var(--text-primary);
+}
+
+/* --- HOVER EFFECT: The Icon Morph --- */
+
+.logo-link:hover .novamind-logo {
+    /* Fade and shrink the Novamind logo out */
+    opacity: 0;
+    transform: scale(0.5) rotate(-90deg);
+}
+
+.logo-link:hover .home-icon-overlay {
+    /* Fade and grow the Home icon in */
+    opacity: 1;
+    transform: scale(1);
+    
+    /* Apply the "Light Switch Glow" effect */
+    color: var(--primary-color);
+    filter: 
+      drop-shadow(0 0 5px var(--primary-color)) 
+      drop-shadow(0 0 10px var(--primary-shadow-30));
+    z-index: 3; /* Bring to front when active */
+}
+
+.logo-link:hover .logo-text {
+    /* Change the text color to match the icon color */
+    color: var(--primary-color);
+}
+/* --- End of Hover Changes --- */
 
 .header-subtitle {
   text-align: center;
@@ -311,7 +389,6 @@ body {
   display: flex;
   width: 100%;
   flex-direction: column;
-  /* FIX 1: Set position relative for absolute error anchoring (Matching Signup) */
   position: relative; 
 }
 
@@ -320,15 +397,6 @@ body {
   display: flex;
   align-items: center;
   width: 100%;
-}
-
-.input-icon {
-  position: absolute;
-  left: 1rem; /* 16px, from left-4 */
-  font-size: 1.25rem; /* 20px, from text-xl */
-  color: var(--text-secondary);
-  /* material-symbols-outlined specific fix */
-  line-height: 1;
 }
 
 .form-input {
@@ -351,35 +419,33 @@ body {
   color: var(--text-secondary);
 }
 
-/* Input-specific paddings - MATCHING SIGNUP.VUE */
 input[placeholder='Email'] {
-  padding-left: 1rem; /* Standard left padding */
-  padding-right: 8rem; /* Space for suffix */
+  padding-left: 1rem; 
+  padding-right: 8rem; 
 }
 
 input[placeholder='Password'] {
-  padding-left: 1rem; /* Standard left padding */
-  padding-right: 3.5rem; /* Space for the smaller password toggle */
+  padding-left: 1rem; 
+  padding-right: 3.5rem; 
 }
 
 .form-input:focus {
   border-color: var(--primary-color);
   outline: none;
-  /* from focus:ring-2 focus:ring-primary/50 */
   box-shadow: 0 0 0 2px var(--primary-ring-50);
 }
 
 .email-suffix {
   position: absolute;
-  right: 1rem; /* 16px, from right-4 */
-  font-size: 1rem; /* 16px, from text-base */
+  right: 1rem; 
+  font-size: 1rem; 
   color: var(--text-secondary);
   pointer-events: none;
 }
 
 .password-toggle {
   position: absolute;
-  right: 1rem; /* 16px, from right-4 */
+  right: 1rem; 
   color: var(--text-secondary);
   background: none;
   border: none;
@@ -389,14 +455,11 @@ input[placeholder='Password'] {
   align-items: center;
   justify-content: center;
   transition: color 0.2s;
-  height: 100%; /* Ensures vertical centering */
+  height: 100%; 
 }
 
-/* New: Styling for the icon element itself */
 .password-toggle .icon-adjust {
-  /* Set a standard, clear icon size (e.g., 24px) */
   font-size: 1.5rem; 
-  /* Ensure standard font weight for icon ligatures */
   font-weight: normal; 
 }
 
@@ -407,11 +470,11 @@ input[placeholder='Password'] {
 
 /* --- 7. Links & Buttons --- */
 .forgot-password-link {
-  font-size: 0.875rem; /* 14px, from text-sm */
-  padding-top: 0.5rem; /* 8px, from pt-2 */
+  font-size: 0.875rem; 
+  padding-top: 0.5rem; 
   color: var(--text-secondary);
   text-decoration: underline;
-  align-self: flex-end; /* from self-end */
+  align-self: flex-end; 
   transition: color 0.2s;
 }
 
@@ -421,31 +484,29 @@ input[placeholder='Password'] {
 
 .primary-button {
   display: flex;
-  height: 3rem; /* 48px, from h-12 */
+  height: 3rem; 
   width: 100%;
   align-items: center;
   justify-content: center;
-  border-radius: 0.5rem; /* 8px, from rounded-lg */
+  border-radius: 0.5rem; 
   background-color: var(--primary-color);
-  padding: 0.75rem 1.5rem; /* 12px 24px, from px-6 py-3 */
-  font-size: 1rem; /* 16px, from text-base */
-  font-weight: 700; /* from font-bold */
+  padding: 0.75rem 1.5rem; 
+  font-size: 1rem; 
+  font-weight: 700; 
   color: #ffffff;
   border: none;
   cursor: pointer;
-  /* From shadow-lg shadow-primary/30 */
   box-shadow: 0 10px 15px -3px var(--primary-shadow-30),
     0 4px 6px -4px var(--primary-shadow-30);
   transition: all 0.2s ease-in-out;
 }
 
 .primary-button:hover {
-  opacity: 0.9; /* from hover:bg-primary/90 */
+  opacity: 0.9; 
 }
 
 .primary-button:focus {
   outline: none;
-  /* from focus:ring-2 focus:ring-primary ... */
   box-shadow: 0 10px 15px -3px var(--primary-shadow-30),
     0 4px 6px -4px var(--primary-shadow-30),
     0 0 0 2px var(--background-light), 0 0 0 4px var(--primary-color);
@@ -455,20 +516,19 @@ input[placeholder='Password'] {
     background-color: #999;
     cursor: not-allowed;
     opacity: 0.7;
-    /* Overwrite shadow for disabled state */
     box-shadow: none;
 }
 
 /* --- 8. Footer & Signup Link --- */
 .signup-link-wrapper {
-  padding-top: 2rem; /* 32px, from pt-8 */
+  padding-top: 2rem; 
   text-align: center;
-  font-size: 0.875rem; /* 14px, from text-sm */
+  font-size: 0.875rem; 
   color: var(--text-secondary);
 }
 
 .link-button {
-  font-weight: 700; /* from font-bold */
+  font-weight: 700; 
   color: var(--primary-color);
   text-decoration: underline;
   transition: color 0.2s;
@@ -476,7 +536,7 @@ input[placeholder='Password'] {
 }
 
 .link-button:hover {
-  opacity: 0.8; /* from hover:text-primary/80 */
+  opacity: 0.8; 
   cursor: pointer;
 }
 
@@ -488,25 +548,20 @@ input[placeholder='Password'] {
 
 .input-wrapper .error-border + .email-suffix{
     color: red !important;
-    /* Resetting any accidental box/border styling just in case */
     border-color: transparent !important;
     box-shadow: none !important; 
 }
 
-/* FIX 2: Restored absolute positioning to match Signup's visual style and added 2px offset for readability */
 .error-input {
     color: red;
     font-size: 0.85em;
     text-align: left;
     min-height: 1.2em;
-    margin: 0; /* Remove existing margins */
+    margin: 0; 
     
     position: absolute;
-    /* Adjusted from 'top: 100%' to give a small gap */
-    top: calc(100% + 2px); /* Pushes the error message 2px down from the input field's bottom */
+    top: calc(100% + 2px); 
     left: 0;
     width: 100%;
-
-    /* Removed padding-top, as 'top' handles the spacing now */
 }
 </style>
