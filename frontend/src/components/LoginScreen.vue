@@ -550,6 +550,7 @@ input[placeholder='Password'] {
     color: red !important;
     border-color: transparent !important;
     box-shadow: none !important; 
+    color: red !important
 }
 
 .error-input {

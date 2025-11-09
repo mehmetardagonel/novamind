@@ -559,7 +559,6 @@ input[placeholder='Confirm Password'] {
   box-shadow: 0 10px 15px -3px var(--primary-shadow-30),
     0 4px 6px -4px var(--primary-shadow-30);
   transition: all 0.2s ease-in-out;
-  margin-top: 10px;
 }
 
 .primary-button:hover {
