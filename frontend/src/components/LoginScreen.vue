@@ -58,8 +58,8 @@
                   type="button"
                   @click.prevent="togglePasswordVisibility"
                 >
-                  <span class="material-symbols-outlined">
-                    {{ passwordVisible ? 'Hide' : 'Show' }}
+                  <span class="material-symbols-outlined icon-adjust">
+                    {{ passwordVisible ? 'visibility_off' : 'visibility' }}
                   </span>
                 </button>
               </div>
@@ -377,7 +377,6 @@ input[placeholder='Password'] {
   pointer-events: none;
 }
 
-/* Password Toggle - MATCHING SIGNUP.VUE */
 .password-toggle {
   position: absolute;
   right: 1rem; /* 16px, from right-4 */
@@ -392,11 +391,15 @@ input[placeholder='Password'] {
   transition: color 0.2s;
   height: 100%; /* Ensures vertical centering */
 }
-.password-toggle .material-symbols-outlined {
-  /* Smaller and bolder font, matching Signup */
-  font-size: 1rem;
-  font-weight: bold;
+
+/* New: Styling for the icon element itself */
+.password-toggle .icon-adjust {
+  /* Set a standard, clear icon size (e.g., 24px) */
+  font-size: 1.5rem; 
+  /* Ensure standard font weight for icon ligatures */
+  font-weight: normal; 
 }
+
 
 .password-toggle:hover {
   color: var(--primary-color);

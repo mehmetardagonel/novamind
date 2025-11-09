@@ -58,8 +58,8 @@
                   type="button"
                   @click.prevent="togglePasswordVisibility"
                 >
-                  <span class="material-symbols-outlined">
-                    {{ passwordVisible ? 'Hide' : 'Show' }}
+                  <span class="material-symbols-outlined icon-adjust">
+                    {{ passwordVisible ? 'visibility_off' : 'visibility' }}
                   </span>
                 </button>
               </div>
@@ -84,8 +84,8 @@
                   type="button"
                   @click.prevent="toggleConfirmPasswordVisibility"
                 >
-                  <span class="material-symbols-outlined">
-                    {{ confirmPasswordVisible ? 'Hide' : 'Show' }}
+                  <span class="material-symbols-outlined icon-adjust">
+                    {{ confirmPasswordVisible ? 'visibility_off' : 'visibility' }}
                   </span>
                 </button>
               </div>
@@ -461,13 +461,17 @@ input[placeholder='Confirm Password'] {
   align-items: center;
   justify-content: center;
   transition: color 0.2s;
-  height: 100%;
+  height: 100%; /* Ensures vertical centering */
 }
-.password-toggle .material-symbols-outlined {
-  /* Match original corporate design look */
-  font-size: 1rem;
-  font-weight: bold;
+
+/* New: Styling for the icon element itself */
+.password-toggle .icon-adjust {
+  /* Set a standard, clear icon size (e.g., 24px) */
+  font-size: 1.5rem; 
+  /* Ensure standard font weight for icon ligatures */
+  font-weight: normal; 
 }
+
 
 .password-toggle:hover {
   color: var(--primary-color);
