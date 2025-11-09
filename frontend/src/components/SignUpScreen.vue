@@ -1,10 +1,7 @@
 <template>
-  <div class="app-screen">
-    <div
-      class="background-image"
-      :style="{ backgroundImage: 'url(' + backgroundImageUrl + ')' }"
-    ></div>
-    <div class="background-overlay"></div>
+  <div class="signup">
+    <h1>Create a Novamind.AI Account</h1>
+    <h3>Join your personal AI Email Assistant</h3>
 
     <div class="content-wrapper">
       <main class="login-container">
@@ -39,23 +36,13 @@
           <p class="header-subtitle">Your Personal AI Email Assistant</p>
         </div>
 
-        <form class="login-form" @submit.prevent="signup">
-          <div class="input-field-group">
-            <label>
-              <div class="input-wrapper">
-                <input
-                  v-model="email"
-                  class="form-input"
-                  placeholder="Email"
-                  type="text"
-                  :class="{ 'error-border': emailError }"
-                  @keyup.enter="signup"
-                />
-                <span class="email-suffix">@gmail.com</span>
-              </div>
-              <p v-if="emailError" class="error-input">{{ emailError }}</p>
-            </label>
-          </div>
+      <label>Password</label>
+      <input
+        type="password"
+        v-model="password"
+        placeholder="Create a password"
+        @keyup.enter="signup"
+      />
 
           <div class="input-field-group">
             <label>
@@ -128,6 +115,18 @@
         </div>
       </main>
     </div>
+
+    <button @click="signup" :disabled="loading">
+      {{ loading ? 'Creating Account...' : 'Sign Up' }}
+    </button>
+
+    <p>
+      Already have an account?
+      <button class="link-button" @click="goToLogin">Log In</button>
+    </p>
+
+    <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
+    <p v-if="successMessage" class="success">{{ successMessage }}</p>
   </div>
 </template>
 
@@ -142,15 +141,9 @@ export default {
       email: '',
       password: '',
       confirmPassword: '',
-
+      errorMessage: '',
       successMessage: '',
       loading: false,
-
-      emailError: '',
-      passwordError: '',
-      confirmPasswordError: '',
-      passwordVisible: false,
-      confirmPasswordVisible: false,
     }
   },
   methods: {
@@ -167,13 +160,14 @@ export default {
     },
 
     async signup() {
-      // 1. Reset all errors and success messages
+      this.errorMessage = ''
       this.successMessage = ''
-      this.emailError = ''
-      this.passwordError = ''
-      this.confirmPasswordError = ''
 
-      let hasError = false
+      // Validation
+      if (!this.email || !this.password || !this.confirmPassword) {
+        this.errorMessage = 'Please fill in all required fields!'
+        return
+      }
 
       // Append @gmail.com suffix if not present
       let fullEmail = this.email.trim()
@@ -182,40 +176,18 @@ export default {
       }
 
       const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
-      if (!this.email.trim()) {
-        this.emailError = 'Please enter your email!'
-        hasError = true
-      } else if (!emailPattern.test(fullEmail)) {
-        this.emailError = 'Please enter a valid email!'
-        hasError = true
+      if (!emailPattern.test(fullEmail)) {
+        this.errorMessage = 'Please enter a valid email!'
+        return
       }
 
-      if (!this.password) {
-        this.passwordError = 'Please enter your password!'
-        hasError = true
-      } else if (this.password.length < 6) {
-        this.passwordError = 'Password must be at least 6 characters!'
-        hasError = true
+      if (this.password !== this.confirmPassword) {
+        this.errorMessage = 'Passwords do not match!'
+        return
       }
 
-      if (!this.confirmPassword) {
-        this.confirmPasswordError = 'Please confirm your password!'
-        hasError = true
-      }
-
-      if (
-        this.password &&
-        this.confirmPassword &&
-        this.password !== this.confirmPassword
-      ) {
-        this.passwordError = 'Passwords do not match!'
-        this.confirmPasswordError = 'Passwords do not match!'
-        hasError = true
-      }
-
-      // 2. Stop if validation fails
-      if (hasError) {
+      if (this.password.length < 6) {
+        this.errorMessage = 'Password must be at least 6 characters!'
         return
       }
 
@@ -227,10 +199,7 @@ export default {
           password: this.password,
         })
 
-        // 3. Check for explicit errors (e.g., password policy violation)
-        if (error) {
-          throw error
-        }
+        if (error) throw error
 
         // 4. CHECK FOR ALREADY CONFIRMED USER
         if (data.user && data.user.identities && data.user.identities.length === 0) {
@@ -251,17 +220,13 @@ export default {
           'Account created successfully! Please check your email to verify your account.'
         console.log('Signup successful', data)
 
+        // Redirect to verification pending page after 2 seconds
+        setTimeout(() => {
+          this.$router.push('/login')
+        }, 2000)
       } catch (error) {
         console.error('Signup error:', error)
-
-        const errorMessage = error.message || 'Signup failed. Please try again.'
-
-        if (errorMessage.toLowerCase().includes('password')) {
-          this.passwordError = errorMessage;
-        } else {
-          this.emailError = errorMessage;
-        }
-
+        this.errorMessage = error.message || 'Signup failed. Please try again.'
       } finally {
         this.loading = false
       }
@@ -269,7 +234,7 @@ export default {
 
     goToLogin() {
       this.$router.push('/login')
-    },
+    }
   },
 }
 </script>
@@ -301,8 +266,6 @@ body {
 .app-screen {
   position: relative;
   display: flex;
-  min-height: 100vh;
-  width: 100%;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -442,10 +405,8 @@ body {
   margin: 0;
 }
 
-/* --- 6. Form & Input Fields --- */
-.login-form {
+.signup-form {
   display: flex;
-  width: 100%;
   flex-direction: column;
   gap: 1.25rem;
 }
@@ -555,6 +516,7 @@ input[placeholder='Confirm Password'] {
   font-weight: 700;
   color: #ffffff;
   border: none;
+  border-radius: 4px;
   cursor: pointer;
   box-shadow: 0 10px 15px -3px var(--primary-shadow-30),
     0 4px 6px -4px var(--primary-shadow-30);
@@ -594,17 +556,20 @@ input[placeholder='Confirm Password'] {
   text-decoration: underline;
   transition: color 0.2s;
   border: none;
+  padding: 0;
   cursor: pointer;
+  text-decoration: underline;
+  font-size: inherit;
+  margin-top: 0;
 }
 
 .link-button:hover {
   opacity: 0.8;
 }
 
-/* --- Error Styling (Red Border/Glow) --- */
-.error-border {
-    border-color: red !important;
-    box-shadow: 0 0 0 1px red !important;
+.error {
+  color: red;
+  margin-top: 10px;
 }
 
 /* Error text positioning and style */
