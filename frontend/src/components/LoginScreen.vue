@@ -1,7 +1,10 @@
 <template>
-  <div class="login">
-    <h1>Welcome to Novamind.AI</h1>
-    <h3>Your personal AI Email Assistant</h3>
+  <div class="app-screen">
+    <div
+      class="background-image"
+      :style="{ backgroundImage: 'url(' + backgroundImageUrl + ')' }"
+    ></div>
+    <div class="background-overlay"></div>
 
     <div class="content-wrapper">
       <main class="login-container">
@@ -98,30 +101,23 @@
         </div>
       </main>
     </div>
-
-    <button @click="login" :disabled="loading">
-      {{ loading ? 'Logging in...' : 'Login' }}
-    </button>
-
-    <p>
-      Don't have an account?
-      <button class="link-button" @click="goToSignup">Sign Up</button>
-    </p>
-
-    <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
   </div>
 </template>
 
 <script>
-import { supabase } from '@/database/supabaseClient'
+import BackgroundImage from '@/assets/background.png';
+import { supabase } from '@/database/supabaseClient';
 
 export default {
   data() {
     return {
+      backgroundImageUrl: BackgroundImage, // Added background image path
       email: '',
       password: '',
-      errorMessage: '',
-      loading: false,
+      emailError: '',
+      passwordError: '',
+      passwordVisible: false,
+      loading: false, 
     }
   },
   methods: {
@@ -135,11 +131,14 @@ export default {
     },
 
     async login() {
-      this.errorMessage = ''
+      // Reset errors
+      this.emailError = ''
+      this.passwordError = ''
 
-      if (!this.email || !this.password) {
-        this.errorMessage = 'Please enter both email and password!'
-        return
+      // --- 1. Append the suffix to the email for API and validation ---
+      let fullEmail = this.email.trim();
+      if (fullEmail && !fullEmail.includes('@')) {
+        fullEmail = fullEmail + '@gmail.com';
       }
 
       const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -165,18 +164,12 @@ export default {
 
       // --- Supabase Login with Loading State ---
       try {
-        this.loading = true
-
-        // Append @gmail.com suffix if not present
-        let fullEmail = this.email.trim()
-        if (fullEmail && !fullEmail.includes('@')) {
-          fullEmail = fullEmail + '@gmail.com'
-        }
+        this.loading = true // Start loading
 
         const { data, error } = await supabase.auth.signInWithPassword({
           email: fullEmail,
           password: this.password,
-        })
+        });
 
         if (error) {
           throw new Error(error.message); 
@@ -201,7 +194,7 @@ export default {
         }
 
       } finally {
-        this.loading = false
+        this.loading = false // Stop loading
       }
     },
 
@@ -212,9 +205,34 @@ export default {
 }
 </script>
 
-<style scoped>
-.login {
+<style>
+/* --- 1. Global & Page Layout --- */
+:root {
+  --primary-color: #3713ec;
+  --background-light: #f6f6f8;
+  --background-dark: #131022;
+  --text-primary: #131022;
+  --text-secondary: #594c9a;
+  --primary-border-10: rgba(55, 19, 236, 0.1);
+  --primary-border-20: rgba(55, 19, 236, 0.2);
+  --primary-shadow-10: rgba(55, 19, 236, 0.1);
+  --primary-shadow-30: rgba(55, 19, 236, 0.3);
+  --primary-ring-50: rgba(55, 19, 236, 0.5);
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.app-screen {
+  position: relative;
   display: flex;
+  min-height: 100vh;
+  width: 100%;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -353,19 +371,18 @@ export default {
 
 .header-subtitle {
   text-align: center;
-  background-color: #f7f7f7; /* Adding styles for better centering */
+  font-size: 1rem; /* 16px, from text-base */
+  color: var(--text-secondary);
+  padding-bottom: 2rem; /* 32px, from pb-8 */
+  margin: 0;
 }
 
+/* --- 6. Form & Input Fields --- */
 .login-form {
   display: flex;
+  width: 100%;
   flex-direction: column;
-  width: 300px;
-  margin: 20px 0;
-  padding: 20px;
-  border: 1px solid #ccc;
-  border-radius: 8px;
-  background-color: white;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  gap: 1.25rem; /* 20px, from gap-5 */
 }
 
 .input-field-group {
@@ -478,7 +495,6 @@ input[placeholder='Password'] {
   font-weight: 700; 
   color: #ffffff;
   border: none;
-  border-radius: 4px;
   cursor: pointer;
   box-shadow: 0 10px 15px -3px var(--primary-shadow-30),
     0 4px 6px -4px var(--primary-shadow-30);
@@ -511,18 +527,12 @@ input[placeholder='Password'] {
   color: var(--text-secondary);
 }
 
-/* Style for the 'Sign Up' link button */
 .link-button {
   font-weight: 700; 
   color: var(--primary-color);
   text-decoration: underline;
   transition: color 0.2s;
   border: none;
-  padding: 0;
-  cursor: pointer;
-  text-decoration: underline;
-  font-size: inherit;
-  margin-top: 0;
 }
 
 .link-button:hover {
@@ -540,7 +550,6 @@ input[placeholder='Password'] {
     color: red !important;
     border-color: transparent !important;
     box-shadow: none !important; 
-    color: red !important
 }
 
 .error-input {
