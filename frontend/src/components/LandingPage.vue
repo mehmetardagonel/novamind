@@ -30,7 +30,7 @@
         <section class="section hero-section">
           <div
             class="hero-card"
-            :style="{ backgroundImage: 'url(\'https://lh3.googleusercontent.com/aida-public/AB6AXuBbS-M697yxMAF27F26C7VZxm-8HHZANQjWjZnXGCvjwsdxsMiCzyqjalCOE0-SJI_Rh5pSlspgM1ul0fz9qIR7zPb8SkjESaDyWfR6UQx3-Uv7NlIcikx8cALbiHmz2QcGFFTf96T4ahwuPyqNEga7LUde1_du-6yuOd6fm4u81X_1h8TBc3PeJmk82F9KEcuFRn97afcw-c8f2IODlIdTATtDYgdqzpzZJ_QiIE5wDO3XCnLTowSCY0Yap-BUBswm4RlBaxjf4co\')' }"
+            :style="{ backgroundImage: 'url(' + heroBackgroundUrl + ')' }"
           >
             <div class="hero-gradient-overlay"></div>
             <div class="hero-text-content">
@@ -143,8 +143,14 @@
 </template>
 
 <script>
+import landingPageImage from '@/assets/landingbackground.png';
 
 export default{
+  data() {
+        return {
+            heroBackgroundUrl: landingPageImage,
+        };
+    },
     methods: {
         goToLogin() {
           this.$router.push('/login');

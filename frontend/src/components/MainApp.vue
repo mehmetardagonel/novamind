@@ -1,88 +1,40 @@
 <template>
   <div class="main-app">
     <div class="sidebar">
-      <div class="user-info">
+      <div class="sidebar-header">
+        <div class="logo-icon-container">
+          <div class="logo-svg novamind-logo">
+            <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
+                fill="currentColor"
+              ></path>
+            </svg>
+          </div>
+        </div>
         <h2>Novamind.AI</h2>
-        <p class="user-name" v-if="currentUser">
-          {{ currentUser.user_metadata?.full_name || 'User' }}
-        </p>
-        <p class="user-email" v-if="currentUser">{{ currentUser.email }}</p>
       </div>
+      <p class="welcome-text">Welcome Back!</p>
 
-      <div class="nav-buttons">
-        <button
-          :class="{ active: activeView === 'inbox' }"
-          @click="loadInbox"
-        >
-          Inbox
-        </button>
-        <button
-          :class="{ active: activeView === 'compose' }"
-          @click="showCompose"
-        >
-          Compose
-        </button>
-      </div>
+      <button class="compose-button" @click="goToCompose">
+        <span class="material-symbols-outlined">edit</span>
+        Compose New Email
+      </button>
 
-      <button class="exit-button" @click="exitApp">Logout</button>
+      <SidebarNav /> 
+
+      <button class="logout-button" @click="exitApp">
+        <span class="material-symbols-outlined">logout</span>
+        Logout
+      </button>
     </div>
 
     <div class="main-content">
-      <!-- Welcome View -->
-      <div v-if="activeView === 'welcome'">
-        <h2>Welcome to Your Email Assistant</h2>
-        <p>Select Inbox to view your emails or Compose to send a new message.</p>
+      <div class="main-header">
+        <h1>{{ currentPageTitle }}</h1>
       </div>
-
-      <!-- Inbox View -->
-      <div v-else-if="activeView === 'inbox'" class="inbox-view">
-        <h2>Inbox</h2>
-
-        <!-- Loading State -->
-        <div v-if="loading" class="loading">
-          <p>Loading emails...</p>
-        </div>
-
-        <!-- Error State -->
-        <div v-else-if="errorMessage" class="error-box">
-          <h3>Gmail API Error</h3>
-          <p>{{ errorMessage }}</p>
-          <div class="setup-instructions">
-            <p><strong>To set up Gmail API:</strong></p>
-            <ol>
-              <li>Place <code>client_secret.json</code> in backend directory</li>
-              <li>Run backend and follow OAuth flow to generate <code>gmail_token.json</code></li>
-            </ol>
-          </div>
-        </div>
-
-        <!-- Email List -->
-        <div v-else-if="emails.length > 0" class="email-list">
-          <div
-            v-for="(email, index) in emails"
-            :key="index"
-            class="email-item"
-            @click="selectEmail(email)"
-          >
-            <div class="email-header">
-              <span class="email-sender">{{ email.sender }}</span>
-              <span class="email-date">{{ formatDate(email.date) }}</span>
-            </div>
-            <div class="email-subject">{{ email.subject }}</div>
-            <div class="email-preview">{{ getPreview(email.body) }}</div>
-          </div>
-        </div>
-
-        <!-- No Emails -->
-        <div v-else class="no-emails">
-          <p>No emails found in your inbox.</p>
-        </div>
-      </div>
-
-      <!-- Compose View -->
-      <div v-else-if="activeView === 'compose'" class="compose-view">
-        <h2>Compose Email</h2>
-        <p>Email composition feature coming soon!</p>
+      <div class="content-view-wrapper">
+        <router-view></router-view>
       </div>
     </div>
   </div>
@@ -90,314 +42,260 @@
 
 <script>
 import { useAuthStore } from '../stores/auth'
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { fetchEmails } from '../api/emails'
+import { onMounted, computed, ref } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import SidebarNav from '../components/SidebarNav.vue'
 
 export default {
   name: "MainApp",
+  components: {
+    SidebarNav
+  },
   setup() {
     const authStore = useAuthStore()
     const router = useRouter()
+    const route = useRoute()
 
-    // State
-    const activeView = ref('welcome')
-    const emails = ref([])
-    const loading = ref(false)
-    const errorMessage = ref('')
+    // Removed searchQuery and performSearch, as the search bar is deleted
 
-    const currentUser = computed(() => authStore.currentUser)
-
-    // Check authentication on mount
     onMounted(async () => {
-      // Wait a moment for auth store to initialize
       await new Promise(resolve => setTimeout(resolve, 100))
-
       if (!authStore.isAuthenticated) {
         router.push('/login')
+      } else if (router.currentRoute.value.path === '/app') {
+        router.replace('/app/email/inbox') 
       }
     })
 
-    // Load inbox emails
-    const loadInbox = async () => {
-      activeView.value = 'inbox'
-      loading.value = true
-      errorMessage.value = ''
-      emails.value = []
-
-      try {
-        const emailList = await fetchEmails()
-        emails.value = emailList
-      } catch (error) {
-        console.error('Error fetching emails:', error)
-        errorMessage.value = error.detail || error.message || 'Failed to load emails. Please ensure Gmail API is configured.'
-      } finally {
-        loading.value = false
-      }
-    }
-
-    // Show compose view
-    const showCompose = () => {
-      activeView.value = 'compose'
-    }
-
-    // Select email (placeholder for future implementation)
-    const selectEmail = (email) => {
-      console.log('Selected email:', email)
-      // TODO: Open email detail view
-    }
-
-    // Format date
-    const formatDate = (dateString) => {
-      if (!dateString) return ''
-      const date = new Date(dateString)
-      return date.toLocaleDateString() + ' ' + date.toLocaleTimeString()
-    }
-
-    // Get email preview
-    const getPreview = (body) => {
-      if (!body) return ''
-      const plainText = body.replace(/<[^>]*>/g, '') // Remove HTML tags
-      return plainText.substring(0, 100) + (plainText.length > 100 ? '...' : '')
-    }
-
-    // Logout
     const exitApp = async () => {
       await authStore.logout()
       router.push('/home')
     }
 
+    const goToCompose = () => {
+      router.push('/app/compose')
+    }
+    
+    // NEW: Computed property for the header title
+    const currentPageTitle = computed(() => {
+      const path = route.path
+      
+      if (path.startsWith('/app/compose')) {
+        return 'AI Email Assistant'
+      } else if (path.includes('/email/inbox')) {
+        return 'Inbox'
+      } else if (path.includes('/email/sent')) {
+        return 'Sent'
+      } else if (path.includes('/email/drafts')) {
+        return 'Drafts'
+      } else if (path.includes('/email/favorites')) {
+        return 'Favorites'
+      } else if (path.includes('/email/trash')) {
+        return 'Trash'
+      } 
+      // Fallback for an email detail view (e.g., /app/email/inbox/123)
+      else if (path.match(/\/email\/\w+\/\d+/)) {
+        // You might fetch the email subject here in a real app, 
+        // but for a simple header, we'll return the folder name
+        const folder = path.split('/')[3] 
+        return `${folder.charAt(0).toUpperCase() + folder.slice(1)}` 
+      }
+      
+      return 'Novamind Mail' // Default
+    })
+
+    // Removed showSearchBar as the header is now always present with a title
+
     return {
-      currentUser,
-      activeView,
-      emails,
-      loading,
-      errorMessage,
-      loadInbox,
-      showCompose,
-      selectEmail,
-      formatDate,
-      getPreview,
-      exitApp
+      exitApp,
+      goToCompose,
+      currentPageTitle // Expose the new title to the template
     }
   }
 };
 </script>
 
-<style>
-/* * --------------------------------
- * UPDATED STYLES FOR CONSISTENCY
- * --------------------------------
- */
-
+<style scoped>
+/* CSS Variables remain the same */
 .main-app {
+  /* --- Brand Color Palette --- */
+  --primary-color: #6C63FF; 
+  --primary-color-light: #f0f0ff; 
+  --primary-hover-color: #574BDB;
+  --danger-color: #e74c3c;
+  --danger-hover-color: #c0392b;
+  
+  /* --- Layout & Greyscale Palette --- */
+  --app-bg: #f7f8fa; 
+  --sidebar-bg: #ffffff;
+  --content-bg: #ffffff;
+  --border-color: #e0e0e0;
+  --light-border-color: #f0f0f0;
+  --hover-bg: #f5f5f5; 
+  --read-email-bg: #f7f8fa; 
+
+  /* --- Typography Palette --- */
+  --text-primary: #333;
+  --text-secondary: #5f6368;
+  --text-on-primary: #ffffff; 
+  --text-brand: var(--primary-color);
+
+  /* --- Base Layout --- */
   display: flex;
   height: 100vh;
-  /* Matched the overall lighter background of the application */
-  background-color: #f7f7f7; 
+  background-color: var(--app-bg); 
 }
 
+/* * SIDEBAR */
 .sidebar {
-  width: 250px;
-  background-color: white;
-  padding: 1rem;
+  width: 250px; 
+  flex-shrink: 0; 
+  background-color: var(--sidebar-bg);
+  padding: 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  border-right: 1px solid #ccc;
+  border-right: 1px solid var(--border-color);
+  z-index: 10;
+  gap: 1rem;
 }
 
-.user-info {
-  padding-bottom: 1rem;
-  border-bottom: 1px solid #e0e0e0;
-  margin-bottom: 0.5rem;
+/* * SIDEBAR HEADER (was .user-info) */
+.sidebar-header {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  /* NEW: Flexbox for logo + text */
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.user-info h2 {
-  margin: 0 0 0.5rem 0;
-  font-size: 1.2rem;
+.logo-icon-container {
+  position: relative;
+  width: 2rem; /* Keep a fixed width for the icons */
+  height: 2rem; /* Keep a fixed height for the icons */
 }
 
-.user-name {
-  margin: 0.5rem 0 0.2rem 0;
-  font-weight: 600;
-  font-size: 0.9rem;
-  color: #333;
+/* Base style for both icons inside the container */
+.logo-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--primary-color);
+  transition: opacity 0.3s ease, transform 0.3s ease;
 }
 
-.user-email {
+/* 1. Novamind Logo (Default State) */
+.novamind-logo {
+  opacity: 1; 
+  transform: scale(1); 
+  z-index: 2; /* On top when visible */
+}
+
+.sidebar-header h2 {
   margin: 0;
-  font-size: 0.75rem;
-  color: #666;
+  font-size: 1.5rem;
+  font-weight: 700;
+  /* UPDATED: Changed from text-brand to text-primary (black) */
+  color: var(--text-primary); 
 }
 
-.nav-buttons {
+/* UPDATED: Renamed from .sidebar-header p */
+.welcome-text {
+  margin: -0.75rem 0 0.5rem 0.5rem; /* Tucked under header */
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+/* * COMPOSE BUTTON */
+.compose-button {
   display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background-color: var(--primary-color);
+  color: var(--text-on-primary);
+  border: none;
+  padding: 12px;
+  cursor: pointer;
+  border-radius: 10px; 
+  font-size: 15px; 
+  font-weight: 600;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(108, 99, 255, 0.3);
 }
 
-/* Styles for general sidebar buttons (Inbox, Compose) */
-.sidebar button:not(.exit-button) {
-  padding: 10px; 
-  /* Applied the primary blue CTA color */
-  background-color: #007bff; 
-  color: white;
+.compose-button:hover {
+  background-color: var(--primary-hover-color);
+  box-shadow: 0 6px 16px rgba(108, 99, 255, 0.4);
+}
+
+.compose-button .material-symbols-outlined {
+  font-size: 20px;
+}
+
+/* * LOGOUT BUTTON */
+.logout-button {
+  margin-top: auto; 
+  background-color: transparent;
   border: none;
-  border-radius: 4px;
+  box-shadow: none;
+  color: var(--text-secondary);
+  font-weight: 500;
+  padding: 10px 20px;
+  border-radius: 10px; 
+  text-align: left;
   cursor: pointer;
   font-size: 16px;
-  text-align: left;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  display: flex; 
+  align-items: center;
+  gap: 10px; 
+  width: 100%;
 }
 
-.sidebar button:not(.exit-button):hover {
-  /* Applied the hover blue color */
-  background-color: #0056b3;
+.logout-button:hover {
+  background-color: var(--hover-bg);
+  color: var(--text-primary);
 }
 
-.exit-button {
-  margin-top: auto; /* pushes it to the bottom */
-  background-color: #e74c3c;
-  color: white;
-  border: none;
-  padding: 0.5rem;
-  cursor: pointer;
-  border-radius: 4px; /* Added border-radius for consistency */
-  font-size: 16px; /* Added font-size for consistency */
+.logout-button .material-symbols-outlined { 
+  font-size: 20px;
 }
 
-.exit-button:hover {
-  background-color: #c0392b;
-}
-
+/* * MAIN CONTENT AREA */
 .main-content {
   flex: 1;
-  padding: 1rem;
-  /* Ensured main area background is explicitly white */
-  background-color: #ffffff;
-}
-
-h2 {
-    color: #333;
-}
-
-/* Active button state */
-.sidebar button.active {
-  background-color: #0056b3;
-  font-weight: bold;
-}
-
-/* Inbox View */
-.inbox-view {
-  height: 100%;
-  overflow-y: auto;
-}
-
-.loading {
-  text-align: center;
-  padding: 2rem;
-  color: #666;
-}
-
-.error-box {
-  background-color: #fff3cd;
-  border: 1px solid #ffc107;
-  border-radius: 4px;
-  padding: 1.5rem;
-  margin: 1rem 0;
-}
-
-.error-box h3 {
-  margin-top: 0;
-  color: #856404;
-}
-
-.error-box p {
-  color: #856404;
-}
-
-.setup-instructions {
-  margin-top: 1rem;
-  padding: 1rem;
-  background-color: white;
-  border-radius: 4px;
-}
-
-.setup-instructions ol {
-  margin: 0.5rem 0;
-  padding-left: 1.5rem;
-}
-
-.setup-instructions code {
-  background-color: #f4f4f4;
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-family: monospace;
-}
-
-/* Email List */
-.email-list {
+  background-color: var(--content-bg);
+  height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  overflow-y: hidden;
 }
 
-.email-item {
-  background-color: white;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  padding: 1rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
+/* * MAIN HEADER (FOR PAGE TITLE) */
+.main-header {
+  padding: 1.25rem 2rem;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--content-bg);
+  z-index: 5;
 }
 
-.email-item:hover {
-  background-color: #f8f9fa;
-  border-color: #007bff;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.email-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.5rem;
-}
-
-.email-sender {
+/* NEW: Style for the page title in the header */
+.main-header h1 {
+  margin: 0;
+  font-size: 1.75rem;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
 }
 
-.email-date {
-  font-size: 0.85rem;
-  color: #666;
-}
+/* Removed search-bar, search-bar input, etc. CSS */
 
-.email-subject {
-  font-weight: 500;
-  color: #007bff;
-  margin-bottom: 0.5rem;
-}
-
-.email-preview {
-  font-size: 0.9rem;
-  color: #666;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.no-emails {
-  text-align: center;
-  padding: 3rem;
-  color: #666;
-}
-
-/* Compose View */
-.compose-view {
-  padding: 1rem;
+/* * CONTENT VIEW WRAPPER */
+.content-view-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  /* Removed the conditional padding logic as the header is now always present */
 }
 </style>
