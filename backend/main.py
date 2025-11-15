@@ -1,56 +1,50 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
-from fastapi import FastAPI, Depends, HTTPException, Query
-from pydantic import BaseModel
-
-from simplegmail import Gmail
-from simplegmail.query import construct_query
+from fastapi import FastAPI, Depends, HTTPException
+from dotenv import load_dotenv
 
 from models import EmailOut, EmailRequest
 from filters import EmailFilters
+from gmail_service import fetch_messages, send_email, get_current_user_email
 
-app = FastAPI(title="Email Assistant API")
-gmail = Gmail()  # loads credentials + token.json automatically
+load_dotenv()
 
-def to_out(msg) -> EmailOut:
-    return EmailOut(
-        sender    = msg.sender    or "",
-        recipient = msg.recipient or "",
-        subject   = msg.subject   or "(no subject)",
-        body      = msg.plain     or msg.html or "(empty)",
-        date      = msg.date,
-    )
+app = FastAPI()
+
 
 @app.get("/read-email", response_model=List[EmailOut])
-def list_emails(filters: EmailFilters = Depends()):
-    # Build query from filters
-    qdict = filters.to_simplegmail_query()
-
+async def get_emails(filters: EmailFilters = Depends()):
+    """
+    Fetch emails using Gmail API, filtered by query params.
+    """
     try:
-        q = construct_query(qdict) if qdict else None
+        query = filters.to_gmail_query()
+        emails = fetch_messages(query=query)
+        return emails
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid filter: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    # Fetch messages
-    messages = gmail.get_messages(query=q)
-    return [to_out(m) for m in messages]
 
 @app.post("/send-email")
-def send_email(req: EmailRequest):
+async def send_email_endpoint(req: EmailRequest):
+    """
+    Send an email using Gmail API.
+    """
     try:
-        user_info = gmail.service.users().getProfile(userId="me").execute() # take user email address dynamically
-        sender_email = user_info["emailAddress"]
+        # Dynamically get sender email from Gmail profile
+        sender_email = get_current_user_email()
 
-        params = {
-            "to": req.to,
-            "sender": sender_email,
-            "subject": req.subject,
-            "msg_plain": req.body,
-            "signature": True
+        result = send_email(
+            sender=sender_email or "me",
+            to=req.to,
+            subject=req.subject,
+            body=req.body,
+        )
+
+        return {
+            "status": "sent",
+            "message_id": result.get("id"),
         }
-        message = gmail.send_message(**params)
-        return {"status": "sent", "message_id": getattr(message, "id", None)}
-    
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
