@@ -4,14 +4,25 @@
       <p>Loading emails...</p>
     </div>
 
+    <!-- THIS IS THE NEW PART THAT HANDLES THE 401 -->
+    <div v-else-if="authUrl" class="auth-prompt">
+      <h2>Gmail Authentication Required</h2>
+      <p>Please connect your Google account to fetch emails.</p>
+      <button @click="authenticate" class="btn btn-primary">
+        Connect with Google
+      </button>
+      <p v-if="errorMessage" class="text-danger mt-3">Error: {{ errorMessage }}</p>
+    </div>
+    
     <div v-else-if="errorMessage" class="error-box">
       <h3>Gmail API Error</h3>
       <p>{{ errorMessage }}</p>
       <div class="setup-instructions">
-        <p><strong>To set up Gmail API:</strong></p>
+        <p><strong>Troubleshooting:</strong></p>
         <ol>
-          <li>Place <code>client_secret.json</code> in backend directory</li>
-          <li>Run backend and follow OAuth flow to generate <code>gmail_token.json</code></li>
+          <li>Ensure backend is running.</li>
+          <li>Ensure <code>.env</code> file is correct.</li>
+          <li>If auth fails, try deleting <code>token.json</code> and re-authenticating.</li>
         </ol>
       </div>
     </div>
@@ -22,7 +33,7 @@
         :key="index"
         class="email-item"
         :class="{ 
-          'unread': index === 0, /* Now only marking the first as unread for demo */
+          'unread': email.unread, 
           'selected': index === selectedEmailIndex 
         }" 
         @click="selectEmail(email, index)"
@@ -37,7 +48,7 @@
     </div>
 
     <div v-else class="no-emails">
-      <p>No emails found in this folder.</p>
+      <p>No emails found.</p>
     </div>
   </div>
 </template>
@@ -60,26 +71,61 @@ export default {
     const loading = ref(false)
     const errorMessage = ref('')
     const selectedEmailIndex = ref(null) 
+    const authUrl = ref('') // <--- State for the Auth URL
 
     const loadEmails = async () => {
       loading.value = true
       errorMessage.value = ''
       emails.value = []
       selectedEmailIndex.value = null 
+      authUrl.value = '' // <--- Reset auth URL
 
       try {
         console.log(`Fetching emails for folder: ${props.folder}`)
+        // Note: The backend must return an 'unread' boolean field on each email object.
         const emailList = await fetchEmails(props.folder) 
         emails.value = emailList
       } catch (error) {
         console.error(`Error fetching ${props.folder} emails:`, error)
-        errorMessage.value = error.detail || error.message || 'Failed to load emails. Please ensure Gmail API is configured.'
+        
+        // <--- THIS LOGIC CATCHES THE 401 RESPONSE
+        if (error.response && error.response.status === 401 && error.response.data.auth_url) {
+            authUrl.value = error.response.data.auth_url;
+            errorMessage.value = ''; // Clear generic error message
+        } else {
+            // Original logic for all other errors
+            errorMessage.value = error.response?.data?.detail 
+                               || error.message 
+                               || 'Failed to load emails. Please ensure Gmail API is configured.'
+        }
       } finally {
         loading.value = false
       }
     }
+    
+    // <--- THIS METHOD REDIRECTS THE USER TO GOOGLE
+    const authenticate = () => {
+      if (authUrl.value) {
+        window.location.href = authUrl.value;
+      } else {
+        errorMessage.value = "Authentication URL is missing. Please try reloading the page.";
+      }
+    }
 
-    onMounted(loadEmails)
+    // --- FIX: Force reload after successful auth redirect ---
+    onMounted(() => {
+        // 1. Check if the URL contains the success status from the backend redirect
+        const params = new URLSearchParams(window.location.search);
+        const authStatus = params.get('auth_status');
+
+        if (authStatus === 'success') {
+            // 2. Clear the query parameter to prevent repeated reloads if user navigates away
+            window.history.replaceState(null, '', window.location.pathname);
+        }
+        
+        // 3. Load emails on mount (this will now succeed if we just authenticated)
+        loadEmails();
+    })
 
     const selectEmail = (email, index) => {
       selectedEmailIndex.value = index
@@ -113,10 +159,12 @@ export default {
       loading,
       errorMessage,
       selectedEmailIndex,
+      authUrl, // <--- Expose authUrl
       selectEmail,
       formatDate,
       getPreview,
-      loadEmails
+      loadEmails,
+      authenticate // <--- Expose authenticate method
     }
   }
 }
@@ -137,11 +185,36 @@ export default {
   padding: 1.5rem;
   margin: 1rem 0;
 }
+/* --- Auth Prompt Styles --- */
+.auth-prompt {
+  background-color: #e6f7ff;
+  border: 1px solid #91d5ff;
+  border-radius: 6px;
+  padding: 2rem;
+  margin: 1rem 0;
+  text-align: center;
+}
+.auth-prompt h2 { color: #0050b3; margin-bottom: 0.5rem; }
+.auth-prompt p { color: #0050b3; }
+.btn-primary {
+    background-color: #4285F4;
+    color: white;
+    border: none;
+    padding: 12px 25px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 1rem;
+    margin-top: 1rem;
+    transition: background-color 0.2s;
+}
+.btn-primary:hover {
+    background-color: #337ae2;
+}
+
 .error-box h3 { margin-top: 0; color: #d46b08; font-weight: 700; }
 .error-box p { color: #d48806; }
 .setup-instructions { margin-top: 1rem; padding: 1rem; background-color: #fff; border-radius: 4px; border: 1px solid var(--light-border-color); }
 .setup-instructions ol { margin: 0.5rem 0; padding-left: 1.5rem; }
-.setup-instructions code { background-color: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; color: #c41d7f; }
 
 /* === EMAIL ITEM BASE STYLES === */
 .email-list {
@@ -150,7 +223,6 @@ export default {
 }
 
 .email-item {
-  /* Default background for ALL read emails */
   background-color: var(--read-email-bg, #f7f8fa);
   border: none;
   border-bottom: 1px solid var(--border-color, #e0e0e0);
@@ -161,7 +233,6 @@ export default {
   border-left: 4px solid transparent; 
 }
 
-/* UNREAD STATE: overrides background to white */
 .email-item.unread {
   background-color: var(--content-bg, #ffffff);
 }
@@ -170,14 +241,10 @@ export default {
   border-bottom: none;
 }
 
-/* Hover state for non-selected items */
 .email-item:not(.selected):hover {
   background-color: var(--hover-bg, #f0f4f8);
-  transform: none;
-  box-shadow: none;
 }
 
-/* SELECTED STATE: adds blue side bar and subtle background */
 .email-item.selected {
   background-color: var(--hover-bg, #f0f4f8); 
   border-left: 4px solid var(--primary-color, #6C63FF);
@@ -190,27 +257,22 @@ export default {
   margin-bottom: 0.5rem;
 }
 
-/* --- BASE READ TEXT STYLES (Applies to all unless overridden by .unread) --- */
-
-/* Read Sender: Muted weight/color */
 .email-sender {
   font-weight: 500; 
-  color: var(--text-secondary); /* Muted gray */
+  color: var(--text-secondary);
   font-size: 1.05rem;
 }
 
-/* Read Subject: Muted weight/color */
 .email-subject {
   font-weight: 500; 
   font-size: 1rem;
-  color: var(--text-secondary); /* Muted gray */
+  color: var(--text-secondary);
   margin-bottom: 0.5rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Date and Preview Text (Always Muted) */
 .email-date {
   font-size: 0.8rem;
   color: var(--text-secondary);
@@ -225,11 +287,9 @@ export default {
   white-space: nowrap;
 }
 
-/* --- UNREAD OVERRIDES (Only for high contrast) --- */
-
 .email-item.unread .email-sender,
 .email-item.unread .email-subject {
-  font-weight: 700; /* Unread: Bold */
-  color: var(--text-primary, #333); /* Unread: Black/Dark Gray */
+  font-weight: 700;
+  color: var(--text-primary, #333);
 }
 </style>

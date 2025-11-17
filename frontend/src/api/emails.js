@@ -17,25 +17,22 @@ import apiClient from './client'
  * @returns {Promise} Array of emails
  */
 export const fetchEmails = async (filters = {}) => {
-  try {
-    // Build query parameters
-    const params = new URLSearchParams()
+  // Build query parameters
+  const params = new URLSearchParams()
 
-    if (filters.sender) params.append('sender', filters.sender)
-    if (filters.subject_contains) params.append('subject_contains', filters.subject_contains)
-    if (filters.unread !== undefined) params.append('unread', filters.unread)
-    if (filters.labels && filters.labels.length > 0) {
-      filters.labels.forEach(label => params.append('labels', label))
-    }
-    if (filters.newer_than_days) params.append('newer_than_days', filters.newer_than_days)
-    if (filters.since) params.append('since', filters.since)
-    if (filters.until) params.append('until', filters.until)
-
-    const response = await apiClient.get(`/read-email?${params.toString()}`)
-    return response.data
-  } catch (error) {
-    throw error.response?.data || error
+  if (filters.sender) params.append('sender', filters.sender)
+  if (filters.subject_contains) params.append('subject_contains', filters.subject_contains)
+  if (filters.unread !== undefined) params.append('unread', filters.unread)
+  if (filters.labels && filters.labels.length > 0) {
+    filters.labels.forEach(label => params.append('labels', label))
   }
+  if (filters.newer_than_days) params.append('newer_than_days', filters.newer_than_days)
+  if (filters.since) params.append('since', filters.since)
+  if (filters.until) params.append('until', filters.until)
+
+  // FIX: Removed try...catch. Errors now propagate to the client interceptor.
+  const response = await apiClient.get(`/read-email?${params.toString()}`)
+  return response.data
 }
 
 /**
@@ -47,12 +44,9 @@ export const fetchEmails = async (filters = {}) => {
  * @returns {Promise} Send response
  */
 export const sendEmail = async (emailData) => {
-  try {
-    const response = await apiClient.post('/send-email', emailData)
-    return response.data
-  } catch (error) {
-    throw error.response?.data || error
-  }
+  // FIX: Removed try...catch.
+  const response = await apiClient.post('/send-email', emailData)
+  return response.data
 }
 
 /**
