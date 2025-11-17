@@ -31,7 +31,7 @@ export const fetchEmails = async (filters = {}) => {
     if (filters.since) params.append('since', filters.since)
     if (filters.until) params.append('until', filters.until)
 
-    const response = await apiClient.get(`/backend/read-email?${params.toString()}`)
+    const response = await apiClient.get(`/read-email?${params.toString()}`)
     return response.data
   } catch (error) {
     throw error.response?.data || error
@@ -48,7 +48,7 @@ export const fetchEmails = async (filters = {}) => {
  */
 export const sendEmail = async (emailData) => {
   try {
-    const response = await apiClient.post('/backend/send-email', emailData)
+    const response = await apiClient.post('/send-email', emailData)
     return response.data
   } catch (error) {
     throw error.response?.data || error

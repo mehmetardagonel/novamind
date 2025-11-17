@@ -102,9 +102,7 @@ export default {
 .compose-view {
   display: flex;
   flex-direction: column;
-  /* Use 100% height minus any header/padding adjustment */
   height: calc(100% - 40px);
-  /* Adjust padding to match screenshot layout */
   padding: 0 1.5rem 1.5rem 0;
 }
 

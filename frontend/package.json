@@ -16,6 +16,7 @@
     "@primevue/themes": "^4.4.1",
     "@supabase/supabase-js": "^2.47.0",
     "axios": "^1.6.2",
+    "cors": "^2.8.5",
     "pinia": "^2.1.7",
     "primeicons": "^7.0.0",
     "primevue": "^4.4.1",

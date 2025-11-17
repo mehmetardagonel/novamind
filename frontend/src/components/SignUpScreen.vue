@@ -275,7 +275,6 @@ export default {
 </script>
 
 <style>
-/* 🚨 WARNING: The 'scoped' attribute has been removed to fix icon and SVG rendering issues. 🚨 */
 /* --- 1. Global & Page Layout --- */
 :root {
   --primary-color: #3713ec;
