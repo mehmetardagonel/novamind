@@ -92,6 +92,17 @@ export default {
         return 'Favorites'
       } else if (path.includes('/email/trash')) {
         return 'Trash'
+      }
+      else if (path.includes('/email/important')) {
+        return 'Important'
+      } else if (path.includes('/email/spam')) {
+        return 'Spam'
+      } else if (path.includes('/email/drafts')) {
+        return 'Drafts'
+      } else if (path.includes('/email/trash')) {
+        return 'Trash'
+      } else if (path.includes('/email/labels')) {
+        return 'Labels'
       } 
       // Fallback for an email detail view (e.g., /app/email/inbox/123)
       else if (path.match(/\/email\/\w+\/\d+/)) {

@@ -32,12 +32,15 @@ export default {
     const route = useRoute();
 
     // UPDATED: Added 'Favorites'
-    const navItems = computed(() => [
+     const navItems = computed(() => [
       { view: 'inbox', label: 'Inbox', icon: 'inbox', to: '/app/email/inbox' }, 
       { view: 'sent', label: 'Sent', icon: 'send', to: '/app/email/sent' }, 
       { view: 'favorites', label: 'Favorites', icon: 'star', to: '/app/email/favorites' }, 
+      { view: 'important', label: 'Important', icon: 'label_important', to: '/app/email/important' }, 
+      { view: 'spam', label: 'Spam', icon: 'report', to: '/app/email/spam' }, 
       { view: 'drafts', label: 'Drafts', icon: 'draft', to: '/app/email/drafts' }, 
       { view: 'trash', label: 'Trash', icon: 'delete', to: '/app/email/trash' },
+      { view: 'labels', label: 'Labels', icon: 'label', to: '/app/email/labels' },
     ]);
 
     return {
