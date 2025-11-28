@@ -1,105 +1,144 @@
 # NovaMind AI Email Assistant
 
-NovaMind is an intelligent email management assistant powered by Google Gemini AI, featuring a real-time chat interface, email summarization, and smart organization capabilities.
+NovaMind is an intelligent email management assistant powered by Google Gemini AI, featuring a real-time chat interface for managing Gmail through natural language.
 
-## 🚀 Quick Start
+## Quick Start
 
-The easiest way to run the application is using the development script:
+### 1. Enable Gmail API (First Time Only)
+
+Visit this link and click the **ENABLE** button:
+```
+https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=437464220214
+```
+
+Wait 2-3 minutes for the changes to take effect.
+
+### 2. Start the Application
 
 ```bash
+cd /Users/arda/Desktop/novamind_ai/novamind
 ./start_dev.sh
 ```
 
-This script will automatically:
-- Check for required ports (8001, 5173)
-- Set up the Python virtual environment for the backend
-- Install backend dependencies
-- Install frontend dependencies
-- Start both the FastAPI backend and Vue.js frontend
+The script will automatically:
+- Check and clear ports 8001 and 5173
+- Set up Python virtual environment
+- Install dependencies
+- Start backend and frontend servers
 
-Once started, access the app at:
-- **Frontend**: http://localhost:5173
-- **Backend API**: http://localhost:8001
-- **API Docs**: http://localhost:8001/docs
+Once started, open your browser:
+```
+http://localhost:5173
+```
 
-To stop the servers, run:
+### 3. First Time Authentication
+
+1. Click **"Inbox"** in the sidebar
+2. Sign in with your Google account
+3. Allow permissions when prompted
+4. You'll be redirected back to the app
+
+### 4. Using the AI Assistant
+
+Click **"AI Assistant"** in the sidebar and try commands like:
+- "Show me today's emails"
+- "Draft an email to john@example.com about the meeting"
+- "Delete all spam emails"
+- "Show me important emails from last week"
+
+## Stopping the Application
+
 ```bash
 ./stop_dev.sh
 ```
 
-## ⚙️ Configuration
+Or press `Ctrl+C` in the terminal.
 
-Before running the application, ensure you have the necessary environment variables set up.
+## Troubleshooting
 
-### Backend (`backend/.env`)
-Create a `.env` file in the `backend/` directory based on `.env.example`:
+### Gmail API Errors / No Emails Found
 
-```env
-# App Security
-SECRET_KEY=your_secret_key_here
+**Solution:**
+1. Make sure you enabled the Gmail API (see Quick Start step 1)
+2. Wait 2-3 minutes after enabling
+3. Refresh your browser
 
-# Database (Supabase)
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your_supabase_anon_key
-SUPABASE_JWT_SECRET=your_supabase_jwt_secret
+### Backend Won't Start
 
-# Gmail API (Optional for email features)
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
+```bash
+./stop_dev.sh
+lsof -ti:8001 | xargs kill -9
+lsof -ti:5173 | xargs kill -9
+./start_dev.sh
 ```
 
-### Frontend (`frontend/.env`)
-The frontend comes pre-configured, but you can create a `.env` file in `frontend/` if you need to override defaults:
+### Missing Dependencies
 
-```env
-VITE_API_URL=http://localhost:8001
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+Backend:
+```bash
+cd backend
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-## 🛠 Manual Setup
+Frontend:
+```bash
+cd frontend
+npm install
+```
 
-If you prefer to run the services manually:
+## Important URLs
 
-### Backend
-1. Navigate to `backend/`:
-   ```bash
-   cd backend
-   ```
-2. Create and activate virtual environment:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # Windows: venv\Scripts\activate
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Run the server:
-   ```bash
-   uvicorn main:app --port 8001 --reload
-   ```
+- **Application**: http://localhost:5173
+- **Backend API**: http://localhost:8001
+- **API Documentation**: http://localhost:8001/docs
+- **Enable Gmail API**: https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=437464220214
 
-### Frontend
-1. Navigate to `frontend/`:
-   ```bash
-   cd frontend
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Run the dev server:
-   ```bash
-   npm run dev
-   ```
+## Tech Stack
 
-## 🏗 Tech Stack
-
-- **Backend**: FastAPI, Python 3.10+, SQLAlchemy, simplegmail
-- **Frontend**: Vue 3, Vite, Pinia, Tailwind CSS
+- **Backend**: FastAPI (Python 3.12), LangChain, Google Gemini API
+- **Frontend**: Vue 3, Vite, Pinia
 - **Database/Auth**: Supabase
-- **AI**: Google Gemini 2.5 Flash
+- **Email**: Gmail API with OAuth2
 
-## 📝 License
-This project is licensed under the MIT License.
+## Configuration
+
+Backend environment variables are already configured in `backend/.env`. The key configurations include:
+
+- `GEMINI_API_KEY`: Google Gemini AI API key
+- `GOOGLE_CLIENT_ID`: Google OAuth client ID
+- `GOOGLE_CLIENT_SECRET`: Google OAuth client secret
+- `SUPABASE_URL`: Supabase project URL
+- `SUPABASE_KEY`: Supabase anonymous key
+
+## Project Structure
+
+```
+novamind/
+├── backend/              # FastAPI backend
+│   ├── venv/            # Python 3.12 virtual environment
+│   ├── main.py          # API endpoints
+│   ├── chat_service.py  # AI chatbot service
+│   ├── email_tools.py   # Email operation tools
+│   ├── gmail_service.py # Gmail API integration
+│   └── .env             # Configuration
+├── frontend/            # Vue.js frontend
+│   ├── src/
+│   │   ├── views/       # Page components
+│   │   └── components/  # Reusable components
+│   └── package.json
+├── start_dev.sh         # Start script
+├── stop_dev.sh          # Stop script
+└── Makefile             # Make commands
+```
+
+## Useful Commands
+
+| Action | Command |
+|--------|---------|
+| Start servers | `./start_dev.sh` |
+| Stop servers | `./stop_dev.sh` |
+| Restart servers | `./stop_dev.sh && sleep 2 && ./start_dev.sh` |
+| View backend logs | `tail -f backend.log` |
+| View frontend logs | `tail -f frontend.log` |
+| Check status | `make status` |
