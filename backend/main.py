@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 from models import EmailOut, EmailRequest
 from filters import EmailFilters
-from gmail_service import fetch_messages, send_email, get_current_user_email
+from gmail_service import fetch_messages, send_email, get_current_user_email, fetch_messages_by_label, fetch_drafts
 
 load_dotenv()
 
@@ -24,7 +24,6 @@ async def get_emails(filters: EmailFilters = Depends()):
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/send-email")
 async def send_email_endpoint(req: EmailRequest):
@@ -46,5 +45,50 @@ async def send_email_endpoint(req: EmailRequest):
             "status": "sent",
             "message_id": result.get("id"),
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/emails/drafts", response_model=List[EmailOut])
+async def list_drafts():
+    try:
+        return fetch_drafts(max_results=50)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/emails/sent", response_model=List[EmailOut])
+async def list_sent():
+    try:
+        return fetch_messages_by_label("SENT", max_results=50)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/emails/favorites", response_model=List[EmailOut])
+async def list_starred():
+    try:
+        return fetch_messages_by_label("STARRED", max_results=50)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/emails/important", response_model=List[EmailOut])
+async def list_important():
+    try:
+        return fetch_messages_by_label("IMPORTANT", max_results=50)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/emails/spam", response_model=List[EmailOut])
+async def list_spam():
+    try:
+        return fetch_messages_by_label("SPAM", max_results=50, include_spam_trash=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/emails/trash", response_model=List[EmailOut])
+async def list_trash():
+    """
+    Retrieve deleted emails (Trash folder).
+    """
+    try:
+        return fetch_messages_by_label("TRASH", max_results=50, include_spam_trash=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
