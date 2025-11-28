@@ -1,124 +1,105 @@
-# Gmail API Backend (FastAPI + OAuth2)
+# NovaMind AI Email Assistant
 
-This project is a backend service built with FastAPI that integrates securely with the Gmail API.
-It allows users to read, filter, and send emails via their Gmail account using OAuth 2.0 authentication, without ever exposing credentials in the source code.
+NovaMind is an intelligent email management assistant powered by Google Gemini AI, featuring a real-time chat interface, email summarization, and smart organization capabilities.
 
-## Features
+## 🚀 Quick Start
 
-- Gmail API integration with official Google client libraries  
-- Secure authentication using OAuth 2.0  
-- Environment-based credentials (no client_secret.json required)  
-- Read emails with filters (sender, recipient, subject, unread, date range, etc.)  
-- Send new emails from the authenticated account  
-- FastAPI endpoints with Pydantic validation and Swagger UI  
-- Token refresh & persistence (via token.json, gitignored)
+The easiest way to run the application is using the development script:
 
-## Environment Variables
-
-Create a `.env` file in the project root with your Gmail OAuth credentials:
-
-```env
-GOOGLE_CLIENT_ID=your_client_id_here
-GOOGLE_CLIENT_SECRET=your_client_secret_here
-GOOGLE_PROJECT_ID=your_project_id_here
-GOOGLE_REDIRECT_URI=http://localhost
-GOOGLE_AUTH_URI=https://accounts.google.com/o/oauth2/auth
-GOOGLE_TOKEN_URI=https://oauth2.googleapis.com/token
-GOOGLE_AUTH_PROVIDER_X509_CERT_URL=https://www.googleapis.com/oauth2/v1/certs
+```bash
+./start_dev.sh
 ```
 
-## Installation & Setup
+This script will automatically:
+- Check for required ports (8001, 5173)
+- Set up the Python virtual environment for the backend
+- Install backend dependencies
+- Install frontend dependencies
+- Start both the FastAPI backend and Vue.js frontend
 
-1. Clone the repository
+Once started, access the app at:
+- **Frontend**: http://localhost:5173
+- **Backend API**: http://localhost:8001
+- **API Docs**: http://localhost:8001/docs
+
+To stop the servers, run:
+```bash
+./stop_dev.sh
+```
+
+## ⚙️ Configuration
+
+Before running the application, ensure you have the necessary environment variables set up.
+
+### Backend (`backend/.env`)
+Create a `.env` file in the `backend/` directory based on `.env.example`:
+
+```env
+# App Security
+SECRET_KEY=your_secret_key_here
+
+# Database (Supabase)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your_supabase_anon_key
+SUPABASE_JWT_SECRET=your_supabase_jwt_secret
+
+# Gmail API (Optional for email features)
+GOOGLE_CLIENT_ID=your_client_id
+GOOGLE_CLIENT_SECRET=your_client_secret
+```
+
+### Frontend (`frontend/.env`)
+The frontend comes pre-configured, but you can create a `.env` file in `frontend/` if you need to override defaults:
+
+```env
+VITE_API_URL=http://localhost:8001
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+## 🛠 Manual Setup
+
+If you prefer to run the services manually:
+
+### Backend
+1. Navigate to `backend/`:
    ```bash
-   git clone git@github.com:mehmetardagonel/novamind.git
-   git checkout feature/melih-gmail-api
-   cd gmail-api/
+   cd backend
    ```
-
-2. Create a virtual environment
+2. Create and activate virtual environment:
    ```bash
-   python -m venv venv
-   source venv/bin/activate   # or venv\Scripts\activate on Windows
+   python3 -m venv venv
+   source venv/bin/activate  # Windows: venv\Scripts\activate
    ```
-
-3. Install dependencies
+3. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-
-4. Add your `.env` file
-
-5. Run the app
+4. Run the server:
    ```bash
-   uvicorn main:app --reload
+   uvicorn main:app --port 8001 --reload
    ```
 
-6. Visit Swagger UI:  
-   http://127.0.0.1:8000/docs
+### Frontend
+1. Navigate to `frontend/`:
+   ```bash
+   cd frontend
+   ```
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Run the dev server:
+   ```bash
+   npm run dev
+   ```
 
-## API Endpoints
+## 🏗 Tech Stack
 
-### GET /read-email
-Fetch emails using Gmail filters.
+- **Backend**: FastAPI, Python 3.10+, SQLAlchemy, simplegmail
+- **Frontend**: Vue 3, Vite, Pinia, Tailwind CSS
+- **Database/Auth**: Supabase
+- **AI**: Google Gemini 2.5 Flash
 
-| Query Parameter | Type | Example | Description |
-|-----------------|------|----------|--------------|
-| `sender` | string | `sender@gmail.com` | Filter by sender |
-| `recipient` | string | `me@gmail.com` | Filter by recipient |
-| `subject_contains` | string | `invoice` | Filter by subject text |
-| `unread` | bool | `true` | Show unread emails only |
-| `labels` | list[str] | `labels=IMPORTANT&labels=Work` | Gmail labels |
-| `newer_than_days` | int | `7` | Last N days |
-| `since` | date | `2025-11-01` | Start date |
-| `until` | date | `2025-11-09` | End date |
-
-Example:
-```
-GET /read-email?sender=Supabase&unread=true&newer_than_days=3
-```
-
-### POST /send-email
-Send an email using the authenticated Gmail account.
-
-Request body:
-```json
-{
-  "to": "someone@example.com",
-  "subject": "Test email from FastAPI",
-  "body": "Hello from my Gmail API backend!"
-}
-```
-
-Response:
-```json
-{
-  "status": "sent",
-  "message_id": "18f9a2e9c3f9d0e1"
-}
-```
-
-## Authentication Flow
-
-The first time you call `/read-email` or `/send-email`, a Google OAuth window will open.  
-After granting access, the credentials are stored locally in `token.json` (automatically refreshed on expiration).
-
-No `client_secret.json` file is required — the credentials are built entirely from `.env`.
-
-## Deployment Notes
-
-When deploying (e.g., to Google Cloud Run):
-
-- Set your environment variables in the deployment settings (instead of a `.env` file)
-- Make sure `token.json` is not persisted or shared between users unless intentional
-- Update `GOOGLE_REDIRECT_URI` to your deployed domain, e.g.  
-  `https://yourapp.run.app/oauth2callback`
-
-## Tech Stack
-
-- Python 3.11+
-- FastAPI
-- Google Auth / Gmail API
-- Pydantic v2
-- Uvicorn
-- dotenv
+## 📝 License
+This project is licensed under the MIT License.
