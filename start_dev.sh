@@ -149,7 +149,9 @@ fi
 # Start backend server
 print_info "Starting backend server on port $BACKEND_PORT..."
 cd "$BACKEND_DIR"
-"$VENV_DIR/bin/uvicorn" main:app --reload --port $BACKEND_PORT > "$SCRIPT_DIR/backend.log" 2>&1 &
+# Set protobuf implementation to pure Python for Python 3.14 compatibility
+# Note: --reload is disabled due to Python 3.14 + protobuf compatibility issues
+PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python "$VENV_DIR/bin/uvicorn" main:app --port $BACKEND_PORT > "$SCRIPT_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo "BACKEND_PID=$BACKEND_PID" >> "$PID_FILE"
 print_success "Backend server started (PID: $BACKEND_PID)"
