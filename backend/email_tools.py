@@ -1,0 +1,525 @@
+"""
+Email Tools - Wrapper functions for email operations
+These functions use Gmail API directly for email operations.
+"""
+
+from typing import List, Dict, Optional
+import logging
+from dotenv import load_dotenv
+from gmail_service import (
+    fetch_messages,
+    send_email as gmail_send_email,
+    get_current_user_email,
+    create_draft,
+    get_drafts as get_gmail_drafts,
+    get_draft_by_id as get_gmail_draft_by_id,
+    delete_draft as delete_gmail_draft,
+    send_draft as send_gmail_draft,
+    update_draft as update_gmail_draft,
+    get_drafts_by_recipient as get_gmail_drafts_by_recipient,
+    delete_all_spam as delete_all_gmail_spam,
+    move_mails as move_gmail_mails
+)
+from filters import EmailFilters
+from datetime import timedelta, date
+
+load_dotenv()
+logger = logging.getLogger(__name__)
+
+# ============ BASIC EMAIL OPERATIONS ============
+
+def get_emails(folder: str = "inbox") -> List[Dict]:
+    """Get all emails from a specific folder (inbox by default)"""
+    try:
+        # Gmail API uses labels, not folders. inbox = INBOX label
+        query = f'in:{folder}' if folder != 'inbox' else ''
+        emails = fetch_messages(query=query)
+        return [email.model_dump(mode='json') for email in emails]
+    except Exception as e:
+        logger.error(f"Error fetching emails: {str(e)}")
+        return []
+
+
+def get_emails_by_date(date_filter: str) -> List[Dict]:
+    """
+    Get emails filtered by date
+    date_filter: 'today', 'yesterday', 'last_week', 'last_month', 'last_3_months'
+    """
+    try:
+        today = date.today()
+        if date_filter == 'today':
+            since = today
+        elif date_filter == 'yesterday':
+            since = today - timedelta(days=1)
+            today = today - timedelta(days=1)
+        elif date_filter == 'last_week':
+            since = today - timedelta(days=7)
+        elif date_filter == 'last_month':
+            since = today - timedelta(days=30)
+        elif date_filter == 'last_3_months':
+            since = today - timedelta(days=90)
+        else:
+            since = today
+
+        filters = EmailFilters(since=since)
+        query = filters.to_gmail_query()
+        emails = fetch_messages(query=query)
+        return [email.model_dump(mode='json') for email in emails]
+    except Exception as e:
+        logger.error(f"Error fetching emails by date: {str(e)}")
+        return []
+
+
+def get_emails_from_sender(sender: str) -> List[Dict]:
+    """Get all emails from a specific sender"""
+    try:
+        filters = EmailFilters(sender=sender)
+        query = filters.to_gmail_query()
+        emails = fetch_messages(query=query)
+        return [email.model_dump(mode='json') for email in emails]
+    except Exception as e:
+        logger.error(f"Error fetching emails from sender: {str(e)}")
+        return []
+
+
+def send_email(to: str, subject: str, body: str) -> Dict:
+    """Send an email via Gmail"""
+    try:
+        current_user = get_current_user_email()
+        result = gmail_send_email(sender=current_user or "me", to=to, subject=subject, body=body)
+        return {
+            "success": True,
+            "message": "Email sent successfully",
+            "message_id": result.get("id")
+        }
+    except Exception as e:
+        logger.error(f"Error sending email: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Failed to send email: {str(e)}"
+        }
+
+
+def draft_email(to: str = "", subject: str = "", body: str = "") -> Dict:
+    """
+    Create a draft email without sending it.
+    At least the body is required for a draft.
+    """
+    try:
+        if not body:
+            return {
+                "success": False,
+                "message": "At least body content is required for a draft"
+            }
+
+        draft = create_draft(to=to, subject=subject, body=body)
+        draft_id = draft.get("id")
+
+        return {
+            "success": True,
+            "message": "Draft created successfully",
+            "draft_id": draft_id
+        }
+    except Exception as e:
+        logger.error(f"Error creating draft: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Failed to create draft: {str(e)}"
+        }
+
+
+def get_drafts() -> List[Dict]:
+    """Get all draft emails"""
+    try:
+        # Query for drafts label
+        emails = fetch_messages(query='label:DRAFT')
+        return [email.model_dump(mode='json') for email in emails]
+    except Exception as e:
+        logger.error(f"Error fetching drafts: {str(e)}")
+        return []
+
+
+def get_draft_by_id(draft_id: str) -> Optional[Dict]:
+    """Get a specific draft by ID from Gmail"""
+    try:
+        draft = get_gmail_draft_by_id(draft_id)
+        if draft:
+            return draft.model_dump(mode='json') if hasattr(draft, 'model_dump') else draft
+        return None
+    except Exception as e:
+        logger.error(f"Error getting draft: {str(e)}")
+        return None
+
+
+def get_drafts_for_recipient(to_email: str) -> List[Dict]:
+    """
+    Get all draft emails for a specific recipient email address.
+
+    Args:
+        to_email: The recipient email address to filter drafts by
+
+    Returns:
+        List of draft emails for the specified recipient
+    """
+    try:
+        drafts = get_gmail_drafts_by_recipient(to_email)
+        return [draft if isinstance(draft, dict) else draft.model_dump(mode='json')
+                for draft in drafts]
+    except Exception as e:
+        logger.error(f"Error fetching drafts for recipient {to_email}: {str(e)}")
+        return []
+
+
+def delete_draft(draft_id: str) -> Dict:
+    """Delete a draft email from Gmail"""
+    try:
+        success = delete_gmail_draft(draft_id)
+        if success:
+            return {
+                "success": True,
+                "message": f"Draft {draft_id} deleted successfully"
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Failed to delete draft {draft_id}"
+            }
+    except Exception as e:
+        logger.error(f"Error deleting draft: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Failed to delete draft: {str(e)}"
+        }
+
+
+def send_draft(draft_id: str) -> Dict:
+    """Send a previously created draft from Gmail"""
+    try:
+        sent_msg = send_gmail_draft(draft_id)
+        if sent_msg:
+            return {
+                "success": True,
+                "message": f"Draft {draft_id} sent successfully",
+                "message_id": sent_msg.get("id")
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Failed to send draft {draft_id}"
+            }
+    except Exception as e:
+        logger.error(f"Error sending draft: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Failed to send draft: {str(e)}"
+        }
+
+
+def search_emails(
+    sender: Optional[str] = None,
+    date_filter: Optional[str] = None,
+    subject_keyword: Optional[str] = None,
+    is_important: Optional[bool] = None,
+    is_spam: Optional[bool] = None,
+    folder: Optional[str] = None
+) -> List[Dict]:
+    """
+    Advanced email search with multiple filters
+    All parameters are optional and can be combined
+    """
+    try:
+        filters = EmailFilters(
+            sender=sender,
+            subject_contains=subject_keyword
+        )
+        query = filters.to_gmail_query()
+
+        # Add additional filters
+        if is_spam:
+            query += ' is:spam'
+        if is_important:
+            query += ' is:important'
+        if folder:
+            query += f' in:{folder}'
+
+        emails = fetch_messages(query=query)
+        return [email.model_dump(mode='json') for email in emails]
+    except Exception as e:
+        logger.error(f"Error searching emails: {str(e)}")
+        return []
+
+
+def update_draft(
+    draft_id: str,
+    to: Optional[str] = None,
+    subject: Optional[str] = None,
+    body: Optional[str] = None,
+    append_to_body: Optional[str] = None,
+    remove_from_body: Optional[str] = None,
+    instruction: Optional[str] = None
+) -> Dict:
+    """
+    Update a draft email in Gmail.
+
+    Parameters:
+    - draft_id: Required - The draft ID to update
+    - to: Update recipient email (None = keep existing, "" = clear)
+    - subject: Update subject line (None = keep existing, "" = clear)
+    - body: Update body text (None = keep existing, "" = clear)
+    - append_to_body: Complete enhanced body from chat_service (used directly, no further enhancement)
+    - remove_from_body: (unused, reserved for future)
+    - instruction: AI enhancement instruction (treated as body if body is not provided)
+
+    Note: None vs "" are treated differently. Use None to keep existing value, "" to clear it.
+    All enhancement should be done in chat_service BEFORE calling this function.
+    """
+    try:
+        # Handle instruction parameter - treat as body if body is not provided
+        if instruction is not None and body is None:
+            body = instruction
+
+        # Get the draft to access old body
+        draft = get_gmail_draft_by_id(draft_id)
+        if not draft:
+            return {
+                "success": False,
+                "message": f"Draft {draft_id} not found"
+            }
+
+        # Determine which body to use (None = keep existing, "" = clear, string = use it)
+        # Priority: append_to_body > body > None (keep existing)
+        update_body = None
+
+        if append_to_body is not None:
+            # append_to_body is already the complete body from chat_service._smart_enhance_append()
+            # It's already enhanced and ready to use, don't do further processing
+            update_body = append_to_body
+        elif body is not None:
+            # body parameter: already enhanced by chat_service._smart_enhance_body_with_instruction()
+            # Use it as the new body
+            update_body = body
+        # else: update_body stays None, meaning keep existing body
+
+        # Update the draft with the processed fields
+        # If to/subject/body are None, they won't be modified (Gmail API ignores None values)
+        updated_draft = update_gmail_draft(
+            draft_id=draft_id,
+            to=to,  # None = keep existing
+            subject=subject,  # None = keep existing
+            body=update_body  # None = keep existing, or enhanced body string
+        )
+
+        if updated_draft:
+            new_draft_id = updated_draft.get("id")
+            return {
+                "success": True,
+                "message": f"Draft {draft_id} updated successfully",
+                "new_draft_id": new_draft_id
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Failed to update draft {draft_id}"
+            }
+    except Exception as e:
+        logger.error(f"Error updating draft: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Failed to update draft: {str(e)}"
+        }
+
+
+def delete_spam_emails() -> Dict:
+    """Delete all spam emails"""
+    try:
+        deleted_count = delete_all_gmail_spam()
+        return {
+            "success": True,
+            "deleted_count": deleted_count,
+            "message": f"Deleted {deleted_count} spam email(s)"
+        }
+    except Exception as e:
+        logger.error(f"Error deleting spam: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+
+def move_email(email_id: str, folder: str) -> Dict:
+    """Move a single email to a specific label/folder"""
+    try:
+        moved_count = move_gmail_mails(email_ids=[email_id], target_label_name=folder)
+        if moved_count > 0:
+            return {
+                "success": True,
+                "message": f"Email moved to '{folder}'"
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Failed to move email"
+            }
+    except Exception as e:
+        logger.error(f"Error moving email: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Failed to move email: {str(e)}"
+        }
+
+
+def get_important_emails() -> List[Dict]:
+    """Get all important emails"""
+    try:
+        emails = fetch_messages(query='is:important')
+        return [email.model_dump(mode='json') for email in emails]
+    except Exception as e:
+        logger.error(f"Error fetching important emails: {str(e)}")
+        return []
+
+
+# ============ ADVANCED EMAIL TOOLS ============
+
+def fetch_mails(
+    label: Optional[str] = None,
+    sender: Optional[str] = None,
+    importance: Optional[bool] = None,
+    time_period: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    subject_keyword: Optional[str] = None,
+    folder: Optional[str] = None,
+    max_results: int = 50
+) -> List[Dict]:
+    """
+    Advanced email fetching with multiple filter options
+
+    Parameters:
+    - label: Custom label (e.g., 'Work', 'Personal')
+    - sender: Sender email or name (partial match)
+    - importance: Filter by importance (True for important, False for not important)
+    - time_period: 'today', 'yesterday', 'last_week', 'last_month', 'last_3_months'
+    - since_date: Start date in ISO format (YYYY-MM-DD)
+    - until_date: End date in ISO format (YYYY-MM-DD)
+    - subject_keyword: Search keyword in subject line
+    - folder: Filter by folder (e.g., 'inbox', 'sent', 'drafts')
+    - max_results: Maximum number of emails to return (default: 50)
+
+    All filters are optional and can be combined together.
+    """
+    try:
+        # Build date filter if time_period is specified
+        calculated_since = None
+        if time_period:
+            today = date.today()
+            if time_period == 'today':
+                calculated_since = today
+            elif time_period == 'yesterday':
+                calculated_since = today - timedelta(days=1)
+            elif time_period == 'last_week':
+                calculated_since = today - timedelta(days=7)
+            elif time_period == 'last_month':
+                calculated_since = today - timedelta(days=30)
+            elif time_period == 'last_3_months':
+                calculated_since = today - timedelta(days=90)
+
+        filters = EmailFilters(
+            sender=sender,
+            subject_contains=subject_keyword,
+            since=calculated_since,
+            since_custom=since_date,
+            until_custom=until_date
+        )
+
+        query = filters.to_gmail_query()
+
+        # Add label filter
+        if label:
+            query += f' label:{label}'
+
+        # Add importance filter
+        if importance is True:
+            query += ' is:important'
+        elif importance is False:
+            query += ' -is:important'
+
+        # Add folder filter
+        if folder:
+            query += f' in:{folder}'
+
+        # Pass max_results to fetch_messages so Gmail API respects the limit
+        emails = fetch_messages(query=query or None, max_results=max_results)
+        return [email.model_dump(mode='json') for email in emails]
+    except Exception as e:
+        logger.error(f"Error in fetch_mails: {str(e)}")
+        return []
+
+
+def delete_all_spam() -> Dict:
+    """
+    Delete all spam emails from Gmail (query: is:spam).
+    Returns the count of deleted spam emails.
+    """
+    try:
+        deleted_count = delete_all_gmail_spam()
+        return {
+            "success": True,
+            "deleted_count": deleted_count,
+            "message": f"Successfully deleted {deleted_count} spam email(s)"
+        }
+    except Exception as e:
+        logger.error(f"Error deleting spam: {str(e)}")
+        return {
+            "success": False,
+            "deleted_count": 0,
+            "message": f"Failed to delete spam: {str(e)}"
+        }
+
+
+def move_mails_by_sender(sender: str, target_folder: str, max_results: int = 50) -> Dict:
+    """
+    Move multiple emails from a specific sender to a target folder.
+
+    Parameters:
+    - sender: Sender name or email (partial match, case-insensitive)
+      Examples: 'playstation', 'amazon', 'john', 'company.com'
+    - target_folder: Target label/folder name
+      Examples: 'game', 'shopping', 'work'
+    - max_results: Maximum emails to fetch and move (default: 50)
+
+    Returns: Dict with success status and count of moved emails
+    """
+    try:
+        # Find all emails from this sender
+        emails = fetch_mails(sender=sender, max_results=max_results)
+
+        if not emails:
+            return {
+                "success": False,
+                "moved_count": 0,
+                "message": f"No emails found from sender '{sender}'"
+            }
+
+        # Extract email IDs from results
+        email_ids = [email.get("id") for email in emails if email.get("id")]
+
+        if not email_ids:
+            return {
+                "success": False,
+                "moved_count": 0,
+                "message": f"Could not extract email IDs from {len(emails)} emails"
+            }
+
+        # Move the emails using the internal function
+        moved_count = move_gmail_mails(email_ids=email_ids, target_label_name=target_folder)
+
+        return {
+            "success": moved_count > 0,
+            "moved_count": moved_count,
+            "message": f"Moved {moved_count} email(s) from '{sender}' to '{target_folder}'"
+        }
+
+    except Exception as e:
+        logger.error(f"Error moving mails by sender: {str(e)}")
+        return {
+            "success": False,
+            "moved_count": 0,
+            "message": f"Failed to move emails: {str(e)}"
+        }

@@ -89,13 +89,14 @@
 <script>
 import { ref, nextTick } from 'vue'
 
-export default { 
+export default {
   name: 'ComposeView',
   setup() {
     const userPrompt = ref('')
     const isLoading = ref(false)
     const historyContainer = ref(null)
     const API_URL = 'http://127.0.0.1:8001/chat'
+    const sessionId = ref(null) // Track session ID for conversation continuity
 
     // Initial state
     const chatHistory = ref([
@@ -175,16 +176,24 @@ export default {
         const response = await fetch(API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: messageText })
+            body: JSON.stringify({
+              message: messageText,
+              session_id: sessionId.value // Include session_id for conversation continuity
+            })
         });
 
         if (!response.ok) throw new Error('API request failed');
 
         const data = await response.json();
-        
+
+        // Store session_id from response for subsequent requests
+        if (data.session_id) {
+          sessionId.value = data.session_id;
+        }
+
         // Process Response
         const extracted = extractJsonFromText(data.response);
-        
+
         chatHistory.value.push({
             role: 'bot',
             text: extracted.textBefore, // The text part
