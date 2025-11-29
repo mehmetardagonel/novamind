@@ -117,6 +117,23 @@ async def get_emails(filters: EmailFilters = Depends()):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/gmail/auth/status")
+async def get_auth_status():
+    """
+    Check if the user is authenticated with Gmail.
+    Returns JSON with authenticated status and email address.
+    """
+    logger.info("Endpoint called: /gmail/auth/status")
+    try:
+        # Try to get the current user's email
+        # This will trigger the token validation logic in gmail_service
+        email = get_current_user_email()
+        return {"authenticated": True, "email": email}
+    except Exception as e:
+        logger.warning(f"Auth check failed: {str(e)}")
+        return {"authenticated": False, "email": None}
+
+
 @app.get("/auth/callback")
 async def auth_callback(code: str):
     """
