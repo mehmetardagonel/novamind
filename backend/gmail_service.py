@@ -1,5 +1,6 @@
 import os
 import base64
+import logging
 from email.mime.text import MIMEText
 from typing import List, Optional
 
@@ -16,6 +17,10 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 SCOPES = ["https://mail.google.com/"]
 
@@ -119,6 +124,7 @@ def fetch_messages(query: Optional[str] = None, max_results: int = 50) -> List[E
     emails: List[EmailOut] = []
 
     try:
+        logger.info(f"Requesting messages from Gmail API with query: '{query or 'ALL'}'")
         # Fetch message references with pagination
         while len(all_message_refs) < max_results:
             # Calculate remaining emails to fetch
@@ -199,6 +205,8 @@ def send_email(sender: str, to: str, subject: str, body: str) -> dict:
     `sender` can be "me" or a full email address.
     """
     service = get_gmail_service()
+    
+    logger.info(f"Sending email via Gmail API to: {to}")
 
     message = MIMEText(body)
     message["to"] = to
@@ -231,6 +239,8 @@ def create_draft(to: str, subject: str, body: str) -> dict:
     Returns draft object with draft id and message details.
     """
     service = get_gmail_service()
+    
+    logger.info(f"Creating draft via Gmail API for: {to}")
 
     message = MIMEText(body)
     message["to"] = to
@@ -252,6 +262,8 @@ def get_drafts(max_results: int = 50) -> List[dict]:
     Returns list of draft objects.
     """
     service = get_gmail_service()
+    
+    logger.info("Fetching drafts from Gmail API...")
 
     drafts_list = service.users().drafts().list(
         userId="me",
@@ -497,6 +509,7 @@ def move_mails(email_ids: List[str], target_label_name: str, remove_from_inbox: 
     service = get_gmail_service()
 
     try:
+        logger.info(f"Moving {len(email_ids)} emails to label '{target_label_name}' via Gmail API")
         # Get all labels to find target label ID
         labels_response = service.users().labels().list(userId="me").execute()
         labels = labels_response.get("labels", [])

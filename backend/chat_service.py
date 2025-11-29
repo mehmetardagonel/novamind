@@ -11,7 +11,7 @@ from langchain.tools import Tool
 from langchain.agents import create_react_agent, AgentExecutor
 
 # Setup logging for error tracking
-logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -462,6 +462,7 @@ Your task:
 
 IMPORTANT: Return the FULL email body (greeting + content + closing), not just the modified part."""
 
+            logger.info(f"Sending request to Gemini for body enhancement (Draft ID: {draft_id})...")
             response = self.llm.invoke(enhancement_prompt)
 
             if hasattr(response, 'content'):
@@ -703,6 +704,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                             'send draft', 'delete draft']
             is_draft_related = any(kw.lower() in message_stripped.lower() for kw in draft_keywords)
 
+            logger.info("Sending request to Gemini Agent...")
             response = self.agent_executor.invoke({"input": user_message})
             output = response.get("output", "No response generated")
 
