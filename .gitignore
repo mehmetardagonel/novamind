@@ -6,6 +6,7 @@
 # OAuth tokens and credentials
 token.json
 client_secret.json
+tokens/
 
 # Python cache
 __pycache__/

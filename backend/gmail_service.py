@@ -15,6 +15,8 @@ from models import EmailOut
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
+from pathlib import Path
+
 load_dotenv()
 
 SCOPES = ["https://mail.google.com/"]
@@ -32,6 +34,9 @@ CLIENT_CONFIG = {
     }
 }
 
+TOKENS_DIR = Path("tokens")
+TOKENS_DIR.mkdir(exist_ok=True)
+
 # Sanity check so you fail fast if env is wrong
 _required = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_PROJECT_ID", "GOOGLE_REDIRECT_URI"]
 _missing = [k for k in _required if not os.getenv(k)]
@@ -39,37 +44,30 @@ if _missing:
     raise RuntimeError(f"Missing required Gmail env vars: {', '.join(_missing)}")
 
 
-def _get_credentials() -> Credentials:
+def _get_credentials(user_id: str) -> Credentials:
     """
     Load credentials from token.json if exists, otherwise run OAuth flow using CLIENT_CONFIG
     and save token.json. No client_secret.json is ever used.
     """
     creds: Optional[Credentials] = None
+    token_path = TOKENS_DIR / f"token_{user_id}.json"
 
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    if token_path.exists():
+        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
 
-    # If there are no (valid) credentials, do the OAuth flow
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            # Refresh existing token
             creds.refresh(Request())
         else:
-            # First-time auth: open browser and ask user to sign in
             flow = InstalledAppFlow.from_client_config(CLIENT_CONFIG, SCOPES)
             creds = flow.run_local_server(port=0)
 
-        # Save the credentials for the next run
-        with open("token.json", "w", encoding="utf-8") as token_file:
-            token_file.write(creds.to_json())
+        token_path.write_text(creds.to_json(), encoding="utf-8")
 
     return creds
 
-def get_gmail_service():
-    """
-    Returns an authenticated Gmail API service client.
-    """
-    creds = _get_credentials()
+def get_gmail_service(user_id: str):
+    creds = _get_credentials(user_id)
     return build("gmail", "v1", credentials=creds)
 
 def _extract_header(headers: List[dict], name: str) -> str:
@@ -104,11 +102,11 @@ def _decode_body(payload: dict) -> str:
 
     return ""
 
-def fetch_messages(query: Optional[str] = None, max_results: int = 50) -> List[EmailOut]:
+def fetch_messages(query: Optional[str] = None, max_results: int = 50, user_id: str = "") -> List[EmailOut]:
     """
     Fetch messages from Gmail matching the search query and map them to EmailOut model.
     """
-    service = get_gmail_service()
+    service = get_gmail_service(user_id=user_id)
 
     list_resp = service.users().messages().list(
         userId="me",
@@ -155,12 +153,12 @@ def fetch_messages(query: Optional[str] = None, max_results: int = 50) -> List[E
 
     return emails
 
-def send_email(sender: str, to: str, subject: str, body: str) -> dict:
+def send_email(sender: str, to: str, subject: str, body: str, user_id: str = "") -> dict:
     """
     Send an email via Gmail API.
     `sender` can be "me" or a full email address.
     """
-    service = get_gmail_service()
+    service = get_gmail_service(user_id=user_id)
 
     message = MIMEText(body)
     message["to"] = to
@@ -177,11 +175,11 @@ def send_email(sender: str, to: str, subject: str, body: str) -> dict:
 
     return sent
 
-def get_current_user_email() -> str:
+def get_current_user_email(user_id: str = "") -> str:
     """
     Uses Gmail API to get the authenticated user's email address.
     """
-    service = get_gmail_service()
+    service = get_gmail_service(user_id=user_id)
     profile = service.users().getProfile(userId="me").execute()
     return profile.get("emailAddress", "")
 
@@ -209,12 +207,12 @@ def _to_emailout(msg: dict) -> EmailOut:
         date=dt,
     )
 
-def fetch_messages_by_label(label_id: str, max_results: int = 50, include_spam_trash: bool = False) -> list[EmailOut]:
+def fetch_messages_by_label(label_id: str, max_results: int = 50, include_spam_trash: bool = False, user_id: str = "") -> list[EmailOut]:
     """
     List messages by Gmail system/user label.
     System labels include: INBOX, SENT, STARRED, IMPORTANT, SPAM, TRASH, DRAFT, etc.
     """
-    service = get_gmail_service()
+    service = get_gmail_service(user_id=user_id)
 
     resp = service.users().messages().list(
         userId="me",
@@ -236,11 +234,11 @@ def fetch_messages_by_label(label_id: str, max_results: int = 50, include_spam_t
 
     return results
 
-def fetch_drafts(max_results: int = 50) -> list[EmailOut]:
+def fetch_drafts(max_results: int = 50, user_id: str = "") -> list[EmailOut]:
     """
     List Drafts. Drafts API is separate from messages.
     """
-    service = get_gmail_service()
+    service = get_gmail_service(user_id=user_id)
 
     resp = service.users().drafts().list(userId="me", maxResults=max_results).execute()
     drafts = resp.get("drafts", [])
@@ -260,21 +258,21 @@ def fetch_drafts(max_results: int = 50) -> list[EmailOut]:
 
     return results
 
-def trash_message(message_id: str) -> dict:
+def trash_message(message_id: str, user_id: str = "") -> dict:
     """
     Move a message to Trash.
     """
-    service = get_gmail_service()
+    service = get_gmail_service(user_id=user_id)
     return service.users().messages().trash(
         userId="me",
         id=message_id
     ).execute()
 
-def set_star(message_id: str, starred: bool) -> dict:
+def set_star(message_id: str, starred: bool, user_id: str = "") -> dict:
     """
     Star or unstar a message using the STARRED label.
     """
-    service = get_gmail_service()
+    service = get_gmail_service(user_id=user_id)
 
     if starred:
         body = {
