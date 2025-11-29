@@ -106,8 +106,14 @@ fi
 if [ ! -d "$VENV_DIR" ]; then
     print_info "Virtual environment not found. Creating one..."
     cd "$BACKEND_DIR"
-    python3 -m venv venv
-    print_success "Virtual environment created"
+    # Use Python 3.12 specifically (required for protobuf compatibility)
+    if command -v python3.12 &> /dev/null; then
+        python3.12 -m venv venv
+    else
+        print_error "Python 3.12 not found. This project requires Python 3.12 for protobuf compatibility."
+        exit 1
+    fi
+    print_success "Virtual environment created with Python 3.12"
 fi
 
 # Activate virtual environment
