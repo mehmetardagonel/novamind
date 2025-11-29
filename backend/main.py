@@ -1,17 +1,16 @@
 from datetime import datetime
 from typing import List
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Body
 from dotenv import load_dotenv
 
 from models import EmailOut, EmailRequest
 from filters import EmailFilters
-from gmail_service import fetch_messages, send_email, get_current_user_email, fetch_messages_by_label, fetch_drafts
+from gmail_service import fetch_messages, send_email, get_current_user_email, fetch_messages_by_label, fetch_drafts, trash_message, set_star
 
 load_dotenv()
 
 app = FastAPI()
-
 
 @app.get("/read-email", response_model=List[EmailOut])
 async def get_emails(filters: EmailFilters = Depends()):
@@ -90,5 +89,37 @@ async def list_trash():
     """
     try:
         return fetch_messages_by_label("TRASH", max_results=50, include_spam_trash=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/emails/{message_id}")
+async def delete_email(message_id: str):
+    """
+    Move an email to Trash.
+    """
+    try:
+        resp = trash_message(message_id)
+        return {
+            "status": "trashed",
+            "message_id": resp.get("id", message_id),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/emails/{message_id}/star")
+async def star_email(message_id: str, starred: bool = Body(True)):
+    """
+    Star or unstar an email.
+
+    Request body (examples):
+    { "starred": true }    -> add star
+    { "starred": false }   -> remove star
+    """
+    try:
+        resp = set_star(message_id, starred)
+        return {
+            "status": "starred" if starred else "unstarred",
+            "message_id": resp.get("id", message_id),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -65,7 +65,6 @@ def _get_credentials() -> Credentials:
 
     return creds
 
-
 def get_gmail_service():
     """
     Returns an authenticated Gmail API service client.
@@ -73,13 +72,11 @@ def get_gmail_service():
     creds = _get_credentials()
     return build("gmail", "v1", credentials=creds)
 
-
 def _extract_header(headers: List[dict], name: str) -> str:
     for h in headers:
         if h.get("name", "").lower() == name.lower():
             return h.get("value", "")
     return ""
-
 
 def _decode_body(payload: dict) -> str:
     """
@@ -106,7 +103,6 @@ def _decode_body(payload: dict) -> str:
         return base64.urlsafe_b64decode(body).decode("utf-8", errors="ignore")
 
     return ""
-
 
 def fetch_messages(query: Optional[str] = None, max_results: int = 50) -> List[EmailOut]:
     """
@@ -148,6 +144,7 @@ def fetch_messages(query: Optional[str] = None, max_results: int = 50) -> List[E
 
         emails.append(
             EmailOut(
+                message_id=msg["id"],
                 sender=sender,
                 recipient=recipient,
                 subject=subject,
@@ -157,7 +154,6 @@ def fetch_messages(query: Optional[str] = None, max_results: int = 50) -> List[E
         )
 
     return emails
-
 
 def send_email(sender: str, to: str, subject: str, body: str) -> dict:
     """
@@ -180,7 +176,6 @@ def send_email(sender: str, to: str, subject: str, body: str) -> dict:
     ).execute()
 
     return sent
-
 
 def get_current_user_email() -> str:
     """
@@ -206,6 +201,7 @@ def _to_emailout(msg: dict) -> EmailOut:
             dt = None
 
     return EmailOut(
+        message_id=msg["id"],
         sender=sender,
         recipient=recipient,
         subject=subject,
@@ -263,3 +259,36 @@ def fetch_drafts(max_results: int = 50) -> list[EmailOut]:
             results.append(_to_emailout(msg))
 
     return results
+
+def trash_message(message_id: str) -> dict:
+    """
+    Move a message to Trash.
+    """
+    service = get_gmail_service()
+    return service.users().messages().trash(
+        userId="me",
+        id=message_id
+    ).execute()
+
+def set_star(message_id: str, starred: bool) -> dict:
+    """
+    Star or unstar a message using the STARRED label.
+    """
+    service = get_gmail_service()
+
+    if starred:
+        body = {
+            "addLabelIds": ["STARRED"],
+            "removeLabelIds": []
+        }
+    else:
+        body = {
+            "addLabelIds": [],
+            "removeLabelIds": ["STARRED"]
+        }
+
+    return service.users().messages().modify(
+        userId="me",
+        id=message_id,
+        body=body
+    ).execute()
