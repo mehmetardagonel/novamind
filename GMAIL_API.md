@@ -1,258 +1,281 @@
-# Gmail API Backend
+# Gmail API Backend (FastAPI)
 
-This project is a backend service built with FastAPI that integrates securely with the Gmail API.
-It allows users to read, filter, and send emails via their Gmail account using OAuth 2.0 authentication, without ever exposing credentials in the source code.
+This project provides a backend service for Gmail integration using the official Google Gmail API.  
+It supports reading, sending, and managing emails for multiple users with individual OAuth tokens.  
+Each application user (identified by their Supabase `user.id`) is mapped to their own Google OAuth token stored securely under the `tokens/` directory.
+
+This backend is designed to serve as the server-side component of an AI-powered email assistant, but it can also be used independently.
+
+---
 
 ## Features
 
-- Gmail API integration with official Google client libraries  
-- Secure authentication using OAuth 2.0  
-- Environment-based credentials (no client_secret.json required)  
-- Read emails with filters (sender, recipient, subject, unread, date range, etc.)  
-- Send new emails from the authenticated account  
-- FastAPI endpoints with Pydantic validation and Swagger UI  
-- Token refresh & persistence (via token.json, gitignored)
+### Gmail OAuth Integration (Per User)
+- Each Supabase-authenticated user gets their own Google OAuth token.
+- Tokens are stored at:
+  ```
+  tokens/token_<supabase_user_id>.json
+  ```
+- Ensures complete separation of Gmail accounts.
+
+### Email Operations
+- Read inbox with filters
+- Read drafts, sent, starred, important, spam, trash emails
+- Send email
+- Star / unstar email
+- Delete email (move to Trash)
+
+### FastAPI API
+- Clean, structured endpoints
+- Fully documented via Swagger at:
+  ```
+  http://localhost:8000/docs
+  ```
+
+---
+
+## Folder Structure
+
+```
+backend/
+    main.py
+    gmail_service.py
+    filters.py
+    models.py
+    requirements.txt
+    env.example
+    .env
+tokens/
+    token_<user_id>.json   (generated dynamically)
+.gitignore
+GMAIL_API.md
+```
+
+---
+
+## Installation
+
+### 1. Clone the repository
+```bash
+git clone git@github.com:mehmetardagonel/novamind.git
+cd novamind/backend/
+```
+
+### 2. Create a virtual environment
+```bash
+python3 -m venv my_venv
+source my_venv/bin/activate
+```
+
+### 3. Install dependencies
+```bash
+pip install -r ../requirements.txt
+```
+
+---
 
 ## Environment Variables
 
-Create a `.env` file in the project root with your Gmail OAuth credentials:
+Create a `.env` file inside the `backend/` folder using `env.example` as a guide.
 
-```env
-GOOGLE_CLIENT_ID=your_client_id_here
-GOOGLE_CLIENT_SECRET=your_client_secret_here
-GOOGLE_PROJECT_ID=your_project_id_here
-GOOGLE_REDIRECT_URI=http://localhost
+```
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_PROJECT_ID=
+
+GOOGLE_REDIRECT_URI=http://localhost:8000/oauth2callback
 GOOGLE_AUTH_URI=https://accounts.google.com/o/oauth2/auth
 GOOGLE_TOKEN_URI=https://oauth2.googleapis.com/token
 GOOGLE_AUTH_PROVIDER_X509_CERT_URL=https://www.googleapis.com/oauth2/v1/certs
-SUPABASE_URL=your-supabase-url-here
-SUPABASE_KEY=your-supabase-key-here
-SUPABASE_JWT_SECRET=your-supabase-jwt-secret-here
-FRONTEND_URL="http://localhost:5173"
 ```
 
-## Installation & Setup
+---
 
-1. Clone the repository
-   ```bash
-   git clone git@github.com:mehmetardagonel/novamind.git
-   git checkout feature/melih-gmail-api
+## Running the Backend
+
+Inside the `backend/` folder, run:
+
+```bash
+uvicorn main:app --reload
+```
+
+Backend will start at:
+```
+http://127.0.0.1:8000
+```
+
+API docs:
+```
+http://127.0.0.1:8000/docs
+```
+
+---
+
+## Per-User Authentication
+
+This backend does **not** use a single global Gmail token.
+
+Instead:
+
+1. The frontend sends the Supabase user ID as a header:
+   ```
+   X-User-Id: <supabase_user_id>
    ```
 
-2. Create a virtual environment
-   ```bash
-   python -m venv venv
-   source venv/bin/activate   # or venv\Scripts\activate on Windows
+2. The backend loads the user-specific OAuth token from:
+   ```
+   tokens/token_<user_id>.json
    ```
 
-3. Install dependencies
-   ```bash
-   pip install -r requirements.txt
-   ```
+3. If the token does not exist:
+   - OAuth consent flow starts
+   - User signs in with Google
+   - Token is saved for future requests
 
-4. Add your `.env` file
+This prevents cross-account mixing and makes the backend multi-user safe.
 
-5. Run the app
-   ```bash
-   uvicorn main:app --reload
-   ```
-
-6. Visit Swagger UI:  
-   http://127.0.0.1:8000/docs
+---
 
 ## API Endpoints
 
 ### GET /read-email
-Fetch emails using Gmail filters.
+Fetch inbox emails with optional filters.
 
-| Query Parameter | Type | Example | Description |
-|-----------------|------|----------|--------------|
-| `sender` | string | `sender@gmail.com` | Filter by sender |
-| `recipient` | string | `me@gmail.com` | Filter by recipient |
-| `subject_contains` | string | `invoice` | Filter by subject text |
-| `unread` | bool | `true` | Show unread emails only |
-| `labels` | list[str] | `labels=IMPORTANT&labels=Work` | Gmail labels |
-| `newer_than_days` | int | `7` | Last N days |
-| `since` | date | `2025-11-01` | Start date |
-| `until` | date | `2025-11-09` | End date |
+Header (required):
+```
+X-User-Id: <supabase_user_id>
+```
+
+Query parameters include:
+- sender
+- recipient
+- subject_contains
+- unread
+- labels
+- newer_than_days
+- since
+- until
 
 Example:
 ```
-GET /read-email?sender=Supabase&unread=true&newer_than_days=3
+GET /read-email?sender=support@gmail.com
 ```
 
-### POST /send-email
-Send an email using the authenticated Gmail account.
+---
 
-Request body:
+### POST /send-email
+Send an email.
+
+Header:
+```
+X-User-Id: <supabase_user_id>
+```
+
+Body:
 ```json
 {
   "to": "someone@example.com",
-  "subject": "Test email from FastAPI",
-  "body": "Hello from my Gmail API backend!"
+  "subject": "Hello",
+  "body": "Testing Gmail API"
 }
 ```
+
+---
+
+### Additional Email Endpoints
+
+Each requires:
+```
+X-User-Id: <supabase_user_id>
+```
+
+#### GET /emails/drafts
+Returns Gmail drafts.
+
+#### GET /emails/sent
+Returns Sent mail (label: SENT).
+
+#### GET /emails/starred
+Returns Starred mail (label: STARRED).
+
+#### GET /emails/important
+Returns Important mail (label: IMPORTANT).
+
+#### GET /emails/spam
+Returns Spam mail (label: SPAM).
+
+#### GET /emails/trash
+Returns Trash mail (label: TRASH).
+
+---
+
+### POST /emails/{message_id}/star
+Star or unstar an email.
+
+Body:
+```json
+{ "starred": true }
+```
+
+Unstar:
+```json
+{ "starred": false }
+```
+
+---
+
+### DELETE /emails/{message_id}
+Moves email to Trash.
 
 Response:
 ```json
-{
-  "status": "sent",
-  "message_id": "18f9a2e9c3f9d0e1"
-}
+{ "status": "trashed", "message_id": "..." }
 ```
 
-### GET /emails/drafts
-Retrieve all Gmail drafts for the authenticated user.
+---
 
-Drafts are stored differently from normal messages, so this endpoint uses the Gmail Drafts API internally.
+## Testing Without Frontend
 
-Example Request:
+You can test everything using Swagger UI:
 ```
-GET /emails/drafts
-```
-
-Example Response:
-```
-[
-  {
-    "sender": "me@gmail.com",
-    "recipient": "example@gmail.com",
-    "subject": "Draft message",
-    "body": "This is the draft content...",
-    "date": "2025-11-09T13:12:54"
-  }
-]
+http://localhost:8000/docs
 ```
 
-### GET /emails/sent
-Retrieve emails from the Sent folder (Gmail label: SENT).
-
-Example Request:
+For each request, enter:
 ```
-GET /emails/sent
+X-User-Id: <your_supabase_user_id>
 ```
 
-Example Response:
-```
-[
-  {
-    "sender": "me@gmail.com",
-    "recipient": "friend@example.com",
-    "subject": "Project Update",
-    "body": "Here is the update...",
-    "date": "2025-11-08T09:21:10"
-  }
-]
+Alternatively, use curl:
+
+```bash
+curl -X GET "http://127.0.0.1:8000/read-email" \
+  -H "X-User-Id: <your_user_id>"
 ```
 
-### GET /emails/starred
-Retrieve all starred emails (Gmail label: STARRED).
+---
 
-Example Request:
-```
-GET /emails/starred
-```
+## tokens/ Directory
 
-Example Response:
+The backend automatically creates:
 ```
-[
-  {
-    "sender": "newsletter@example.com",
-    "recipient": "me@gmail.com",
-    "subject": "Important Info",
-    "body": "Details inside...",
-    "date": "2025-11-05T18:05:42"
-  }
-]
+tokens/token_<user_id>.json
 ```
 
-### GET /emails/important
-Retrieve emails marked by Gmail as Important (Gmail system label: IMPORTANT).
+This file contains the OAuth credentials **only for that user**.
 
-Example Request:
-```
-GET /emails/important
-```
+The directory is ignored by Git.
 
-Example Response:
-```
-[
-  {
-    "sender": "boss@example.com",
-    "recipient": "me@gmail.com",
-    "subject": "Urgent: Meeting Update",
-    "body": "We need to discuss...",
-    "date": "2025-10-29T14:37:21"
-  }
-]
-```
+---
 
-### GET /emails/spam
-Retrieve all emails from the Spam folder (Gmail system label: SPAM).
+## Requirements
 
-Example Request:
-```
-GET /emails/spam
-```
-
-Example Response:
-```
-[
-  {
-    "sender": "fraud@mail.scam",
-    "recipient": "me@gmail.com",
-    "subject": "You won a prize!",
-    "body": "Click here to claim...",
-    "date": "2025-11-07T22:10:11"
-  }
-]
-```
-
-### GET /emails/trash
-Retrieve deleted emails in the Trash folder (Gmail system label: TRASH).
-
-Example Request:
-```
-GET /emails/trash
-```
-
-Example Response:
-```
-[
-  {
-    "sender": "me@gmail.com",
-    "recipient": "old@example.com",
-    "subject": "Old message",
-    "body": "Deleting this one...",
-    "date": "2025-11-03T12:44:00"
-  }
-]
-```
-
-## Summary of All Endpoints
-
-- GET /read-email : Read inbox messages with filters
-- POST /send-email : Send an email
-- GET /emails/drafts : List draft emails
-- GET /emails/sent : List sent emails
-- GET /emails/starred : List starred emails
-- GET /emails/important : List Gmail-flagged important emails
-- GET /emails/spam : List spam emails
-- GET /emails/trash : List deleted/trash emails
-
-
-## Authentication Flow
-
-The first time you call `/read-email` or `/send-email`, a Google OAuth window will open.  
-After granting access, the credentials are stored locally in `token.json` (automatically refreshed on expiration).
-
-No `client_secret.json` file is required — the credentials are built entirely from `.env`.
-
-## Tech Stack
-
-- Python 3.12.x
+This backend uses:
 - FastAPI
-- Google Auth / Gmail API
-- Pydantic v2
 - Uvicorn
-- dotenv
+- Python Gmail API client
+- google-auth
+- python-dotenv
+- email libraries
+
+See `backend/requirements.txt`.
