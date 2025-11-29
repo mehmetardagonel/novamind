@@ -45,16 +45,21 @@ app = FastAPI()
 REDIRECT_URI = CLIENT_CONFIG["installed"]["redirect_uris"][0]
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173") # Set this in your .env!
 
+origins = [
+    "http://localhost:5173",  # Vite dev server default
+    "http://localhost:5179",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5179",
+    "http://127.0.0.1:3000"
+]
+
+if FRONTEND_URL not in origins:
+    origins.append(FRONTEND_URL)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # Vite dev server default
-        "http://localhost:5179",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5179",
-        "http://127.0.0.1:3000"
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Novamind.AI Development Server Startup Script
-# This script handles environment setup and starts both backend and frontend servers
+# This script handles environment setup and starts both backend and frontend servers on available ports.
 
 # Color codes for output
 RED='\033[0;31m'
@@ -16,10 +16,6 @@ BACKEND_DIR="$SCRIPT_DIR/backend"
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 VENV_DIR="$BACKEND_DIR/venv"
 PID_FILE="$SCRIPT_DIR/.dev_servers.pid"
-
-# Port configuration
-BACKEND_PORT=8001
-FRONTEND_PORT=5173
 
 echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}   Novamind.AI Development Startup${NC}"
@@ -43,22 +39,19 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Function to check if port is in use
-check_port() {
-    local port=$1
-    if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1 ; then
-        return 0  # Port is in use
-    else
-        return 1  # Port is free
-    fi
-}
+# Check if Python 3 is installed
+if ! command -v python3 &> /dev/null; then
+    print_error "Python 3 is not installed. Please install Python 3.12 or higher."
+    exit 1
+fi
 
-# Function to kill process on port
-kill_port() {
+# Function to find a free port
+find_free_port() {
     local port=$1
-    print_warning "Port $port is already in use. Attempting to free it..."
-    lsof -ti:$port | xargs kill -9 2>/dev/null || true
-    sleep 1
+    while python3 -c "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(('', $port)); s.close()" 2>/dev/null; result=$?; [ $result -ne 0 ]; do
+        port=$((port+1))
+    done
+    echo $port
 }
 
 # Clean up old PID file
@@ -67,40 +60,23 @@ if [ -f "$PID_FILE" ]; then
     rm "$PID_FILE"
 fi
 
-# Clean up any existing processes on our ports
-print_info "Checking for processes on ports $BACKEND_PORT and $FRONTEND_PORT..."
-if lsof -Pi :$BACKEND_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
-    print_warning "Port $BACKEND_PORT is in use. Killing existing process..."
-    lsof -ti:$BACKEND_PORT | xargs kill -9 2>/dev/null || true
-    sleep 1
+# Find available ports
+print_info "Finding available ports..."
+BACKEND_PORT=$(find_free_port 8001)
+FRONTEND_PORT=$(find_free_port 5173)
+
+# Ensure they are different
+if [ "$BACKEND_PORT" -eq "$FRONTEND_PORT" ]; then
+    FRONTEND_PORT=$(find_free_port $((BACKEND_PORT + 1)))
 fi
 
-if lsof -Pi :$FRONTEND_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
-    print_warning "Port $FRONTEND_PORT is in use. Killing existing process..."
-    lsof -ti:$FRONTEND_PORT | xargs kill -9 2>/dev/null || true
-    sleep 1
-fi
-
-# Also clean up port 8000 if something is there
-if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null 2>&1; then
-    print_warning "Port 8000 is in use. Killing existing process..."
-    lsof -ti:8000 | xargs kill -9 2>/dev/null || true
-    sleep 1
-fi
-
-print_success "Ports are clear"
+print_success "Selected ports: Backend=$BACKEND_PORT, Frontend=$FRONTEND_PORT"
 
 # ========================================
 # BACKEND SETUP
 # ========================================
 
 print_info "Setting up backend..."
-
-# Check if Python is installed
-if ! command -v python3 &> /dev/null; then
-    print_error "Python 3 is not installed. Please install Python 3.11 or higher."
-    exit 1
-fi
 
 # Create virtual environment if it doesn't exist
 if [ ! -d "$VENV_DIR" ]; then
@@ -110,10 +86,11 @@ if [ ! -d "$VENV_DIR" ]; then
     if command -v python3.12 &> /dev/null; then
         python3.12 -m venv venv
     else
-        print_error "Python 3.12 not found. This project requires Python 3.12 for protobuf compatibility."
-        exit 1
+        # Fallback to python3 if 3.12 specific command not found, but warn
+        print_warning "python3.12 command not found. Trying default python3..."
+        python3 -m venv venv
     fi
-    print_success "Virtual environment created with Python 3.12"
+    print_success "Virtual environment created"
 fi
 
 # Activate virtual environment
@@ -137,15 +114,7 @@ if [ ! -f "$BACKEND_DIR/.env" ]; then
     if [ -f "$BACKEND_DIR/env.example" ]; then
         print_info "Creating .env from env.example..."
         cp "$BACKEND_DIR/env.example" "$BACKEND_DIR/.env"
-        print_warning "⚠️  IMPORTANT: You need to edit $BACKEND_DIR/.env with your credentials:"
-        echo "  - GOOGLE_CLIENT_ID"
-        echo "  - GOOGLE_CLIENT_SECRET"
-        echo "  - GOOGLE_PROJECT_ID"
-        echo "  - SUPABASE_URL"
-        echo "  - SUPABASE_KEY"
-        echo ""
-        print_warning "Backend may fail without valid credentials. Edit .env and restart."
-        echo ""
+        print_warning "⚠️  IMPORTANT: You need to edit $BACKEND_DIR/.env with your credentials."
     else
         print_error "env.example file not found in backend directory!"
         exit 1
@@ -155,9 +124,13 @@ fi
 # Start backend server
 print_info "Starting backend server on port $BACKEND_PORT..."
 cd "$BACKEND_DIR"
-# Set protobuf implementation to pure Python for Python 3.14 compatibility
-# Note: --reload is disabled due to Python 3.14 + protobuf compatibility issues
-PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python "$VENV_DIR/bin/uvicorn" main:app --port $BACKEND_PORT > "$SCRIPT_DIR/backend.log" 2>&1 &
+
+# Export FRONTEND_URL so backend knows where requests come from (for CORS/Redirects)
+export FRONTEND_URL="http://localhost:$FRONTEND_PORT"
+# Set protobuf implementation
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+
+"$VENV_DIR/bin/uvicorn" main:app --port $BACKEND_PORT > "$SCRIPT_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo "BACKEND_PID=$BACKEND_PID" >> "$PID_FILE"
 print_success "Backend server started (PID: $BACKEND_PID)"
@@ -191,9 +164,7 @@ fi
 if [ ! -f "$FRONTEND_DIR/.env" ]; then
     print_warning "Frontend .env file not found!"
     if [ -f "$FRONTEND_DIR/.env.example" ]; then
-        print_info "Creating .env from .env.example..."
         cp "$FRONTEND_DIR/.env.example" "$FRONTEND_DIR/.env"
-        print_warning "Please edit $FRONTEND_DIR/.env with your Supabase credentials"
     else
         print_info "Creating default .env file..."
         cat > "$FRONTEND_DIR/.env" << EOF
@@ -201,14 +172,17 @@ VITE_API_URL=http://localhost:$BACKEND_PORT
 VITE_SUPABASE_URL=your_supabase_url_here
 VITE_SUPABASE_ANON_KEY=your_supabase_anon_key_here
 EOF
-        print_warning "Please edit $FRONTEND_DIR/.env with your Supabase credentials"
     fi
+    print_warning "Please edit $FRONTEND_DIR/.env with your Supabase credentials"
 fi
 
 # Start frontend server
 print_info "Starting frontend server on port $FRONTEND_PORT..."
 cd "$FRONTEND_DIR"
-npm run dev > "$SCRIPT_DIR/frontend.log" 2>&1 &
+# Export VITE_API_URL to override .env and point to the correct dynamic backend port
+export VITE_API_URL="http://localhost:$BACKEND_PORT"
+
+npm run dev -- --port $FRONTEND_PORT > "$SCRIPT_DIR/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 echo "FRONTEND_PID=$FRONTEND_PID" >> "$PID_FILE"
 print_success "Frontend server started (PID: $FRONTEND_PID)"
