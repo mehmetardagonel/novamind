@@ -16,6 +16,7 @@ const apiClient = axios.create({
 // Request interceptor - add Supabase auth token to requests
 apiClient.interceptors.request.use(
   async (config) => {
+    console.log(`[API Request] ${config.method?.toUpperCase()} ${config.url}`);
     // Get current Supabase session
     const { data: { session } } = await supabase.auth.getSession()
 
@@ -25,6 +26,7 @@ apiClient.interceptors.request.use(
     return config
   },
   (error) => {
+    console.error('[API Request Error]', error);
     return Promise.reject(error)
   }
 )
@@ -32,11 +34,13 @@ apiClient.interceptors.request.use(
 // Response interceptor - handle errors globally
 apiClient.interceptors.response.use(
   (response) => {
+    console.log(`[API Response] ${response.status} ${response.config.url}`);
     // On success, just return the response
     return response
   },
   (error) => {
     if (error.response) {
+      console.error(`[API Error Response] ${error.response.status} ${error.config?.url}`, error.response.data);
       // Server responded with error
       switch (error.response.status) {
         case 401:
@@ -74,7 +78,7 @@ apiClient.interceptors.response.use(
       }
     } else if (error.request) {
       // Request was made but no response received
-      console.error('No response from server');
+      console.error('No response from server', error.request);
     } else {
       // Something happened in setting up the request
       console.error('Error:', error.message);

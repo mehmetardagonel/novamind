@@ -46,27 +46,30 @@ if _missing:
 
 def _get_credentials() -> Credentials:
     """
-    Load credentials from token.json if exists, otherwise run OAuth flow using CLIENT_CONFIG
-    and save token.json. No client_secret.json is ever used.
+    Load credentials from token.json if exists, otherwise raise AUTH_REQUIRED.
+    This allows the web application to handle OAuth flow via redirect.
     """
     creds: Optional[Credentials] = None
 
     if os.path.exists("token.json"):
         creds = Credentials.from_authorized_user_file("token.json", SCOPES)
 
-    # If there are no (valid) credentials, do the OAuth flow
+    # If there are no (valid) credentials, raise AUTH_REQUIRED
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            # Refresh existing token
-            creds.refresh(Request())
+            # Try to refresh existing token
+            try:
+                creds.refresh(Request())
+                # Save the refreshed credentials
+                with open("token.json", "w", encoding="utf-8") as token_file:
+                    token_file.write(creds.to_json())
+            except Exception as e:
+                # If refresh fails, need to re-authenticate
+                logger.error(f"Token refresh failed: {str(e)}")
+                raise Exception("AUTH_REQUIRED")
         else:
-            # First-time auth: open browser and ask user to sign in
-            flow = InstalledAppFlow.from_client_config(CLIENT_CONFIG, SCOPES)
-            creds = flow.run_local_server(port=0)
-
-        # Save the credentials for the next run
-        with open("token.json", "w", encoding="utf-8") as token_file:
-            token_file.write(creds.to_json())
+            # No valid credentials - need to authenticate
+            raise Exception("AUTH_REQUIRED")
 
     return creds
 
@@ -568,3 +571,75 @@ def move_mails(email_ids: List[str], target_label_name: str, remove_from_inbox: 
         import logging
         logging.error(f"Error in move_mails: {e}")
         return 0
+
+
+def revoke_gmail_token(token_path: str = "token.json") -> bool:
+    """
+    Revoke Gmail OAuth token with Google API and delete the token file.
+
+    This function:
+    1. Checks if token file exists
+    2. Loads credentials from the token
+    3. Calls Google's revocation endpoint to invalidate the token
+    4. Deletes the token file from disk
+    5. Handles errors gracefully (always tries to delete file)
+
+    Args:
+        token_path: Path to the token.json file to revoke (default: "token.json")
+
+    Returns:
+        True if revocation succeeded or file didn't exist, False if revocation failed
+    """
+    import requests
+
+    # If token doesn't exist, nothing to revoke
+    if not os.path.exists(token_path):
+        logger.info(f"Token file {token_path} does not exist, nothing to revoke")
+        return True
+
+    try:
+        # Load credentials from token file
+        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+
+        # Revoke the token with Google's OAuth2 revocation endpoint
+        revoke_url = "https://oauth2.googleapis.com/revoke"
+
+        # Use access token if available, otherwise use refresh token
+        token_to_revoke = creds.token if creds.token else creds.refresh_token
+
+        if token_to_revoke:
+            logger.info(f"Revoking token for {token_path}")
+            response = requests.post(
+                revoke_url,
+                params={'token': token_to_revoke},
+                headers={'content-type': 'application/x-www-form-urlencoded'}
+            )
+
+            if response.status_code == 200:
+                logger.info(f"Successfully revoked token for {token_path}")
+            else:
+                logger.warning(
+                    f"Token revocation returned status {response.status_code}. "
+                    f"Continuing with file deletion."
+                )
+                # Continue with file deletion even if revocation failed
+        else:
+            logger.warning(f"No token found in {token_path} to revoke")
+
+        # Delete the token file from disk
+        os.remove(token_path)
+        logger.info(f"Deleted token file: {token_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error revoking token {token_path}: {str(e)}")
+
+        # Even if revocation failed, try to delete the file
+        try:
+            if os.path.exists(token_path):
+                os.remove(token_path)
+                logger.info(f"Deleted token file despite revocation error: {token_path}")
+        except Exception as delete_error:
+            logger.error(f"Could not delete token file: {str(delete_error)}")
+
+        return False

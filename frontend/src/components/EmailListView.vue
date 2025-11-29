@@ -146,6 +146,8 @@ export default {
     
     const authenticate = () => {
       if (authUrl.value) {
+        // Store current path before redirecting to OAuth
+        sessionStorage.setItem('oauth_redirect_path', window.location.pathname)
         window.location.href = authUrl.value
       } else {
         errorMessage.value = "Authentication URL is missing. Please try reloading the page."
@@ -153,13 +155,6 @@ export default {
     }
 
     onMounted(() => {
-        const params = new URLSearchParams(window.location.search)
-        const authStatus = params.get('auth_status')
-
-        if (authStatus === 'success') {
-            window.history.replaceState(null, '', window.location.pathname)
-        }
-        
         loadEmails()
     })
 

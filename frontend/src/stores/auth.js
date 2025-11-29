@@ -96,12 +96,38 @@ export const useAuthStore = defineStore('auth', () => {
 
   const logout = async () => {
     try {
+      // Step 1: Call backend logout to revoke Gmail token and clear sessions
+      try {
+        // Dynamic import to avoid circular dependencies
+        const { logoutGmail } = await import('@/api/emails')
+
+        const logoutStatus = await logoutGmail()
+        console.log('Backend logout status:', logoutStatus)
+
+        // Verify token was revoked
+        if (!logoutStatus.gmail_token_revoked) {
+          console.warn('Gmail token revocation failed, but continuing with logout')
+        }
+      } catch (backendError) {
+        // Log but don't block logout if backend fails
+        console.error('Backend logout failed, continuing with frontend logout:', backendError)
+      }
+
+      // Step 2: Clear Supabase session (always execute)
       await supabase.auth.signOut()
+
+      // Step 3: Clear local state
       user.value = null
       session.value = null
       error.value = null
+
+      console.log('Logout completed successfully')
     } catch (err) {
       console.error('Logout error:', err)
+      // Even on error, clear local state
+      user.value = null
+      session.value = null
+      error.value = null
     }
   }
 

@@ -92,6 +92,20 @@ export const searchBySubject = async (subject) => {
   return fetchEmails({ subject_contains: subject })
 }
 
+/**
+ * Logout - revoke Gmail token and clear backend sessions
+ * Calls the backend /logout endpoint to:
+ * - Revoke Gmail OAuth token with Google API
+ * - Delete token.json file
+ * - Clear chat sessions
+ *
+ * @returns {Promise} Logout status with cleanup details
+ */
+export const logoutGmail = async () => {
+  const response = await apiClient.post('/logout')
+  return response.data
+}
+
 export default {
   fetchEmails,
   sendEmail,
@@ -100,4 +114,5 @@ export default {
   getEmailsByLabel,
   searchBySender,
   searchBySubject,
+  logoutGmail,
 }

@@ -60,16 +60,42 @@ export default {
 
     onMounted(async () => {
       await new Promise(resolve => setTimeout(resolve, 100))
+
       if (!authStore.isAuthenticated) {
         router.push('/login')
+        return
+      }
+
+      // Check if user just completed OAuth
+      const storedPath = sessionStorage.getItem('oauth_redirect_path')
+
+      if (storedPath) {
+        // Clean up and navigate to stored path
+        sessionStorage.removeItem('oauth_redirect_path')
+        router.replace(storedPath)
       } else if (router.currentRoute.value.path === '/app') {
-        router.replace('/app/email/inbox') 
+        // Default behavior
+        router.replace('/app/email/inbox')
       }
     })
 
     const exitApp = async () => {
-      await authStore.logout()
-      router.push('/home')
+      try {
+        console.log('Logging out user...')
+
+        // Call enhanced auth store logout (now includes backend cleanup)
+        await authStore.logout()
+
+        // Redirect to home page
+        router.push('/home')
+
+        console.log('User logged out and redirected to home')
+      } catch (err) {
+        console.error('Logout error in MainApp:', err)
+
+        // Always redirect even on error (graceful UX)
+        router.push('/home')
+      }
     }
 
     const goToCompose = () => {

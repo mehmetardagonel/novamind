@@ -20,11 +20,21 @@ from gmail_service import (
     fetch_messages,
     send_email,
     get_current_user_email,
+    revoke_gmail_token,
     CLIENT_CONFIG,
     SCOPES
 )
 # Import AI Chat Service
 from chat_service import ChatService
+
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -70,11 +80,14 @@ async def get_emails(filters: EmailFilters = Depends()):
     Fetch emails using Gmail API.
     If auth is required, return 401 with an auth_url for the frontend.
     """
+    logger.info(f"Endpoint called: /read-email with filters: {filters}")
     try:
         query = filters.to_gmail_query()
         emails = fetch_messages(query=query)
+        logger.info(f"Successfully fetched {len(emails)} emails")
         return emails
     except Exception as e:
+        logger.error(f"Error in /read-email: {str(e)}")
         # Catch the specific error from gmail_service.py
         if str(e) == "AUTH_REQUIRED":
             # Create the Auth Flow using the imported config
@@ -88,6 +101,7 @@ async def get_emails(filters: EmailFilters = Depends()):
             # Generate the URL for the user to visit
             auth_url, _ = flow.authorization_url(prompt='consent')
             
+            logger.info("Auth required, returning 401 with auth_url")
             # Return 401 (Unauthorized) with the auth_url
             return JSONResponse(
                 status_code=401,
@@ -104,6 +118,7 @@ async def auth_callback(code: str):
     This is the endpoint Google redirects to after user login.
     It exchanges the 'code' for a 'token.json'.
     """
+    logger.info("Endpoint called: /auth/callback")
     try:
         flow = Flow.from_client_config(
             CLIENT_CONFIG,
@@ -119,10 +134,12 @@ async def auth_callback(code: str):
         with open("token.json", "w") as token:
             token.write(creds.to_json())
             
+        logger.info("Successfully exchanged code for token and saved to token.json")
         # Redirect the user's browser back to the frontend app
         return RedirectResponse(url=FRONTEND_URL)
         
     except Exception as e:
+        logger.error(f"Authentication failed: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}")
 
 
@@ -131,6 +148,7 @@ async def send_email_endpoint(req: EmailRequest):
     """
     Send an email using Gmail API.
     """
+    logger.info(f"Endpoint called: /send-email with subject: '{req.subject}' to: '{req.to}'")
     try:
         sender_email = get_current_user_email()
         result = send_email(
@@ -139,11 +157,13 @@ async def send_email_endpoint(req: EmailRequest):
             subject=req.subject,
             body=req.body,
         )
+        logger.info(f"Email sent successfully. Message ID: {result.get('id')}")
         return {
             "status": "sent",
             "message_id": result.get("id"),
         }
     except Exception as e:
+        logger.error(f"Error sending email: {str(e)}")
         # Handle auth error here too
         if str(e) == "AUTH_REQUIRED":
             # This shouldn't happen if /read-email was called first,
@@ -152,12 +172,74 @@ async def send_email_endpoint(req: EmailRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/logout")
+async def logout_endpoint():
+    """
+    Logout endpoint that cleans up all session data:
+    1. Revokes Gmail OAuth token with Google API
+    2. Deletes token.json file
+    3. Clears in-memory chat sessions
+
+    This endpoint is idempotent and always returns 200 OK, even if cleanup fails.
+    The frontend can safely call this multiple times without errors.
+
+    Returns:
+        JSONResponse with cleanup status and details
+    """
+    logger.info("Endpoint called: /logout")
+
+    cleanup_status = {
+        "gmail_token_revoked": False,
+        "chat_sessions_cleared": False,
+        "sessions_cleared_count": 0,
+        "message": ""
+    }
+
+    try:
+        # Step 1: Revoke and delete Gmail OAuth token
+        token_revoked = revoke_gmail_token("token.json")
+        cleanup_status["gmail_token_revoked"] = token_revoked
+
+        # Step 2: Clear all chat sessions from memory
+        global chat_sessions
+        sessions_count = len(chat_sessions)
+        chat_sessions.clear()
+        cleanup_status["chat_sessions_cleared"] = True
+        cleanup_status["sessions_cleared_count"] = sessions_count
+
+        # Success message
+        cleanup_status["message"] = (
+            f"Logout successful. "
+            f"Token revoked: {token_revoked}, "
+            f"Cleared {sessions_count} chat session(s)."
+        )
+
+        logger.info(cleanup_status["message"])
+
+        return JSONResponse(
+            status_code=200,
+            content=cleanup_status
+        )
+
+    except Exception as e:
+        logger.error(f"Logout error: {str(e)}", exc_info=True)
+
+        # Still return 200 - logout should not fail from user perspective
+        cleanup_status["message"] = f"Logout completed with errors: {str(e)}"
+
+        return JSONResponse(
+            status_code=200,
+            content=cleanup_status
+        )
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """
     AI Chat endpoint for email assistance.
     Maintains session state for multi-turn conversations.
     """
+    logger.info(f"Endpoint called: /chat with session_id: {request.session_id}")
     try:
         # Validate input
         if not request.message or not request.message.strip():
@@ -168,18 +250,20 @@ async def chat(request: ChatRequest):
 
         # Get or create ChatService instance for this session
         if session_id not in chat_sessions:
+            logger.info(f"Creating new ChatService for session_id: {session_id}")
             chat_sessions[session_id] = ChatService()
 
         chat_service = chat_sessions[session_id]
 
         # Get AI response
         ai_response = chat_service.chat(request.message)
+        logger.info("Successfully generated AI response")
         return ChatResponse(response=ai_response, session_id=session_id)
     except ValueError as e:
+        logger.warning(f"Invalid chat input: {str(e)}")
         # User input validation error
         raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
     except Exception as e:
         # Server-side error
-        import logging
-        logging.error(f"Chat error: {str(e)}", exc_info=True)
+        logger.error(f"Chat error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error. Please try again later.")
