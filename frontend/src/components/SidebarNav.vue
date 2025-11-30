@@ -41,7 +41,6 @@ export default {
       { view: 'drafts', label: 'Drafts', icon: 'draft', to: '/app/email/drafts' },
       { view: 'trash', label: 'Trash', icon: 'delete', to: '/app/email/trash' },
       { view: 'labels', label: 'Labels', icon: 'label', to: '/app/email/labels' },
-      { view: 'ai-assistant', label: 'AI Assistant', icon: 'smart_toy', to: '/app/compose' },
     ]);
 
     return {

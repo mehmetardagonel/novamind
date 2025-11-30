@@ -1,10 +1,22 @@
 <template>
-  <div class="favorites-view">
-    <h2>Spam</h2>
-    <p>Feature not implemented yet.</p>
-    </div>
+  <div class="main-content-wrapper">
+    <EmailListView folder="spam" key="spam" />
+  </div>
 </template>
 
 <script>
-export default { name: 'FavoritesView' }
+import EmailListView from '../components/EmailListView.vue'
+
+export default {
+  name: 'SpamView',
+  components: { EmailListView }
+}
 </script>
+
+<style scoped>
+.main-content-wrapper {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+</style>

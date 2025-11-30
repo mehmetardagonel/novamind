@@ -206,27 +206,7 @@ export default {
 </script>
 
 <style>
-/* --- 1. Global & Page Layout --- */
-:root {
-  --primary-color: #3713ec;
-  --background-light: #f6f6f8;
-  --background-dark: #131022;
-  --text-primary: #131022;
-  --text-secondary: #594c9a;
-  --primary-border-10: rgba(55, 19, 236, 0.1);
-  --primary-border-20: rgba(55, 19, 236, 0.2);
-  --primary-shadow-10: rgba(55, 19, 236, 0.1);
-  --primary-shadow-30: rgba(55, 19, 236, 0.3);
-  --primary-ring-50: rgba(55, 19, 236, 0.5);
-}
-
-body {
-  font-family: 'Inter', sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  margin: 0;
-  color: var(--text-primary);
-}
+/* --- 1. App Screen & Layout --- */
 
 .app-screen {
   position: relative;

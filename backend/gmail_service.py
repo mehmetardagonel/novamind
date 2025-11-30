@@ -74,10 +74,8 @@ def _get_credentials() -> Credentials:
     return creds
 
 
-def get_gmail_service():
-    """
-    Returns an authenticated Gmail API service client.
-    """
+def get_gmail_service(user_id: str | None = None):
+    # user_id kept for future multi-user support, but ignored for now
     creds = _get_credentials()
     return build("gmail", "v1", credentials=creds)
 
@@ -181,7 +179,7 @@ def fetch_messages(query: Optional[str] = None, max_results: int = 50) -> List[E
 
                 emails.append(
                     EmailOut(
-                        id=msg["id"],
+                        message_id=msg["id"],
                         sender=sender,
                         recipient=recipient,
                         subject=subject,
@@ -197,8 +195,10 @@ def fetch_messages(query: Optional[str] = None, max_results: int = 50) -> List[E
 
         return emails
     except Exception as e:
-        import logging
         logging.error(f"Error fetching messages: {str(e)}")
+        if str(e) == "AUTH_REQUIRED":
+            # re-raise so FastAPI can handle it and send auth_url
+            raise
         return emails  # Return what we've fetched so far
 
 
@@ -234,6 +234,124 @@ def get_current_user_email() -> str:
     service = get_gmail_service()
     profile = service.users().getProfile(userId="me").execute()
     return profile.get("emailAddress", "")
+
+def _to_emailout(msg: dict) -> EmailOut:
+    headers = msg.get("payload", {}).get("headers", [])
+    subject = _extract_header(headers, "Subject")
+    sender = _extract_header(headers, "From")
+    recipient = _extract_header(headers, "To")
+    date_str = _extract_header(headers, "Date")
+    body = _decode_body(msg.get("payload", {}))
+
+    dt: Optional[datetime] = None
+    if date_str:
+        try:
+            dt = parsedate_to_datetime(date_str)
+        except Exception:
+            dt = None
+
+    return EmailOut(
+        message_id=msg["id"],
+        sender=sender,
+        recipient=recipient,
+        subject=subject,
+        body=body,
+        date=dt,
+    )
+
+def fetch_messages_by_label(label_id: str, max_results: int = 50, include_spam_trash: bool = False, user_id: str = "") -> list[EmailOut]:
+    """
+    List messages by Gmail system/user label.
+    System labels include: INBOX, SENT, STARRED, IMPORTANT, SPAM, TRASH, DRAFT, etc.
+    """
+    service = get_gmail_service(user_id=user_id)
+
+    resp = service.users().messages().list(
+        userId="me",
+        labelIds=[label_id],
+        maxResults=max_results,
+        includeSpamTrash=include_spam_trash
+    ).execute()
+
+    refs = resp.get("messages", [])
+    results: list[EmailOut] = []
+
+    for ref in refs:
+        msg = service.users().messages().get(
+            userId="me",
+            id=ref["id"],
+            format="full",
+        ).execute()
+        results.append(_to_emailout(msg))
+
+    return results
+
+def fetch_drafts(max_results: int = 50, user_id: str = "") -> list[EmailOut]:
+    """
+    List Drafts. Drafts API is separate from messages.
+    """
+    service = get_gmail_service(user_id=user_id)
+
+    resp = service.users().drafts().list(userId="me", maxResults=max_results).execute()
+    drafts = resp.get("drafts", [])
+    results: list[EmailOut] = []
+
+    for dr in drafts:
+        d = service.users().drafts().get(userId="me", id=dr["id"]).execute()
+        # draft payload wraps a 'message' object
+        msg = d.get("message", {})
+        if msg:
+            # Ensure we have full message if needed
+            if not msg.get("payload"):
+                msg = service.users().messages().get(
+                    userId="me", id=msg["id"], format="full"
+                ).execute()
+            results.append(_to_emailout(msg))
+
+    return results
+
+def trash_message(message_id: str, user_id: str = "") -> dict:
+    """
+    Move a message to Trash.
+    """
+    service = get_gmail_service(user_id=user_id)
+    return service.users().messages().trash(
+        userId="me",
+        id=message_id
+    ).execute()
+
+def untrash_message(message_id: str, user_id: str = "") -> dict:
+    """
+    Restore a message from Trash back into the mailbox (typically Inbox).
+    """
+    service = get_gmail_service(user_id=user_id)
+    return service.users().messages().untrash(
+        userId="me",
+        id=message_id
+    ).execute()
+
+def set_star(message_id: str, starred: bool, user_id: str = "") -> dict:
+    """
+    Star or unstar a message using the STARRED label.
+    """
+    service = get_gmail_service(user_id=user_id)
+
+    if starred:
+        body = {
+            "addLabelIds": ["STARRED"],
+            "removeLabelIds": []
+        }
+    else:
+        body = {
+            "addLabelIds": [],
+            "removeLabelIds": ["STARRED"]
+        }
+
+    return service.users().messages().modify(
+        userId="me",
+        id=message_id,
+        body=body
+    ).execute()
 
 
 def create_draft(to: str, subject: str, body: str) -> dict:
