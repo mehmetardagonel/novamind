@@ -1,6 +1,5 @@
 <template>
   <div class="compose-view adjusted-view">
-
     <div class="chat-container">
       <div class="chat-history" ref="historyContainer">
         <div 
@@ -13,9 +12,8 @@
 
           <div v-if="message.emails && message.emails.length > 0" class="emails-list">
             <div v-for="(email, eIndex) in message.emails" :key="eIndex" class="email-block">
-              
               <div class="email-header">📧 Email #{{ eIndex + 1 }}</div>
-              
+
               <div class="email-field">
                 <strong>From:</strong> {{ email.from || email.sender || 'Unknown' }}
               </div>
@@ -42,7 +40,6 @@
                 <strong>Body:</strong><br>
                 <div class="email-body-content" v-html="formatBody(email.body)"></div>
               </div>
-
             </div>
           </div>
         </div>
@@ -64,24 +61,28 @@
             v-model="userPrompt"
             @keyup.enter="sendMessage"
             :disabled="isLoading"
+          />
+
+          <!-- Send button -->
+          <button
+            class="inner-send"
+            @click="sendMessage"
+            :disabled="!userPrompt.trim() || isLoading"
           >
-          <button class="inner-send" @click="sendMessage" :disabled="!userPrompt.trim() || isLoading">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
             </svg>
           </button>
+
+          <!-- Voice button (always visible, disabled while loading) -->
+          <button
+            class="inner-voice"
+            :disabled="isLoading"
+          >
+            <span class="material-symbols-outlined mic-icon">mic</span>
+          </button>
         </div>
-
-        <button 
-          class="voice-btn"
-          :disabled="isLoading"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
-            <path d="M12 14a3 3 0 003-3V5a3 3 0 10-6 0v6a3 3 0 003 3zm5-3a5 5 0 01-10 0H5a7 7 0 0014 0h-2zm-5 9a3.001 3.001 0 01-2.83-2H9a5 5 0 009.9 0h-1.17A3.001 3.001 3.001 0 0112 20z" />
-          </svg>
-        </button>
       </div>
-
     </div>
   </div>
 </template>
@@ -96,66 +97,94 @@ export default {
     const isLoading = ref(false)
     const historyContainer = ref(null)
     const API_URL = 'http://127.0.0.1:8001/chat'
-    const sessionId = ref(null) // Track session ID for conversation continuity
 
-    // Initial state
-    const chatHistory = ref([
-      { role: 'bot', text: 'Hello! I\'m your email assistant. How can I help you today?', emails: [] }
-    ])
+    const STORAGE_KEY_HISTORY = 'chat_history'
+    const STORAGE_KEY_SESSION = 'chat_session_id'
 
-    // Helper: Format body text (newlines to <br>)
-    const formatBody = (text) => {
-      if (!text) return '';
-      return text.replace(/\n/g, '<br>');
+    const initialBotMessage = {
+      role: 'bot',
+      text: "Hello! How can I help you manage your emails today?",
+      emails: []
     }
 
-    // Logic: Check if string looks like an email array
-    const isEmailArray = (text) => {
-      if (!text.trim().startsWith('[') || !text.trim().endsWith(']')) {
-        return false;
-      }
+    const loadStoredHistory = () => {
       try {
-        const parsed = JSON.parse(text);
-        return Array.isArray(parsed) && parsed.length > 0 &&
-               parsed[0].hasOwnProperty('subject') &&
-               (parsed[0].hasOwnProperty('from') || parsed[0].hasOwnProperty('sender'));
+        const raw = sessionStorage.getItem(STORAGE_KEY_HISTORY)
+        if (!raw) return null
+        const parsed = JSON.parse(raw)
+        return Array.isArray(parsed) ? parsed : null
       } catch (e) {
-        return false;
+        console.error('Failed to load chat history from storage:', e)
+        return null
       }
     }
 
-    // Logic: Extract JSON from mixed text
-    const extractJsonFromText = (text) => {
-      const result = {
-        textBefore: '',
-        json: null
-      };
+    const storedHistory = loadStoredHistory()
+    const chatHistory = ref(
+      storedHistory && storedHistory.length ? storedHistory : [initialBotMessage]
+    )
 
-      const jsonMatch = text.match(/\[\s*\{[\s\S]*\}\s*\]/);
+    const storedSessionId = sessionStorage.getItem(STORAGE_KEY_SESSION)
+    const sessionId = ref(storedSessionId || null)
+
+    const persistChatState = () => {
+      try {
+        sessionStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(chatHistory.value))
+        if (sessionId.value) {
+          sessionStorage.setItem(STORAGE_KEY_SESSION, sessionId.value)
+        } else {
+          sessionStorage.removeItem(STORAGE_KEY_SESSION)
+        }
+      } catch (e) {
+        console.error('Failed to persist chat state:', e)
+      }
+    }
+
+    const formatBody = (text) => {
+      if (!text) return ''
+      return text.replace(/\n/g, '<br>')
+    }
+
+    const isEmailArray = (text) => {
+      if (!text.trim().startsWith('[') || !text.trim().endsWith(']')) return false
+      try {
+        const parsed = JSON.parse(text)
+        return (
+          Array.isArray(parsed) &&
+          parsed.length > 0 &&
+          parsed[0].hasOwnProperty('subject') &&
+          (parsed[0].hasOwnProperty('from') || parsed[0].hasOwnProperty('sender'))
+        )
+      } catch {
+        return false
+      }
+    }
+
+    const extractJsonFromText = (text) => {
+      const result = { textBefore: '', json: null }
+      const jsonMatch = text.match(/\[\s*\{[\s\S]*\}\s*\]/)
 
       if (jsonMatch) {
         try {
-          // Validate it's actually an email array before accepting it
-          if(isEmailArray(jsonMatch[0])) {
-              result.json = JSON.parse(jsonMatch[0]);
-              const textBefore = text.substring(0, jsonMatch.index).trim();
-              if (textBefore) result.textBefore = textBefore;
-              return result;
+          if (isEmailArray(jsonMatch[0])) {
+            result.json = JSON.parse(jsonMatch[0])
+            const textBefore = text.substring(0, jsonMatch.index).trim()
+            if (textBefore) result.textBefore = textBefore
+            return result
           }
-        } catch (e) {
-          // parsing failed, fall through
+        } catch {
+          // ignore
         }
       }
-      
-      // No valid JSON found
-      result.textBefore = text;
-      return result;
+
+      result.textBefore = text
+      return result
     }
 
     const scrollToBottom = () => {
       nextTick(() => {
         if (historyContainer.value) {
-          historyContainer.value.scrollTop = historyContainer.value.scrollHeight;
+          historyContainer.value.scrollTop = historyContainer.value.scrollHeight
         }
       })
     }
@@ -164,53 +193,61 @@ export default {
       if (!userPrompt.value.trim() || isLoading.value) return
 
       const messageText = userPrompt.value.trim()
-      
-      // Add User Message
+
       chatHistory.value.push({ role: 'user', text: messageText, emails: null })
       userPrompt.value = ''
+      persistChatState()
       scrollToBottom()
 
       isLoading.value = true
 
       try {
         const response = await fetch(API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              message: messageText,
-              session_id: sessionId.value // Include session_id for conversation continuity
-            })
-        });
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: messageText,
+            session_id: sessionId.value
+          })
+        })
 
-        if (!response.ok) throw new Error('API request failed');
+        if (!response.ok) throw new Error('API request failed')
 
-        const data = await response.json();
+        const data = await response.json()
 
-        // Store session_id from response for subsequent requests
         if (data.session_id) {
-          sessionId.value = data.session_id;
+          sessionId.value = data.session_id
         }
 
-        // Process Response
-        const extracted = extractJsonFromText(data.response);
+        const extracted = extractJsonFromText(data.response)
 
         chatHistory.value.push({
-            role: 'bot',
-            text: extracted.textBefore, // The text part
-            emails: extracted.json      // The email array part (if any)
-        });
+          role: 'bot',
+          text: extracted.textBefore,
+          emails: extracted.json
+        })
 
+        persistChatState()
       } catch (error) {
-        console.error('Error:', error);
-        chatHistory.value.push({ 
-            role: 'bot', 
-            text: 'Sorry, an error occurred connecting to the server. Please ensure the backend is running.',
-            emails: null
-        });
+        console.error('Error:', error)
+        chatHistory.value.push({
+          role: 'bot',
+          text:
+            'Sorry, an error occurred connecting to the server. Please ensure the backend is running.',
+          emails: null
+        })
+        persistChatState()
       } finally {
         isLoading.value = false
         scrollToBottom()
       }
+    }
+
+    const clearChat = () => {
+      chatHistory.value = [initialBotMessage]
+      sessionId.value = null
+      sessionStorage.removeItem(STORAGE_KEY_HISTORY)
+      sessionStorage.removeItem(STORAGE_KEY_SESSION)
     }
 
     return {
@@ -219,7 +256,8 @@ export default {
       chatHistory,
       sendMessage,
       formatBody,
-      historyContainer
+      historyContainer,
+      clearChat
     }
   }
 }
@@ -229,7 +267,7 @@ export default {
 .compose-view {
   display: flex;
   flex-direction: column;
-  height: calc(100% - 40px);
+  height: 100%;
   padding: 0 1.5rem 1.5rem 0;
 }
 
@@ -238,40 +276,41 @@ export default {
   flex-direction: column;
   flex-grow: 1;
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden; 
+  border-radius: 12px;
+  overflow: hidden;
   background-color: var(--content-bg);
 }
 
+/* Scrollable messages */
 .chat-history {
   flex-grow: 1;
-  padding: 1rem;
+  padding: 1rem 1rem 0.75rem;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 15px;
+  gap: 12px;
 }
 
+/* Message bubbles */
 .message {
-  max-width: 85%;
-  padding: 12px 16px;
+  max-width: 70%;
+  padding: 10px 14px;
   border-radius: 18px;
   line-height: 1.5;
   font-size: 0.95rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   word-wrap: break-word;
 }
 
 .user-message {
   align-self: flex-end;
   background-color: var(--primary-color);
-  color: white;
+  color: #fff;
   border-bottom-right-radius: 4px;
 }
 
 .ai-message {
   align-self: flex-start;
-  background-color: #f0f2f5; /* Fallback if var missing */
   background-color: var(--hover-bg);
   color: var(--text-primary);
   border: 1px solid var(--light-border-color);
@@ -282,95 +321,95 @@ export default {
   margin: 0;
 }
 
-/* --- Email Card Styles (Ported from Vanilla JS) --- */
-
+/* Email cards inside AI messages */
 .emails-list {
-    margin-top: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    width: 100%;
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
 }
 
 .email-block {
-    background: #ffffff;
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 12px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    text-align: left;
-    color: #333;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  text-align: left;
+  color: #333;
 }
 
 .email-header {
-    font-weight: 600;
-    color: var(--primary-color);
-    border-bottom: 1px solid #eee;
-    padding-bottom: 6px;
-    margin-bottom: 8px;
-    font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--primary-color);
+  border-bottom: 1px solid #eee;
+  padding-bottom: 4px;
+  margin-bottom: 6px;
+  font-size: 0.88rem;
 }
 
 .email-field {
-    margin-bottom: 6px;
-    font-size: 0.9rem;
-    line-height: 1.4;
+  margin-bottom: 4px;
+  font-size: 0.88rem;
+  line-height: 1.4;
 }
 
 .email-separator {
-    height: 1px;
-    background: #eee;
-    margin: 8px 0;
+  height: 1px;
+  background: #eee;
+  margin: 6px 0;
 }
 
 .label-badge {
-    background-color: #e3f2fd;
-    color: #1976d2;
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-size: 0.8rem;
-    font-weight: 500;
+  background-color: #e3f2fd;
+  color: #1976d2;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
 }
 
 .email-important {
-    color: #d32f2f;
-    background-color: #ffebee;
-    padding: 4px 8px;
-    border-radius: 4px;
-    display: inline-block;
+  color: #d32f2f;
+  background-color: #ffebee;
+  padding: 3px 6px;
+  border-radius: 4px;
+  display: inline-block;
 }
 
 .email-body-content {
-    background: #f9f9f9;
-    padding: 8px;
-    border-radius: 4px;
-    margin-top: 4px;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 0.85rem;
-    white-space: pre-wrap; /* Handles wrapping */
-    color: #444;
+  background: #f9f9f9;
+  padding: 7px;
+  border-radius: 4px;
+  margin-top: 4px;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.84rem;
+  white-space: pre-wrap;
+  color: #444;
 }
 
-/* --- End Email Card Styles --- */
-
+/* Loading dots */
 .loading-indicator .dot {
   opacity: 0;
   animation: dot-flicker 1.5s infinite;
 }
 
-.loading-indicator .dot:nth-child(2) { animation-delay: 0.5s; }
-.loading-indicator .dot:nth-child(3) { animation-delay: 1s; }
+.loading-indicator .dot:nth-child(2) { animation-delay: 0.4s; }
+.loading-indicator .dot:nth-child(3) { animation-delay: 0.8s; }
 
 @keyframes dot-flicker {
   0%, 80%, 100% { opacity: 0; }
   40% { opacity: 1; }
 }
 
+/* Bottom input area */
 .chat-input-area {
-  padding: 1rem;
+  padding: 0.75rem 1rem 1rem;
   border-top: 1px solid var(--border-color);
   display: flex;
-  background-color: #f7f7f7; 
+  align-items: center;
+  background-color: #f7f7f7;
 }
 
 .input-wrapper {
@@ -378,37 +417,63 @@ export default {
   flex-grow: 1;
 }
 
+/* Input field */
 .input-wrapper input {
   width: 100%;
-  padding: 10px 45px 10px 15px;
+  padding: 10px 90px 10px 14px;
   border: 1px solid var(--border-color);
-  border-radius: 20px;
-  font-size: 1rem;
-  background-color: white;
+  border-radius: 999px;
+  font-size: 0.96rem;
+  background-color: #fff;
+  outline: none;
 }
 
-.inner-send {
+.input-wrapper input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.15);
+}
+
+/* Send & voice buttons */
+.inner-send,
+.inner-voice {
   position: absolute;
-  right: 10px;
   top: 50%;
   transform: translateY(-50%);
   border: none;
   background: transparent;
   cursor: pointer;
   padding: 0;
-  color: var(--primary-color);
-}
-
-.voice-btn {
-  margin-left: 10px;
-  padding: 10px 15px;
-  border: none;
-  border-radius: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: white;
-  color: var(--text-primary); 
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.inner-send {
+  right: 50px;
+  color: var(--primary-color);
+}
+
+.inner-voice {
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-color: var(--primary-color);
+  color: #fff;
+}
+
+.inner-voice:disabled,
+.inner-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mic-icon.material-symbols-outlined {
+  font-size: 20px;
+  font-variation-settings:
+    'FILL' 0,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
 }
 </style>

@@ -17,8 +17,8 @@
       <p class="welcome-text">Welcome Back!</p>
 
       <button class="compose-button" @click="goToCompose">
-        <span class="material-symbols-outlined">edit</span>
-        Compose New Email
+        <span class="material-symbols-outlined">smart_toy</span>
+        AI Assistant
       </button>
 
       <SidebarNav /> 
@@ -86,6 +86,8 @@ export default {
         // Call enhanced auth store logout (now includes backend cleanup)
         await authStore.logout()
 
+        sessionStorage.removeItem('chat_history')
+        sessionStorage.removeItem('chat_session_id')
         // Redirect to home page
         router.push('/home')
 

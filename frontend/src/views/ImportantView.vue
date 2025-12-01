@@ -1,10 +1,22 @@
 <template>
-  <div class="favorites-view">
-    <h2>Important</h2>
-    <p>Feature not implemented yet.</p>
-    </div>
+  <div class="main-content-wrapper">
+    <EmailListView folder="important" key="important" />
+  </div>
 </template>
 
 <script>
-export default { name: 'FavoritesView' }
+import EmailListView from '../components/EmailListView.vue'
+
+export default {
+  name: 'ImportantView',
+  components: { EmailListView }
+}
 </script>
+
+<style scoped>
+.main-content-wrapper {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+</style>

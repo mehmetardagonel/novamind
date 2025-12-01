@@ -1,0 +1,21 @@
+:root {
+  --primary-color: #3713ec;
+  --background-light: #f6f6f8;
+  --background-dark: #131022;
+  --text-primary: #131022;
+  --text-secondary: #594c9a;
+  --primary-border-10: rgba(55, 19, 236, 0.1);
+  --primary-border-20: rgba(55, 19, 236, 0.2);
+  --primary-shadow-10: rgba(55, 19, 236, 0.1);
+  --primary-shadow-30: rgba(55, 19, 236, 0.3);
+  --primary-ring-50: rgba(55, 19, 236, 0.5);
+}
+
+/* 👇 this is the important part */
+body {
+  font-family: 'Inter', sans-serif;  /* or whatever you want */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  margin: 0;
+  color: var(--text-primary);
+}

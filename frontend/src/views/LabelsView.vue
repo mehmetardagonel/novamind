@@ -1,10 +1,21 @@
 <template>
-  <div class="favorites-view">
+  <div class="main-content-wrapper">
     <h2>Labels</h2>
-    <p>Feature not implemented yet.</p>
-    </div>
+    <p>Custom labels are not implemented yet.</p>
+  </div>
 </template>
 
 <script>
-export default { name: 'FavoritesView' }
+export default {
+  name: 'LabelsView'
+}
 </script>
+
+<style scoped>
+.main-content-wrapper {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+}
+</style>
