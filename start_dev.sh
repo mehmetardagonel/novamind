@@ -97,15 +97,17 @@ fi
 print_info "Activating virtual environment..."
 source "$VENV_DIR/bin/activate"
 
-# Check if dependencies are installed
-if ! python -c "import fastapi" 2>/dev/null; then
-    print_info "Installing backend dependencies..."
-    cd "$BACKEND_DIR"
-    pip install --upgrade pip > /dev/null 2>&1
-    pip install -r requirements.txt
+# Install/update backend dependencies
+# Always run pip install to ensure requirements.txt changes are picked up
+print_info "Checking backend dependencies..."
+cd "$BACKEND_DIR"
+pip install --upgrade pip > /dev/null 2>&1
+pip install -r requirements.txt --quiet
+if [ $? -eq 0 ]; then
     print_success "Backend dependencies installed"
 else
-    print_success "Backend dependencies already installed"
+    print_error "Failed to install backend dependencies"
+    exit 1
 fi
 
 # Check for .env file
