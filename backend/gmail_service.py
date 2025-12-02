@@ -185,6 +185,7 @@ def fetch_messages(query: Optional[str] = None, max_results: int = 50) -> List[E
                         subject=subject,
                         body=body,
                         date=date_value,
+                        label_ids=msg.get("labelIds", []),
                     )
                 )
             except Exception as e:
@@ -257,6 +258,7 @@ def _to_emailout(msg: dict) -> EmailOut:
         subject=subject,
         body=body,
         date=dt,
+        label_ids=msg.get("labelIds", []),
     )
 
 def fetch_messages_by_label(label_id: str, max_results: int = 50, include_spam_trash: bool = False, user_id: str = "") -> list[EmailOut]:
@@ -312,22 +314,41 @@ def fetch_drafts(max_results: int = 50, user_id: str = "") -> list[EmailOut]:
 
 def trash_message(message_id: str, user_id: str = "") -> dict:
     """
-    Move a message to Trash.
+    Move a message to Trash by adding the TRASH label.
+
+    We *do not* remove INBOX or any other labels. Gmail and your
+    list endpoints automatically hide TRASH messages from normal
+    views (Inbox, Important, Starred, etc.).
     """
     service = get_gmail_service(user_id=user_id)
-    return service.users().messages().trash(
+
+    return service.users().messages().modify(
         userId="me",
-        id=message_id
+        id=message_id,
+        body={
+            "addLabelIds": ["TRASH"],
+            "removeLabelIds": []
+        }
     ).execute()
+
 
 def untrash_message(message_id: str, user_id: str = "") -> dict:
     """
-    Restore a message from Trash back into the mailbox (typically Inbox).
+    Restore a message from Trash by removing the TRASH label.
+
+    This brings the message back to exactly the labels it had
+    before being trashed (INBOX, IMPORTANT, STARRED, custom, etc.
+    are all preserved).
     """
     service = get_gmail_service(user_id=user_id)
-    return service.users().messages().untrash(
+
+    return service.users().messages().modify(
         userId="me",
-        id=message_id
+        id=message_id,
+        body={
+            "addLabelIds": ["INBOX"],
+            "removeLabelIds": ["TRASH"]
+        }
     ).execute()
 
 def set_star(message_id: str, starred: bool, user_id: str = "") -> dict:

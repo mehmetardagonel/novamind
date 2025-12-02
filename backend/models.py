@@ -9,6 +9,7 @@ class EmailOut(BaseModel):
     subject: str
     body: str
     date: datetime
+    label_ids: List[str] = []
 
 class EmailRequest(BaseModel):
     to: EmailStr
