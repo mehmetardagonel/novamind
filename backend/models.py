@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from typing import Optional, List
 
 class EmailOut(BaseModel):
-    message_id: str
     sender: str
     recipient: str
     subject: str

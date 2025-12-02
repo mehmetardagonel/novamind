@@ -26,19 +26,19 @@
       </div>
     </div>
 
-    <div v-else-if="emails.length > 0" class="email-container" :class="{ 'has-detail': selectedEmail && !isTrash }">
+    <div v-else-if="emails.length > 0" class="email-container" :class="{ 'has-detail': selectedEmail }">
       
-      <div class="email-list-panel" :class="{ 'hide-on-mobile': selectedEmail && !isTrash, 'full-width': !selectedEmail || isTrash }">
+      <div class="email-list-panel" :class="{ 'hide-on-mobile': selectedEmail, 'full-width': !selectedEmail }">
         <div class="email-list">
           <div
-          v-for="(email, index) in emails"
-          :key="index"
-          class="email-item"
-          :class="{
-          'unread': email.unread,
-          'selected': email === selectedEmail
-          }"
-          @click="!isTrash && selectEmail(email)"
+            v-for="(email, index) in emails"
+            :key="index"
+            class="email-item"
+            :class="{ 
+              'unread': email.unread, 
+              'selected': email === selectedEmail 
+            }" 
+            @click="selectEmail(email)"
           >
             <div class="email-header">
               <span class="email-sender">{{ email.sender }}</span>
@@ -46,33 +46,26 @@
             </div>
             <div class="email-subject">{{ email.subject }}</div>
             <div class="email-preview">{{ getPreview(email.body) }}</div>
-            <button
-            v-if="isTrash"
-            class="restore-btn"
-            @click.stop="handleRestore(email)"
-            >
-            Restore
-            </button>
           </div>
         </div>
         </div>
 
-      <div class="email-detail-panel" v-if="selectedEmail && !isTrash">
+      <div class="email-detail-panel" v-if="selectedEmail">
         <div class="email-detail-header">
         <button @click="closeEmail" class="icon-action-btn" title="Back to list">
           <span class="material-symbols-outlined">arrow_back</span>
         </button>
 
-        <div class="email-actions" v-if="!isTrash">
+        <div class="email-actions">
           <button class="icon-action-btn" title="Add Label">
             <span class="material-symbols-outlined">label</span>
           </button>
           
-          <button class="icon-action-btn" title="Favorite"  @click.stop="handleFavorite">
+          <button class="icon-action-btn" title="Favorite">
             <span class="material-symbols-outlined">star</span>
           </button>
           
-          <button class="icon-action-btn" title="Delete"  @click.stop="handleDelete">
+          <button class="icon-action-btn" title="Delete">
             <span class="material-symbols-outlined">delete</span>
           </button>
         </div>
@@ -102,8 +95,8 @@
 </template>
 
 <script>
-import { onMounted, ref, watch, computed } from 'vue'
-import { fetchEmails, deleteEmail, setEmailStar, restoreEmail } from '../api/emails'
+import { onMounted, ref, watch } from 'vue' // Removed 'computed'
+import { fetchEmails } from '../api/emails' 
 
 export default {
   name: "EmailListView",
@@ -121,66 +114,35 @@ export default {
     const errorMessage = ref('')
     const selectedEmail = ref(null)
     const authUrl = ref('')
-    const isTrash = computed(() => props.folder === 'trash')
-    const MAX_RETRIES = 2
-    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    
+    // Removed currentPage, totalPages, paginatedEmails, displayedPages
 
- const loadEmails = async () => {
-  loading.value = true
-  errorMessage.value = ''
-  emails.value = []
-  selectedEmail.value = null
-  authUrl.value = ''
+    const loadEmails = async () => {
+      loading.value = true
+      errorMessage.value = ''
+      emails.value = []
+      selectedEmail.value = null
+      authUrl.value = ''
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      console.log(`Fetching emails for folder: ${props.folder} (attempt ${attempt})`)
-      const emailList = await fetchEmails(props.folder)
-      emails.value = emailList
-
-      // ✅ Success: stop retrying
-      loading.value = false
-      return
-    } catch (error) {
-      console.error(`Error fetching ${props.folder} emails (attempt ${attempt}):`, error)
-      const hasResponse = !!error.response
-
-      // 1️⃣ Pure network / backend not reachable
-      if (!hasResponse) {
-        if (attempt < MAX_RETRIES) {
-          console.warn('Network/backend error, retrying...')
-          await sleep(1000)
-          continue
+      try {
+        console.log(`Fetching emails for folder: ${props.folder}`)
+        const emailList = await fetchEmails(props.folder) 
+        emails.value = emailList
+      } catch (error) {
+        console.error(`Error fetching ${props.folder} emails:`, error)
+        
+        if (error.response && error.response.status === 401 && error.response.data.auth_url) {
+            authUrl.value = error.response.data.auth_url
+            errorMessage.value = ''
+        } else {
+            errorMessage.value = error.response?.data?.detail 
+                               || error.message 
+                               || 'Failed to load emails. Please ensure Gmail API is configured.'
         }
-
-        // All retries failed → show proper backend error
-        errorMessage.value =
-          'Cannot reach the backend API. Make sure the FastAPI server is running.'
+      } finally {
         loading.value = false
-        return
       }
-
-      // 2️⃣ 401 with auth_url → Gmail OAuth flow
-      if (error.response.status === 401 && error.response.data.auth_url) {
-        authUrl.value = error.response.data.auth_url
-        errorMessage.value = ''
-        loading.value = false
-        return
-      }
-
-      // 3️⃣ Real backend/Gmail error
-      errorMessage.value =
-        error.response?.data?.detail ||
-        error.message ||
-        'Failed to load emails. Please ensure Gmail API is configured.'
-      loading.value = false
-      return
     }
-  }
-
-  // Safety – should never really hit here, but just in case
-  loading.value = false
-}
     
     const authenticate = () => {
       if (authUrl.value) {
@@ -191,79 +153,6 @@ export default {
         errorMessage.value = "Authentication URL is missing. Please try reloading the page."
       }
     }
-      const handleFavorite = async () => {
-      if (!selectedEmail.value) return
-
-      try {
-        const messageId = selectedEmail.value.message_id
-
-        // For now: always star it (backend handles it)
-        await setEmailStar(messageId, true)
-
-        // Optional: mark as starred locally so UI can react if you later style it
-        selectedEmail.value = {
-          ...selectedEmail.value,
-          starred: true
-        }
-
-        // Also update in the list
-        emails.value = emails.value.map(email =>
-          email.message_id === messageId
-            ? { ...email, starred: true }
-            : email
-        )
-
-      } catch (error) {
-        console.error('Failed to favorite email:', error)
-        errorMessage.value = error.response?.data?.detail
-          || error.message
-          || 'Failed to favorite email.'
-      }
-    }
-
-    const handleDelete = async () => {
-      if (!selectedEmail.value) return
-
-      try {
-        const messageId = selectedEmail.value.message_id
-
-        await deleteEmail(messageId)
-
-        // Remove from list
-        emails.value = emails.value.filter(
-          email => email.message_id !== messageId
-        )
-
-        // Close detail view
-        selectedEmail.value = null
-      } catch (error) {
-        console.error('Failed to delete email:', error)
-        errorMessage.value = error.response?.data?.detail
-          || error.message
-          || 'Failed to delete email.'
-      }
-    }
-
-    const handleRestore = async (email) => {
-  try {
-    const messageId = email.message_id
-    await restoreEmail(messageId)
-
-    // Remove from list
-    emails.value = emails.value.filter(e => e.message_id !== messageId)
-
-    // Just in case it was selected somehow
-    if (selectedEmail.value && selectedEmail.value.message_id === messageId) {
-      selectedEmail.value = null
-    }
-  } catch (error) {
-    console.error('Failed to restore email:', error)
-    errorMessage.value =
-      error.response?.data?.detail ||
-      error.message ||
-      'Failed to restore email.'
-  }
-}
 
     onMounted(() => {
         loadEmails()
@@ -321,25 +210,20 @@ export default {
     }
 
     return {
-    emails,
-    loading,
-    errorMessage,
-    selectedEmail,
-    authUrl,
-    selectEmail,
-    closeEmail,
-    handleFavorite,
-    handleDelete,
-    handleRestore,  
-    isTrash,        
-    // plus existing helpers:
-    formatDate,
-    formatFullDate,
-    getPreview,
-    sanitizeHtml,
-    loadEmails,
-    authenticate,
-  }
+      emails,
+      loading,
+      errorMessage,
+      selectedEmail,
+      authUrl,
+      selectEmail,
+      closeEmail,
+      formatDate,
+      formatFullDate,
+      getPreview,
+      sanitizeHtml,
+      loadEmails,
+      authenticate
+    }
   }
 }
 </script>

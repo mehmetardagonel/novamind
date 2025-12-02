@@ -6,7 +6,7 @@ os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 from typing import List, Dict, Optional
 import uuid
 
-from fastapi import FastAPI, Depends, HTTPException, Request, Header, Body
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from dotenv import load_dotenv
@@ -20,17 +20,14 @@ from gmail_service import (
     fetch_messages,
     send_email,
     get_current_user_email,
-    fetch_drafts,
-    fetch_messages_by_label,
-    trash_message,
-    untrash_message,
-    set_star,
     revoke_gmail_token,
     CLIENT_CONFIG,
     SCOPES
 )
 # Import AI Chat Service
 from chat_service import ChatService
+# Import ML Service
+from ml_service import get_classifier
 
 import logging
 
@@ -48,7 +45,7 @@ app = FastAPI()
 # Get redirect URI and frontend URL from config/env
 # This ensures it matches your .env file
 REDIRECT_URI = CLIENT_CONFIG["installed"]["redirect_uris"][0]
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173/app") # Set this in your .env!
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173") # Set this in your .env!
 
 origins = [
     "http://localhost:5173",  # Vite dev server default
@@ -74,6 +71,27 @@ app.add_middleware(
 # Each user/session gets its own ChatService instance to maintain pending_selection state
 chat_sessions: Dict[str, ChatService] = {}
 
+# Startup event to preload ML models
+@app.on_event("startup")
+async def startup_event():
+    """
+    Preload ML models on server startup.
+    This runs asynchronously so the server can start even if model loading takes time.
+    """
+    logger.info("=" * 60)
+    logger.info("🚀 Starting Novamind Backend Server...")
+    logger.info("=" * 60)
+
+    try:
+        logger.info("📦 Loading ML classification models...")
+        classifier = get_classifier()
+        logger.info("✅ ML Classifier initialized successfully!")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize ML classifier: {str(e)}")
+        logger.warning("⚠️  Server will use rule-based classification as fallback")
+        logger.info("=" * 60)
+
 # Chat Request/Response Models
 class ChatRequest(BaseModel):
     message: str
@@ -87,15 +105,25 @@ class ChatResponse(BaseModel):
 @app.get("/read-email", response_model=List[EmailOut])
 async def get_emails(filters: EmailFilters = Depends()):
     """
-    Fetch emails using Gmail API.
+    Fetch emails using Gmail API with ML classification.
     If auth is required, return 401 with an auth_url for the frontend.
     """
     logger.info(f"Endpoint called: /read-email with filters: {filters}")
     try:
         query = filters.to_gmail_query()
         emails = fetch_messages(query=query)
-        logger.info(f"Successfully fetched {len(emails)} emails")
-        return emails
+
+        # Apply ML classification to all emails
+        try:
+            classifier = get_classifier()
+            emails_dict = [email.model_dump(mode='json') for email in emails]
+            classified_emails = classifier.classify_batch(emails_dict)
+            logger.info(f"Successfully fetched and classified {len(emails)} emails")
+            return classified_emails
+        except Exception as ml_error:
+            logger.warning(f"ML classification failed: {ml_error}. Returning emails without classification.")
+            return emails
+
     except Exception as e:
         logger.error(f"Error in /read-email: {str(e)}")
         # Catch the specific error from gmail_service.py
@@ -294,94 +322,3 @@ async def chat(request: ChatRequest):
         # Server-side error
         logger.error(f"Chat error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error. Please try again later.")
-    
-@app.get("/emails/drafts", response_model=List[EmailOut])
-async def list_drafts(user_id: str = Header(..., alias="X-User-Id")):
-    try:
-        return fetch_drafts(max_results=50, user_id=user_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/emails/sent", response_model=List[EmailOut])
-async def list_sent(user_id: str = Header(..., alias="X-User-Id")):
-    try:
-        return fetch_messages_by_label("SENT", max_results=50, user_id=user_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/emails/favorites", response_model=List[EmailOut])
-async def list_starred(user_id: str = Header(..., alias="X-User-Id")):
-    try:
-        return fetch_messages_by_label("STARRED", max_results=50, user_id=user_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/emails/important", response_model=List[EmailOut])
-async def list_important(user_id: str = Header(..., alias="X-User-Id")):
-    try:
-        return fetch_messages_by_label("IMPORTANT", max_results=50, user_id=user_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/emails/spam", response_model=List[EmailOut])
-async def list_spam(user_id: str = Header(..., alias="X-User-Id")):
-    try:
-        return fetch_messages_by_label("SPAM", max_results=50, include_spam_trash=True, user_id=user_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/emails/trash", response_model=List[EmailOut])
-async def list_trash(user_id: str = Header(..., alias="X-User-Id")):
-    """
-    Retrieve deleted emails (Trash folder).
-    """
-    try:
-        return fetch_messages_by_label("TRASH", max_results=50, include_spam_trash=True, user_id=user_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/emails/{message_id}")
-async def delete_email(message_id: str, user_id: str = Header(..., alias="X-User-Id")):
-    """
-    Move an email to Trash.
-    """
-    try:
-        resp = trash_message(message_id, user_id=user_id)
-        return {
-            "status": "trashed",
-            "message_id": resp.get("id", message_id),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-@app.post("/emails/{message_id}/restore")
-async def restore_email(message_id: str, user_id: str = Header(..., alias="X-User-Id")):
-    """
-    Restore an email from Trash back to the mailbox (Inbox).
-    """
-    try:
-        resp = untrash_message(message_id, user_id=user_id)
-        return {
-            "status": "restored",
-            "message_id": resp.get("id", message_id),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-@app.post("/emails/{message_id}/star")
-async def star_email(message_id: str, starred: bool = Body(True), user_id: str = Header(..., alias="X-User-Id")):
-    """
-    Star or unstar an email.
-
-    Request body (examples):
-    { "starred": true }    -> add star
-    { "starred": false }   -> remove star
-    """
-    try:
-        resp = set_star(message_id, starred, user_id=user_id)
-        return {
-            "status": "starred" if starred else "unstarred",
-            "message_id": resp.get("id", message_id),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

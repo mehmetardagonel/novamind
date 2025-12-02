@@ -9,6 +9,8 @@ from datetime import datetime
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import Tool
 from langchain.agents import create_react_agent, AgentExecutor
+from ml_service import get_classifier
+
 
 # Setup logging for error tracking
 logging.basicConfig(level=logging.INFO)
@@ -244,6 +246,23 @@ Thought:{agent_scratchpad}"""
             handle_parsing_errors=True,
             max_iterations=10
         )
+        try:
+            self.ml_classifier = get_classifier()
+            logger.info(" ML Classifier integrated into ChatService")
+        except Exception as e:
+            logger.error(f" Could not load ML classifier: {str(e)}")
+            self.ml_classifier = None
+
+        # ML tool:email classification
+        if self.ml_classifier:
+            self.tools.append(
+                Tool(
+                    name="classify_emails_ml",
+                    func=self._classify_emails_with_ml,
+                    description="Classify emails using ML model (spam/ham/important). Input: JSON filters or empty string"
+                )
+            )
+        
 
     def _parse_fetch_mails(self, input_str: str) -> dict:
         try:
@@ -745,6 +764,35 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
         except Exception as e:
             logger.error(f"Chat processing error: {str(e)}", exc_info=True)
             return "Sorry, I encountered an error processing your request. Please try again later."
+    
+    def _classify_emails_with_ml(self, input_str: str) -> str:
+        
+        if not self.ml_classifier:
+            return " ML classifier not available"
+        
+        try:
+            filters = json.loads(input_str) if input_str.strip().startswith("{") else {}
+            emails = fetch_mails(**filters, max_results=50)
+            
+            if not emails:
+                return "No emails found to classify."
+            
+            classified_emails = self.ml_classifier.classify_batch(emails)
+            summary = self.ml_classifier.get_classification_summary(classified_emails)
+            
+            response = f"📊 ML Classification Results\n\n"
+            response += f"Total Emails: {summary['total']}\n\n"
+            
+            for pred, count in summary['by_prediction'].items():
+                emoji = "🚫" if pred == "spam" else "⭐" if pred == "important" else "📧"
+                response += f"{emoji} {pred.upper()}: {count} emails\n"
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"ML classification error: {str(e)}")
+            return f" Classification failed: {str(e)}"
+    
     
     def clear_history(self):
         pass
