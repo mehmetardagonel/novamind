@@ -8,6 +8,7 @@ class EmailOut(BaseModel):
     subject: str
     body: str
     date: datetime
+    ml_prediction: Optional[str] = None  # ML classification: spam, ham, or important
 
 class EmailRequest(BaseModel):
     to: EmailStr

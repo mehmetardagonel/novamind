@@ -61,5 +61,5 @@ langchain-google-genai==1.0.10
 google-generativeai==0.7.2
 
 # ML Classification
-scikit-learn==1.3.2
-sentence-transformers==2.2.2
+scikit-learn==1.6.1
+sentence-transformers>=2.7.0
