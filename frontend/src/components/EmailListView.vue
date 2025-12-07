@@ -10,9 +10,11 @@
       <button @click="authenticate" class="btn btn-primary">
         Connect with Google
       </button>
-      <p v-if="errorMessage" class="text-danger mt-3">Error: {{ errorMessage }}</p>
+      <p v-if="errorMessage" class="text-danger mt-3">
+        Error: {{ errorMessage }}
+      </p>
     </div>
-    
+
     <div v-else-if="errorMessage" class="error-box">
       <h3>Gmail API Error</h3>
       <p>{{ errorMessage }}</p>
@@ -21,24 +23,36 @@
         <ol>
           <li>Ensure backend is running.</li>
           <li>Ensure <code>.env</code> file is correct.</li>
-          <li>If auth fails, try deleting <code>token.json</code> and re-authenticating.</li>
+          <li>
+            If auth fails, try deleting <code>token.json</code> and
+            re-authenticating.
+          </li>
         </ol>
       </div>
     </div>
 
-    <div v-else-if="emails.length > 0" class="email-container" :class="{ 'has-detail': selectedEmail && !isTrash }">
-      
-      <div class="email-list-panel" :class="{ 'hide-on-mobile': selectedEmail && !isTrash, 'full-width': !selectedEmail || isTrash }">
+    <div
+      v-else-if="emails.length > 0"
+      class="email-container"
+      :class="{ 'has-detail': selectedEmail && !isTrash }"
+    >
+      <div
+        class="email-list-panel"
+        :class="{
+          'hide-on-mobile': selectedEmail && !isTrash,
+          'full-width': !selectedEmail || isTrash,
+        }"
+      >
         <div class="email-list">
           <div
-          v-for="(email, index) in emails"
-          :key="index"
-          class="email-item"
-          :class="{
-          unread: email.isUnread,
-          selected: email === selectedEmail
-          }"
-          @click="!isTrash && selectEmail(email)"
+            v-for="(email, index) in emails"
+            :key="index"
+            class="email-item"
+            :class="{
+              unread: email.isUnread,
+              selected: email === selectedEmail,
+            }"
+            @click="!isTrash && selectEmail(email)"
           >
             <div class="email-header">
               <span class="email-sender">{{ email.sender }}</span>
@@ -47,77 +61,177 @@
             <div class="email-subject">{{ email.subject }}</div>
             <div class="email-preview">{{ getPreview(email.body) }}</div>
             <div class="email-actions-bottom" v-if="isTrash">
-            <button
-            class="icon-action-btn restore-btn"
-            title="Restore email"
-            @click.stop="handleRestore(email)"
-            >
-            <span class="material-symbols-outlined">restore_from_trash</span>
-            </button>
+              <button
+                class="icon-action-btn restore-btn"
+                title="Restore email"
+                @click.stop="handleRestore(email)"
+              >
+                <span class="material-symbols-outlined"
+                  >restore_from_trash</span
+                >
+              </button>
             </div>
           </div>
         </div>
-        </div>
+      </div>
 
       <div class="email-detail-panel" v-if="selectedEmail && !isTrash">
         <div class="email-detail-header">
-        <button @click="closeEmail" class="icon-action-btn" title="Back to list">
-          <span class="material-symbols-outlined">arrow_back</span>
-        </button>
-
-        <div class="email-actions" v-if="!isTrash">
-          <button class="icon-action-btn" title="Add Label">
-            <span class="material-symbols-outlined">label</span>
-          </button>
-          
           <button
-          class="icon-action-btn"
-          v-if="!isTrash && selectedEmail"
-          @click.stop="handleFavorite(selectedEmail)"
-          title="Star"
+            @click="closeEmail"
+            class="icon-action-btn"
+            title="Back to list"
           >
-          <span
-          :class="[
-          'material-symbols-outlined star-toggle',
-          selectedEmail.isStarred ? 'star-filled' : 'star-normal'
-          ]"
-          >
-          star
-          </span>
+            <span class="material-symbols-outlined">arrow_back</span>
           </button>
-          
-          <button class="icon-action-btn" title="Delete"  @click.stop="handleDelete">
-            <span class="material-symbols-outlined">delete</span>
-          </button>
+
+          <div class="email-actions" v-if="!isTrash">
+            <!-- Wrap label button + popover together -->
+            <div class="label-menu-wrapper">
+              <button
+                class="icon-action-btn"
+                title="Add label"
+                @click.stop="toggleLabelMenu"
+              >
+                <span class="material-symbols-outlined">label</span>
+              </button>
+
+              <!-- Small popover right under the button -->
+              <div v-if="showLabelMenu" class="label-menu-popover">
+                <h3 class="label-menu-title">Labels</h3>
+
+                <p v-if="labelMenuLoading" class="label-menu-status">
+                  Loading labels...
+                </p>
+
+                <p v-if="labelMenuError" class="label-menu-error">
+                  {{ labelMenuError }}
+                </p>
+
+                <div
+                  v-if="
+                    !labelMenuLoading &&
+                    !labelMenuError &&
+                    availableLabels.length === 0
+                  "
+                  class="label-menu-empty"
+                >
+                  No labels yet. You can create them in the Labels tab.
+                </div>
+
+                <ul
+                  v-if="!labelMenuLoading && availableLabels.length > 0"
+                  class="label-menu-list"
+                >
+                  <li
+                    v-for="lab in availableLabels"
+                    :key="lab.id"
+                    class="label-menu-row"
+                  >
+                    <label class="label-checkbox-row">
+                      <input
+                        type="checkbox"
+                        :value="lab.id"
+                        v-model="selectedLabelIds"
+                      />
+                      <span class="label-name">{{ lab.name }}</span>
+                    </label>
+                  </li>
+                </ul>
+
+                <div class="label-menu-footer">
+                  <div class="label-menu-footer">
+                    <button
+                      type="button"
+                      class="label-btn label-btn-cancel"
+                      @click="closeLabelMenu"
+                      :disabled="savingLabels"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      class="label-btn label-btn-apply"
+                      @click="saveLabelChanges"
+                      :disabled="savingLabels"
+                    >
+                      <span v-if="savingLabels">Saving…</span>
+                      <span v-else>Apply</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <button
+              class="icon-action-btn"
+              v-if="!isTrash && selectedEmail"
+              @click.stop="handleFavorite(selectedEmail)"
+              title="Star"
+            >
+              <span
+                :class="[
+                  'material-symbols-outlined star-toggle',
+                  selectedEmail.isStarred ? 'star-filled' : 'star-normal',
+                ]"
+              >
+                star
+              </span>
+            </button>
+
+            <button
+              class="icon-action-btn"
+              title="Delete"
+              @click.stop="handleDelete"
+            >
+              <span class="material-symbols-outlined">delete</span>
+            </button>
+          </div>
         </div>
-      </div>
-        
+
         <div class="email-detail-content">
           <h2 class="email-detail-subject">{{ selectedEmail.subject }}</h2>
-          
+
           <div class="email-detail-meta">
             <div class="sender-info">
               <div class="sender-details">
                 <div class="sender-name">{{ selectedEmail.sender }}</div>
-                <div class="email-date-full">{{ formatFullDate(selectedEmail.date) }}</div>
+                <div class="email-date-full">
+                  {{ formatFullDate(selectedEmail.date) }}
+                </div>
               </div>
             </div>
           </div>
 
-          <div class="email-body" v-html="sanitizeHtml(selectedEmail.body)"></div>
+          <div
+            class="email-body"
+            v-html="sanitizeHtml(selectedEmail.body)"
+          ></div>
         </div>
       </div>
     </div>
 
-    <div v-else class="no-emails">
+    <div
+      v-if="!loading && !authUrl && !errorMessage && emails.length === 0"
+      class="no-emails"
+    >
       <p>No emails found.</p>
     </div>
   </div>
 </template>
 
 <script>
-import { onMounted, ref, watch, computed } from 'vue'
-import { fetchEmails, deleteEmail, setEmailStar, restoreEmail } from '../api/emails'
+import { onMounted, ref, watch, computed } from "vue";
+import { useRoute } from "vue-router";
+import {
+  fetchEmails,
+  deleteEmail,
+  setEmailStar,
+  restoreEmail,
+  fetchLabels,
+  updateEmailLabels,
+  getEmailsByLabel,
+} from "../api/emails";
 
 export default {
   name: "EmailListView",
@@ -125,230 +239,368 @@ export default {
     folder: {
       type: String,
       required: true,
-      default: 'inbox'
-    }
+      default: "inbox",
+    },
     // Removed emailsPerPage prop
   },
   setup(props) {
-    const emails = ref([])
-    const loading = ref(false)
-    const errorMessage = ref('')
-    const selectedEmail = ref(null)
-    const authUrl = ref('')
-    const isTrash = computed(() => props.folder === 'trash')
+    const emails = ref([]);
+    const loading = ref(false);
+    const errorMessage = ref("");
+    const selectedEmail = ref(null);
+    const authUrl = ref("");
+    const isTrash = computed(() => props.folder === "trash");
 
-    const MAX_RETRIES = 2
-    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    const route = useRoute();
+    const activeLabelId = computed(() => route.query.label || null);
 
-    const loadEmails = async () => {
-      loading.value = true
-      errorMessage.value = ''
-      emails.value = []
-      selectedEmail.value = null
-      authUrl.value = ''
+    // 🔹 label popup state
+    const showLabelMenu = ref(false);
+    const availableLabels = ref([]);
+    const labelMenuLoading = ref(false);
+    const labelMenuError = ref("");
+    const savingLabels = ref(false);
+    const selectedLabelIds = ref([]);
 
-      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        try {
-          console.log(`Fetching emails for folder: ${props.folder} (attempt ${attempt})`)
-          const emailList = await fetchEmails(props.folder)
+    const decorateEmails = (list) => {
+      return (list || []).map((email) => {
+        const labels = email.label_ids || [];
+        const isStarred = Array.isArray(labels) && labels.includes("STARRED");
+        const isUnread = Array.isArray(labels) && labels.includes("UNREAD");
 
-          emails.value = emailList.map(email => {
-          // Try both `label_ids` and `labelIds` just in case
-          const labels =
-          email.label_ids ||
-          email.labelIds ||
-          []
-
-          const isStarred = Array.isArray(labels) && labels.includes('STARRED')
-          const isUnread = Array.isArray(labels) && labels.includes("UNREAD")
-
-          return {
+        return {
           ...email,
           isStarred,
           isUnread,
-          }
-        })
+        };
+      });
+    };
 
-          loading.value = false
-          return
-        } catch (error) {
-          console.error(`Error fetching ${props.folder} emails (attempt ${attempt}):`, error)
-          const hasResponse = !!error.response
+    const loadEmails = async () => {
+      loading.value = true;
+      errorMessage.value = "";
+      emails.value = [];
+      selectedEmail.value = null;
+      authUrl.value = "";
 
-          if (!hasResponse) {
-            if (attempt < MAX_RETRIES) {
-              console.warn('Network/backend error, retrying...')
-              await sleep(1000)
-              continue
-            }
+      try {
+        let data;
+        const labelId = route.query.label; // e.g. "Label_20"
 
-            errorMessage.value =
-              'Cannot reach the backend API. Make sure the FastAPI server is running.'
-            loading.value = false
-            return
-          }
+        if (labelId) {
+          // We are in a label view: /app/email/inbox?label=Label_20&labelName=Work
+          // → use dedicated label endpoint (by label ID)
+          data = await getEmailsByLabel(labelId);
+        } else if (props.folder === "inbox") {
+          // Normal inbox
+          data = await fetchEmails("inbox");
+        } else {
+          // Sent / Favorites / Important / Spam / Drafts / Trash
+          data = await fetchEmails(props.folder);
+        }
 
-          if (error.response.status === 401 && error.response.data.auth_url) {
-            authUrl.value = error.response.data.auth_url
-            errorMessage.value = ''
-            loading.value = false
-            return
-          }
+        emails.value = decorateEmails(data);
+      } catch (error) {
+        console.error(`Error fetching ${props.folder} emails:`, error);
+        const hasResponse = !!error.response;
 
+        if (!hasResponse) {
+          errorMessage.value =
+            "Cannot reach the backend API. Make sure the FastAPI server is running.";
+        } else if (
+          error.response.status === 401 &&
+          error.response.data.auth_url
+        ) {
+          authUrl.value = error.response.data.auth_url;
+          errorMessage.value = "";
+        } else {
           errorMessage.value =
             error.response?.data?.detail ||
             error.message ||
-            'Failed to load emails. Please ensure Gmail API is configured.'
-          loading.value = false
-          return
+            "Failed to load emails.";
         }
+      } finally {
+        loading.value = false;
       }
-
-      loading.value = false
-    }
+    };
 
     const authenticate = () => {
       if (authUrl.value) {
-        sessionStorage.setItem('oauth_redirect_path', window.location.pathname)
-        window.location.href = authUrl.value
+        sessionStorage.setItem("oauth_redirect_path", window.location.pathname);
+        window.location.href = authUrl.value;
       } else {
-        errorMessage.value = "Authentication URL is missing. Please try reloading the page."
+        errorMessage.value =
+          "Authentication URL is missing. Please try reloading the page.";
       }
-    }
+    };
 
     // ⭐ FAVORITE / UNFAVORITE TOGGLE
     const handleFavorite = async (email) => {
-      if (!email || !email.message_id) return
-      if (isTrash.value) return // safety: no starring in Trash
+      if (!email || !email.message_id) return;
+      if (isTrash.value) return; // safety: no starring in Trash
 
-      const newValue = !email.isStarred
+      const newValue = !email.isStarred;
 
       try {
         // setEmailStar should send a raw boolean body (true/false)
-        await setEmailStar(email.message_id, newValue)
+        await setEmailStar(email.message_id, newValue);
 
         // Optimistic UI update
-        email.isStarred = newValue
+        email.isStarred = newValue;
 
         // If we’re in Favorites view and user unstars → remove from list
         const isFavoritesFolder =
-          props.folder === 'favorites' || props.folder === 'starred'
+          props.folder === "favorites" || props.folder === "starred";
 
         if (!newValue && isFavoritesFolder) {
           emails.value = emails.value.filter(
             (e) => e.message_id !== email.message_id
-          )
+          );
 
           if (
             selectedEmail.value &&
             selectedEmail.value.message_id === email.message_id
           ) {
-            selectedEmail.value = null
+            selectedEmail.value = null;
           }
         }
       } catch (error) {
-        console.error('Failed to update favorite:', error)
+        console.error("Failed to update favorite:", error);
         errorMessage.value =
           error.response?.data?.detail ||
           error.message ||
-          'Failed to update favorite.'
+          "Failed to update favorite.";
       }
-    }
+    };
 
     const handleDelete = async () => {
-      if (!selectedEmail.value) return
+      if (!selectedEmail.value) return;
 
       try {
-        const messageId = selectedEmail.value.message_id
+        const messageId = selectedEmail.value.message_id;
 
-        await deleteEmail(messageId)
+        await deleteEmail(messageId);
 
         emails.value = emails.value.filter(
-          email => email.message_id !== messageId
-        )
+          (email) => email.message_id !== messageId
+        );
 
-        selectedEmail.value = null
+        selectedEmail.value = null;
       } catch (error) {
-        console.error('Failed to delete email:', error)
-        errorMessage.value = error.response?.data?.detail
-          || error.message
-          || 'Failed to delete email.'
+        console.error("Failed to delete email:", error);
+        errorMessage.value =
+          error.response?.data?.detail ||
+          error.message ||
+          "Failed to delete email.";
       }
-    }
+    };
 
     const handleRestore = async (email) => {
       try {
-        const messageId = email.message_id
-        await restoreEmail(messageId)
+        const messageId = email.message_id;
+        await restoreEmail(messageId);
 
-        emails.value = emails.value.filter(e => e.message_id !== messageId)
+        emails.value = emails.value.filter((e) => e.message_id !== messageId);
 
-        if (selectedEmail.value && selectedEmail.value.message_id === messageId) {
-          selectedEmail.value = null
+        if (
+          selectedEmail.value &&
+          selectedEmail.value.message_id === messageId
+        ) {
+          selectedEmail.value = null;
         }
       } catch (error) {
-        console.error('Failed to restore email:', error)
+        console.error("Failed to restore email:", error);
         errorMessage.value =
           error.response?.data?.detail ||
           error.message ||
-          'Failed to restore email.'
+          "Failed to restore email.";
       }
-    }
+    };
 
     onMounted(() => {
-      loadEmails()
-    })
+      loadEmails();
+    });
 
-    watch(() => props.folder, () => {
-      loadEmails()
-    })
+    watch(
+      () => props.folder,
+      () => {
+        loadEmails();
+      }
+    );
+
+    watch(
+      () => route.query.label,
+      () => {
+        if (props.folder === "inbox") {
+          loadEmails();
+        }
+      }
+    );
 
     const selectEmail = (email) => {
-      selectedEmail.value = email
-    }
+      selectedEmail.value = email;
+    };
 
     const closeEmail = () => {
-      selectedEmail.value = null
-    }
+      selectedEmail.value = null;
+    };
 
     const formatDate = (dateString) => {
-      if (!dateString) return ''
-      const date = new Date(dateString)
-      const today = new Date()
+      if (!dateString) return "";
+      const date = new Date(dateString);
+      const today = new Date();
       if (date.toDateString() === today.toDateString()) {
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        return date.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
       }
-      const yesterday = new Date(today)
-      yesterday.setDate(yesterday.getDate() - 1)
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
       if (date.toDateString() === yesterday.toDateString()) {
-        return 'Yesterday'
+        return "Yesterday";
       }
-      return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
-    }
+      return date.toLocaleDateString([], { month: "short", day: "numeric" });
+    };
 
     const formatFullDate = (dateString) => {
-      if (!dateString) return ''
-      const date = new Date(dateString)
-      return date.toLocaleString([], { 
-        weekday: 'short',
-        year: 'numeric', 
-        month: 'short', 
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    }
+      if (!dateString) return "";
+      const date = new Date(dateString);
+      return date.toLocaleString([], {
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    };
 
     const getPreview = (body) => {
-      if (!body) return ''
-      const plainText = body.replace(/<[^>]*>/g, '') 
-      return plainText.substring(0, 100) + (plainText.length > 100 ? '...' : '')
-    }
+      if (!body) return "";
+      const plainText = body.replace(/<[^>]*>/g, "");
+      return (
+        plainText.substring(0, 100) + (plainText.length > 100 ? "..." : "")
+      );
+    };
 
     const sanitizeHtml = (html) => {
-      if (!html) return ''
-      return html
-    }
+      if (!html) return "";
+      return html;
+    };
+
+    const openLabelMenu = async () => {
+      if (!selectedEmail.value) return;
+
+      showLabelMenu.value = true;
+      labelMenuError.value = "";
+      labelMenuLoading.value = true;
+
+      try {
+        if (!availableLabels.value.length) {
+          const data = await fetchLabels();
+          availableLabels.value = Array.isArray(data) ? data : [];
+        }
+        // Initialize checked labels from the selected email
+        selectedLabelIds.value = [...(selectedEmail.value.label_ids || [])];
+      } catch (e) {
+        console.error("Failed to load labels:", e);
+        labelMenuError.value =
+          e?.response?.data?.detail || e?.message || "Failed to load labels.";
+      } finally {
+        labelMenuLoading.value = false;
+      }
+    };
+
+    const closeLabelMenu = () => {
+      if (savingLabels.value) return;
+      showLabelMenu.value = false;
+    };
+
+    const toggleLabelMenu = async () => {
+      if (showLabelMenu.value) {
+        // if already open, close it
+        closeLabelMenu();
+        return;
+      }
+      // if closed, open and load labels
+      await openLabelMenu();
+    };
+
+    const saveLabelChanges = async () => {
+      if (!selectedEmail.value) return;
+      if (!availableLabels.value.length) {
+        showLabelMenu.value = false;
+        return;
+      }
+
+      const current = new Set(selectedEmail.value.label_ids || []);
+      const next = new Set(selectedLabelIds.value || []);
+
+      const add = [];
+      const remove = [];
+
+      // Figure out what changed
+      availableLabels.value.forEach((lab) => {
+        const hadBefore = current.has(lab.id);
+        const hasNow = next.has(lab.id);
+
+        if (hasNow && !hadBefore) add.push(lab.id);
+        if (!hasNow && hadBefore) remove.push(lab.id);
+      });
+
+      // Nothing changed? Close.
+      if (!add.length && !remove.length) {
+        showLabelMenu.value = false;
+        return;
+      }
+
+      savingLabels.value = true;
+      labelMenuError.value = "";
+
+      try {
+        await updateEmailLabels(selectedEmail.value.message_id, {
+          addLabelIds: add,
+          removeLabelIds: remove,
+        });
+
+        // Update local label_ids for selected email
+        const newLabelIds = Array.from(
+          new Set([...current, ...add].filter((id) => !remove.includes(id)))
+        );
+
+        // 🔹 Update selected email object
+        selectedEmail.value = {
+          ...selectedEmail.value,
+          label_ids: newLabelIds,
+        };
+
+        // 🔹 Update email in the list
+        emails.value = emails.value.map((e) =>
+          e.message_id === selectedEmail.value.message_id
+            ? { ...e, label_ids: newLabelIds }
+            : e
+        );
+
+        // 🔹 If we are in a label view and this email no longer has that label,
+        //     remove it from the current list (Gmail behavior)
+        const currentLabelId = activeLabelId.value;
+        if (currentLabelId && !newLabelIds.includes(currentLabelId)) {
+          emails.value = emails.value.filter(
+            (e) => e.message_id !== selectedEmail.value.message_id
+          );
+          selectedEmail.value = null;
+        }
+
+        showLabelMenu.value = false;
+      } catch (e) {
+        console.error("Failed to update labels for this email:", e);
+        labelMenuError.value =
+          e?.response?.data?.detail || e?.message || "Failed to update labels.";
+      } finally {
+        savingLabels.value = false;
+      }
+    };
 
     return {
       emails,
@@ -368,15 +620,26 @@ export default {
       sanitizeHtml,
       loadEmails,
       authenticate,
-    }
-  }
-}
+      // Label menu
+      showLabelMenu,
+      availableLabels,
+      labelMenuLoading,
+      labelMenuError,
+      selectedLabelIds,
+      savingLabels,
+      openLabelMenu,
+      closeLabelMenu,
+      saveLabelChanges,
+      toggleLabelMenu,
+    };
+  },
+};
 </script>
-
 
 <style scoped>
 /* Standard Loading & Error Styles */
-.loading, .no-emails {
+.loading,
+.no-emails {
   text-align: center;
   padding: 3rem;
   color: var(--text-secondary);
@@ -400,11 +663,16 @@ export default {
   text-align: center;
 }
 
-.auth-prompt h2 { color: #0050b3; margin-bottom: 0.5rem; }
-.auth-prompt p { color: #0050b3; }
+.auth-prompt h2 {
+  color: #0050b3;
+  margin-bottom: 0.5rem;
+}
+.auth-prompt p {
+  color: #0050b3;
+}
 
 .btn-primary {
-  background-color: #4285F4;
+  background-color: #4285f4;
   color: white;
   border: none;
   padding: 12px 25px;
@@ -418,8 +686,14 @@ export default {
   background-color: #337ae2;
 }
 
-.error-box h3 { margin-top: 0; color: #d46b08; font-weight: 700; }
-.error-box p { color: #d48806; }
+.error-box h3 {
+  margin-top: 0;
+  color: #d46b08;
+  font-weight: 700;
+}
+.error-box p {
+  color: #d48806;
+}
 .setup-instructions {
   margin-top: 1rem;
   padding: 1rem;
@@ -427,7 +701,10 @@ export default {
   border-radius: 4px;
   border: 1px solid var(--light-border-color);
 }
-.setup-instructions ol { margin: 0.5rem 0; padding-left: 1.5rem; }
+.setup-instructions ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
 
 /* Email Container */
 .email-container {
@@ -476,9 +753,9 @@ export default {
   transition: all 0.2s ease;
   box-shadow: none;
   border-left: 4px solid transparent;
-  position: relative;          /* 🔹 needed for bottom-right restore */
-  padding-right: 4.5rem;       /* 🔹 leave space for restore button */
-  padding-bottom: 1.75rem;     /* 🔹 so preview doesn’t overlap button */
+  position: relative; /* 🔹 needed for bottom-right restore */
+  padding-right: 4.5rem; /* 🔹 leave space for restore button */
+  padding-bottom: 1.75rem; /* 🔹 so preview doesn’t overlap button */
 }
 
 .email-item.unread {
@@ -495,7 +772,7 @@ export default {
 
 .email-item.selected {
   background-color: var(--hover-bg, #f0f4f8);
-  border-left: 4px solid var(--primary-color, #6C63FF);
+  border-left: 4px solid var(--primary-color, #6c63ff);
 }
 
 .email-header {
@@ -569,7 +846,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;  /* Fixed width for square shape */
+  width: 40px; /* Fixed width for square shape */
   height: 40px; /* Fixed height */
   padding: 0;
   border: 1px solid var(--border-color, #e0e0e0);
@@ -589,11 +866,7 @@ export default {
 /* Material Symbol Font Size Settings */
 .material-symbols-outlined {
   font-size: 20px;
-  font-variation-settings:
-    'FILL' 0,
-    'wght' 400,
-    'GRAD' 0,
-    'opsz' 24;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
 }
 
 .email-detail-content {
@@ -639,6 +912,13 @@ export default {
 .email-body {
   line-height: 1.6;
   color: var(--text-primary, #333);
+  white-space: normal; /* allow wrapping */
+  word-break: break-word; /* long URLs won’t overflow */
+  font-size: 0.95rem;
+}
+.email-body a {
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 /* 🔹 Bottom-right restore button */
@@ -651,10 +931,7 @@ export default {
   border-radius: 4px;
   opacity: 0;
   pointer-events: none;
-  transition:
-    opacity 0.15s ease,
-    background-color 0.2s ease,
-    color 0.2s ease,
+  transition: opacity 0.15s ease, background-color 0.2s ease, color 0.2s ease,
     border-color 0.2s ease;
 }
 
@@ -666,8 +943,8 @@ export default {
 
 /* Hover: turn blue with white icon */
 .restore-btn:hover {
-  background-color: #6C63FF;
-  border-color: #6C63FF;
+  background-color: #6c63ff;
+  border-color: #6c63ff;
   color: #ffffff;
 }
 
@@ -684,21 +961,136 @@ export default {
 /* NOT STARRED — outlined gray like other icons */
 .star-normal {
   color: var(--text-secondary, #666);
-  font-variation-settings:
-    'FILL' 0,
-    'wght' 400,
-    'GRAD' 0,
-    'opsz' 24;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
 }
 
 /* STARRED — filled in app primary color */
 .star-filled {
-  color: #6C63FF;
-  font-variation-settings:
-    'FILL' 1,
-    'wght' 400,
-    'GRAD' 0,
-    'opsz' 24;
+  color: #6c63ff;
+  font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+.label-menu-wrapper {
+  position: relative;
+}
+
+/* Small dropdown under the label button */
+.label-menu-popover {
+  position: absolute;
+  top: 110%;
+  right: 0;
+  background: #ffffff;
+  border-radius: 10px;
+  width: 260px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  padding: 0.75rem 0.9rem 0.8rem;
+  z-index: 20;
+  font-size: 0.9rem;
+}
+
+.label-menu-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary, #111827);
+}
+
+.label-menu-status,
+.label-menu-empty {
+  font-size: 0.82rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.label-menu-error {
+  font-size: 0.82rem;
+  color: var(--danger-color, #e53935);
+  margin-bottom: 0.4rem;
+}
+
+/* List */
+.label-menu-list {
+  list-style: none;
+  margin: 0.2rem 0 0.6rem;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.label-menu-row + .label-menu-row {
+  margin-top: 0.15rem;
+}
+
+.label-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.25rem 0.1rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.label-checkbox-row:hover {
+  background-color: rgba(148, 163, 184, 0.15);
+}
+
+.label-checkbox-row input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+}
+
+.label-name {
+  flex: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+/* Footer buttons */
+.label-menu-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.label-btn {
+  font-size: 0.85rem;
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease,
+    border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.label-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Cancel = subtle text button */
+.label-btn-cancel {
+  background-color: transparent;
+  color: var(--text-secondary, #6b7280);
+  border-color: transparent;
+}
+
+.label-btn-cancel:hover:not(:disabled) {
+  background-color: rgba(148, 163, 184, 0.12);
+}
+
+/* Apply = primary pill button */
+.label-btn-apply {
+  background-color: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.25);
+}
+
+.label-btn-apply:hover:not(:disabled) {
+  background-color: #1d4ed8;
+  border-color: #1d4ed8;
 }
 
 /* Mobile Responsive */

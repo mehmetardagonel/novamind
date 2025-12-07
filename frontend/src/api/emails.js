@@ -1,6 +1,6 @@
 // src/api/emails.js
-import apiClient from './client'
-import { supabase } from '@/database/supabaseClient'
+import apiClient from "./client";
+import { supabase } from "@/database/supabaseClient";
 
 /**
  * ============================================================
@@ -9,21 +9,21 @@ import { supabase } from '@/database/supabaseClient'
  */
 
 async function resolveUserId(explicitUserId) {
-  if (explicitUserId) return explicitUserId
+  if (explicitUserId) return explicitUserId;
 
   try {
-    const { data, error } = await supabase.auth.getUser()
+    const { data, error } = await supabase.auth.getUser();
 
     if (error) {
-      console.warn('[emails.js] Supabase getUser error:', error)
-      return 'default-user'
+      console.warn("[emails.js] Supabase getUser error:", error);
+      return "default-user";
     }
 
-    const userId = data?.user?.id
-    return userId || 'default-user'
+    const userId = data?.user?.id;
+    return userId || "default-user";
   } catch (e) {
-    console.warn('[emails.js] Supabase getUser threw:', e)
-    return 'default-user'
+    console.warn("[emails.js] Supabase getUser threw:", e);
+    return "default-user";
   }
 }
 
@@ -33,86 +33,111 @@ async function resolveUserId(explicitUserId) {
  * ============================================================
  */
 
-export const fetchEmails = async (folder = 'inbox', userId, filters = {}) => {
-  let endpoint = '/read-email'
-  let useFilters = true
+export const fetchEmails = async (folder = "inbox", userId, filters = {}) => {
+  if (folder.startsWith("label:")) {
+    const labelId = folder.split(":")[1];
+
+    // call custom endpoint
+    const resolvedUserId = await resolveUserId(userId);
+
+    const params = new URLSearchParams();
+
+    if (filters.sender) params.append("sender", filters.sender);
+    if (filters.subject_contains)
+      params.append("subject_contains", filters.subject_contains);
+    if (filters.unread !== undefined)
+      params.append("unread", String(filters.unread));
+
+    const res = await apiClient.get(
+      `/emails/by-label/${encodeURIComponent(labelId)}?${params.toString()}`,
+      {
+        headers: { "X-User-Id": resolvedUserId },
+      }
+    );
+
+    return res.data;
+  }
+  let endpoint = "/read-email";
+  let useFilters = true;
 
   // Folder routing
   switch (folder) {
-    case 'inbox':
-      endpoint = '/read-email'
-      break
+    case "inbox":
+      endpoint = "/read-email";
+      break;
 
-    case 'starred':
-    case 'favorites':
-      endpoint = '/emails/favorites'
-      useFilters = false
-      break
+    case "starred":
+    case "favorites":
+      endpoint = "/emails/favorites";
+      useFilters = false;
+      break;
 
-    case 'sent':
-      endpoint = '/emails/sent'
-      useFilters = false
-      break
+    case "sent":
+      endpoint = "/emails/sent";
+      useFilters = false;
+      break;
 
-    case 'drafts':
-      endpoint = '/emails/drafts'
-      useFilters = false
-      break
+    case "drafts":
+      endpoint = "/emails/drafts";
+      useFilters = false;
+      break;
 
-    case 'important':
-      endpoint = '/emails/important'
-      useFilters = false
-      break
+    case "important":
+      endpoint = "/emails/important";
+      useFilters = false;
+      break;
 
-    case 'spam':
-      endpoint = '/emails/spam'
-      useFilters = false
-      break
+    case "spam":
+      endpoint = "/emails/spam";
+      useFilters = false;
+      break;
 
-    case 'trash':
-      endpoint = '/emails/trash'
-      useFilters = false
-      break
+    case "trash":
+      endpoint = "/emails/trash";
+      useFilters = false;
+      break;
 
     default:
-      endpoint = '/read-email'
-      break
+      endpoint = "/read-email";
+      break;
   }
 
   // If folder supports searching (Inbox), apply filters
   if (useFilters) {
-    const params = new URLSearchParams()
+    const params = new URLSearchParams();
 
-    if (filters.sender) params.append('sender', filters.sender)
-    if (filters.subject_contains) params.append('subject_contains', filters.subject_contains)
+    if (filters.sender) params.append("sender", filters.sender);
+    if (filters.subject_contains)
+      params.append("subject_contains", filters.subject_contains);
 
     // Allow both true and false for unread
-    if (filters.unread !== undefined) params.append('unread', String(filters.unread))
+    if (filters.unread !== undefined)
+      params.append("unread", String(filters.unread));
 
     if (filters.labels && filters.labels.length > 0) {
-      filters.labels.forEach(label => params.append('labels', label))
+      filters.labels.forEach((label) => params.append("labels", label));
     }
 
     if (filters.newer_than_days != null) {
-      params.append('newer_than_days', String(filters.newer_than_days))
+      params.append("newer_than_days", String(filters.newer_than_days));
     }
-    if (filters.since) params.append('since', filters.since)
-    if (filters.until) params.append('until', filters.until)
+    if (filters.since) params.append("since", filters.since);
+    if (filters.until) params.append("until", filters.until);
 
-    const query = params.toString()
+    const query = params.toString();
     if (query) {
-      endpoint += `?${query}`
+      endpoint += `?${query}`;
     }
   }
 
-  const resolvedUserId = await resolveUserId(userId)
+  const resolvedUserId = await resolveUserId(userId);
 
   const response = await apiClient.get(endpoint, {
-    headers: { 'X-User-Id': resolvedUserId },
-  })
+    headers: { "X-User-Id": resolvedUserId },
+  });
 
-  return response.data
-}
+  return response.data;
+};
 
 /**
  * ============================================================
@@ -121,59 +146,58 @@ export const fetchEmails = async (folder = 'inbox', userId, filters = {}) => {
  */
 
 export const getDraftEmails = async (userId) => {
-  const resolvedUserId = await resolveUserId(userId)
-  const res = await apiClient.get('/emails/drafts', {
-    headers: { 'X-User-Id': resolvedUserId },
-  })
-  return res.data
-}
+  const resolvedUserId = await resolveUserId(userId);
+  const res = await apiClient.get("/emails/drafts", {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return res.data;
+};
 
 export const getSentEmails = async (userId) => {
-  const resolvedUserId = await resolveUserId(userId)
-  const res = await apiClient.get('/emails/sent', {
-    headers: { 'X-User-Id': resolvedUserId },
-  })
-  return res.data
-}
+  const resolvedUserId = await resolveUserId(userId);
+  const res = await apiClient.get("/emails/sent", {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return res.data;
+};
 
 export const getStarredEmails = async (userId) => {
-  const resolvedUserId = await resolveUserId(userId)
-  const res = await apiClient.get('/emails/favorites', {
-    headers: { 'X-User-Id': resolvedUserId },
-  })
-  return res.data
-}
+  const resolvedUserId = await resolveUserId(userId);
+  const res = await apiClient.get("/emails/favorites", {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return res.data;
+};
 
 export const getImportantEmails = async (userId) => {
-  const resolvedUserId = await resolveUserId(userId)
-  const res = await apiClient.get('/emails/important', {
-    headers: { 'X-User-Id': resolvedUserId },
-  })
-  return res.data
-}
+  const resolvedUserId = await resolveUserId(userId);
+  const res = await apiClient.get("/emails/important", {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return res.data;
+};
 
 export const getSpamEmails = async (userId) => {
-  const resolvedUserId = await resolveUserId(userId)
-  const res = await apiClient.get('/emails/spam', {
-    headers: { 'X-User-Id': resolvedUserId },
-  })
-  return res.data
-}
+  const resolvedUserId = await resolveUserId(userId);
+  const res = await apiClient.get("/emails/spam", {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return res.data;
+};
 
 export const getTrashEmails = async (userId) => {
-  const resolvedUserId = await resolveUserId(userId)
-  const res = await apiClient.get('/emails/trash', {
-    headers: { 'X-User-Id': resolvedUserId },
-  })
-  return res.data
-}
+  const resolvedUserId = await resolveUserId(userId);
+  const res = await apiClient.get("/emails/trash", {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return res.data;
+};
 
 export const logoutGmail = async () => {
   // No X-User-Id needed, backend /logout is global for now
-  const res = await apiClient.post('/logout')
-  return res.data
-}
-
+  const res = await apiClient.post("/logout");
+  return res.data;
+};
 
 /**
  * ============================================================
@@ -182,36 +206,36 @@ export const logoutGmail = async () => {
  */
 
 export const deleteEmail = async (messageId, userId) => {
-  const resolvedUserId = await resolveUserId(userId)
+  const resolvedUserId = await resolveUserId(userId);
   const res = await apiClient.delete(`/emails/${messageId}`, {
-    headers: { 'X-User-Id': resolvedUserId },
-  })
-  return res.data
-}
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return res.data;
+};
 
 export const restoreEmail = async (messageId, userId) => {
-  const resolvedUserId = await resolveUserId(userId)
+  const resolvedUserId = await resolveUserId(userId);
   const res = await apiClient.post(
     `/emails/${messageId}/restore`,
     {},
     {
-      headers: { 'X-User-Id': resolvedUserId },
+      headers: { "X-User-Id": resolvedUserId },
     }
-  )
-  return res.data
-}
+  );
+  return res.data;
+};
 
 export const setEmailStar = async (messageId, starred, userId) => {
-  const resolvedUserId = await resolveUserId(userId)
+  const resolvedUserId = await resolveUserId(userId);
   const res = await apiClient.post(
     `/emails/${messageId}/star`,
     starred, // ✅ send true/false directly
     {
-      headers: { 'X-User-Id': resolvedUserId },
+      headers: { "X-User-Id": resolvedUserId },
     }
-  )
-  return res.data
-}
+  );
+  return res.data;
+};
 
 /**
  * ============================================================
@@ -220,19 +244,83 @@ export const setEmailStar = async (messageId, starred, userId) => {
  */
 
 export const getTodayEmails = (userId) =>
-  fetchEmails('inbox', userId, { newer_than_days: 1 })
+  fetchEmails("inbox", userId, { newer_than_days: 1 });
 
 export const getUnreadEmails = (userId) =>
-  fetchEmails('inbox', userId, { unread: true })
+  fetchEmails("inbox", userId, { unread: true });
 
-export const getEmailsByLabel = (label, userId) =>
-  fetchEmails('inbox', userId, { labels: [label] })
+export const getEmailsByLabel = async (labelId, userId) => {
+  const resolvedUserId = await resolveUserId(userId);
+
+  const res = await apiClient.get(
+    `/emails/by-label/${encodeURIComponent(labelId)}`,
+    {
+      headers: { "X-User-Id": resolvedUserId },
+    }
+  );
+
+  return res.data;
+};
 
 export const searchBySender = (sender, userId) =>
-  fetchEmails('inbox', userId, { sender })
+  fetchEmails("inbox", userId, { sender });
 
 export const searchBySubject = (subject, userId) =>
-  fetchEmails('inbox', userId, { subject_contains: subject })
+  fetchEmails("inbox", userId, { subject_contains: subject });
+
+// ============================================================
+//   LABEL MANAGEMENT
+// ============================================================
+export async function fetchLabels(userId) {
+  const resolvedUserId = await resolveUserId(userId);
+
+  const res = await apiClient.get("/labels", {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return res.data;
+}
+
+export async function createLabel(name, userId) {
+  const resolvedUserId = await resolveUserId(userId);
+
+  const res = await apiClient.post(
+    "/labels",
+    { name },
+    {
+      headers: { "X-User-Id": resolvedUserId },
+    }
+  );
+  return res.data;
+}
+
+export async function deleteLabel(id, userId) {
+  const resolvedUserId = await resolveUserId(userId);
+
+  await apiClient.delete(`/labels/${encodeURIComponent(id)}`, {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+}
+
+export const updateEmailLabels = async (
+  messageId,
+  { addLabelIds = [], removeLabelIds = [] } = {},
+  userId
+) => {
+  const resolvedUserId = await resolveUserId(userId);
+
+  const res = await apiClient.post(
+    `/emails/${encodeURIComponent(messageId)}/labels`,
+    {
+      add_label_ids: addLabelIds,
+      remove_label_ids: removeLabelIds,
+    },
+    {
+      headers: { "X-User-Id": resolvedUserId },
+    }
+  );
+
+  return res.data;
+};
 
 export default {
   fetchEmails,
@@ -250,5 +338,9 @@ export default {
   getEmailsByLabel,
   searchBySender,
   searchBySubject,
-  logoutGmail,        
-}
+  logoutGmail,
+  fetchLabels,
+  createLabel,
+  deleteLabel,
+  updateEmailLabels,
+};

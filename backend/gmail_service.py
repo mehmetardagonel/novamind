@@ -114,7 +114,7 @@ def _decode_body(payload: dict) -> str:
     return ""
 
 
-def fetch_messages(query: Optional[str] = None, max_results: int = 50) -> List[EmailOut]:
+def fetch_messages(query: Optional[str] = None, max_results: int = 25) -> List[EmailOut]:
     """
     Fetch messages from Gmail matching the search query and map them to EmailOut model.
     Handles pagination to fetch up to max_results emails (Gmail API returns max 500 per request).
@@ -261,7 +261,7 @@ def _to_emailout(msg: dict) -> EmailOut:
         label_ids=msg.get("labelIds", []),
     )
 
-def fetch_messages_by_label(label_id: str, max_results: int = 50, include_spam_trash: bool = False, user_id: str = "") -> list[EmailOut]:
+def fetch_messages_by_label(label_id: str, max_results: int = 25, include_spam_trash: bool = False, user_id: str = "") -> list[EmailOut]:
     """
     List messages by Gmail system/user label.
     System labels include: INBOX, SENT, STARRED, IMPORTANT, SPAM, TRASH, DRAFT, etc.
@@ -288,7 +288,7 @@ def fetch_messages_by_label(label_id: str, max_results: int = 50, include_spam_t
 
     return results
 
-def fetch_drafts(max_results: int = 50, user_id: str = "") -> list[EmailOut]:
+def fetch_drafts(max_results: int = 25, user_id: str = "") -> list[EmailOut]:
     """
     List Drafts. Drafts API is separate from messages.
     """
@@ -398,7 +398,7 @@ def create_draft(to: str, subject: str, body: str) -> dict:
     return draft
 
 
-def get_drafts(max_results: int = 50) -> List[dict]:
+def get_drafts(max_results: int = 25) -> List[dict]:
     """
     Fetch all draft messages from Gmail (label:DRAFT).
     Returns list of draft objects.
@@ -416,7 +416,7 @@ def get_drafts(max_results: int = 50) -> List[dict]:
     return drafts
 
 
-def get_drafts_by_recipient(to_email: str, max_results: int = 50) -> List[dict]:
+def get_drafts_by_recipient(to_email: str, max_results: int = 25) -> List[dict]:
     """
     Get all drafts for a specific recipient email address.
     Returns list of draft objects with full message details.
@@ -710,6 +710,73 @@ def move_mails(email_ids: List[str], target_label_name: str, remove_from_inbox: 
         import logging
         logging.error(f"Error in move_mails: {e}")
         return 0
+    
+# ===== LABEL HELPERS =====
+
+def list_labels(user_id: str = "") -> List[dict]:
+    """
+    List all Gmail labels for the current user.
+    We'll filter to 'user' labels in the FastAPI layer.
+    """
+    service = get_gmail_service(user_id=user_id)
+    resp = service.users().labels().list(userId="me").execute()
+    return resp.get("labels", [])
+
+
+def create_label(name: str, user_id: str = "") -> dict:
+    """
+    Create a new Gmail label with default visibility.
+    """
+    service = get_gmail_service(user_id=user_id)
+
+    body = {
+        "name": name,
+        "labelListVisibility": "labelShow",
+        "messageListVisibility": "show",
+    }
+
+    created = service.users().labels().create(
+        userId="me",
+        body=body,
+    ).execute()
+
+    return created
+
+
+def delete_label(label_id: str, user_id: str = "") -> None:
+    """
+    Delete a Gmail label by id.
+    System labels (INBOX, SENT, etc.) cannot be deleted and
+    will raise an error.
+    """
+    service = get_gmail_service(user_id=user_id)
+    service.users().labels().delete(userId="me", id=label_id).execute()
+
+
+def modify_message_labels(
+    message_id: str,
+    add_label_ids: List[str] | None = None,
+    remove_label_ids: List[str] | None = None,
+    user_id: str = "",
+) -> dict:
+    """
+    Add/remove labels on a specific message.
+    Used by /emails/{message_id}/labels.
+    """
+    service = get_gmail_service(user_id=user_id)
+
+    body = {
+        "addLabelIds": add_label_ids or [],
+        "removeLabelIds": remove_label_ids or [],
+    }
+
+    resp = service.users().messages().modify(
+        userId="me",
+        id=message_id,
+        body=body,
+    ).execute()
+
+    return resp
 
 
 def revoke_gmail_token(token_path: str = "token.json") -> bool:
