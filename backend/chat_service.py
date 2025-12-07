@@ -43,13 +43,13 @@ class ChatService:
         # Initialize Ollama with gpt-oss-20b (20B) - Enhanced reasoning and context
         try:
             self.llm = ChatOllama(
-                model="gpt-oss-20b",
+                model="gpt-oss:20b",
                 base_url="http://localhost:11434",
                 temperature=0.7,
                 num_ctx=4096,  # Context window size
                 num_predict=512,  # Max tokens to generate
             )
-            logger.info("ChatService initialized with Ollama (gpt-oss-20b)")
+            logger.info("ChatService initialized with Ollama (gpt-oss:20b)")
         except Exception as e:
             logger.error(f"Failed to initialize Ollama: {e}")
             raise ValueError(

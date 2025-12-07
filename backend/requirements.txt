@@ -58,6 +58,7 @@ supabase==2.23.3
 # AI & LangChain
 langchain==0.3.13
 langchain-ollama==0.2.0
+langchain-google-genai>=2.0.0
 
 # ML Classification
 scikit-learn==1.6.1

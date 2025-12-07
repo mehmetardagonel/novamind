@@ -97,7 +97,7 @@ if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
 fi
 
 # Check/Pull Model
-REQUIRED_MODEL="gpt-oss-20b"
+REQUIRED_MODEL="gpt-oss:20b"
 # List models and check if required model exists
 if ! ollama list | grep -q "$REQUIRED_MODEL"; then
     print_info "Model $REQUIRED_MODEL not found. Pulling..."
