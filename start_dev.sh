@@ -73,6 +73,41 @@ fi
 print_success "Selected ports: Backend=$BACKEND_PORT, Frontend=$FRONTEND_PORT"
 
 # ========================================
+# OLLAMA SETUP (Open-Source LLM)
+# ========================================
+
+print_info "Checking Ollama status..."
+
+# Check if Ollama is installed
+if ! command -v ollama &> /dev/null; then
+    print_error "Ollama is not installed!"
+    print_info "Download and install from: https://ollama.com"
+    print_info "After installation, restart this script."
+    exit 1
+fi
+
+# Check if Ollama is running
+if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+    print_info "Ollama not running. Starting Ollama..."
+    # Start Ollama server in background
+    ollama serve > "$SCRIPT_DIR/ollama.log" 2>&1 &
+    OLLAMA_PID=$!
+    print_success "Ollama started (PID: $OLLAMA_PID)"
+    sleep 5 # Wait for startup
+fi
+
+# Check/Pull Model
+REQUIRED_MODEL="gpt-oss-20b"
+# List models and check if required model exists
+if ! ollama list | grep -q "$REQUIRED_MODEL"; then
+    print_info "Model $REQUIRED_MODEL not found. Pulling..."
+    ollama pull $REQUIRED_MODEL
+    print_success "Model $REQUIRED_MODEL pulled"
+else
+    print_success "Model $REQUIRED_MODEL found"
+fi
+
+# ========================================
 # BACKEND SETUP
 # ========================================
 

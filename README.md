@@ -1,6 +1,6 @@
 # NovaMind AI Email Assistant
 
-NovaMind is an intelligent email management assistant powered by Google Gemini AI, featuring a real-time chat interface for managing Gmail through natural language.
+NovaMind is an intelligent email management assistant powered by open-source LLMs via Ollama, featuring a real-time chat interface for managing Gmail through natural language.
 
 ## Quick Start
 
@@ -147,20 +147,26 @@ npm install
 
 ## Tech Stack
 
-- **Backend**: FastAPI (Python 3.12), LangChain, Google Gemini API
+- **Backend**: FastAPI (Python 3.12), LangChain, Ollama (gpt-oss-20b)
 - **Frontend**: Vue 3, Vite, Pinia
 - **Database/Auth**: Supabase
 - **Email**: Gmail API with OAuth2
+- **LLM**: Ollama with gpt-oss-20b open-source model (20B)
 - **ML Models**: scikit-learn, SentenceTransformers, TF-IDF
 
 ## Configuration
 
 Backend environment variables are already configured in `backend/.env`. The key configurations include:
-- `GEMINI_API_KEY`: Google Gemini AI API key
 - `GOOGLE_CLIENT_ID`: Google OAuth client ID
 - `GOOGLE_CLIENT_SECRET`: Google OAuth client secret
 - `SUPABASE_URL`: Supabase project URL
 - `SUPABASE_KEY`: Supabase anonymous key
+
+**Ollama Configuration:**
+- Ollama runs on port 11434 (auto-started by start_dev.sh)
+- Model: gpt-oss-20b (automatically pulled on first run)
+- Requires ~12GB disk space for the model
+- Recommended: 16GB+ RAM for optimal performance
 
 ## Project Structure
 

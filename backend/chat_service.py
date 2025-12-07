@@ -6,7 +6,7 @@ os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 import json
 import logging
 from datetime import datetime
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 from langchain.tools import Tool
 from langchain.agents import create_react_agent, AgentExecutor
 from ml_service import get_classifier
@@ -40,18 +40,22 @@ from email_tools import (
 
 class ChatService:
     def __init__(self):
-        # Gemini API key'i al
-        api_key = os.getenv("GEMINI_API_KEY")
-
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY not found! Check your .env file.")
-
-        # Gemini modeli oluştur
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash-lite",
-            google_api_key=api_key,
-            temperature=0.7,
-        )
+        # Initialize Ollama with gpt-oss-20b (20B) - Enhanced reasoning and context
+        try:
+            self.llm = ChatOllama(
+                model="gpt-oss-20b",
+                base_url="http://localhost:11434",
+                temperature=0.7,
+                num_ctx=4096,  # Context window size
+                num_predict=512,  # Max tokens to generate
+            )
+            logger.info("ChatService initialized with Ollama (gpt-oss-20b)")
+        except Exception as e:
+            logger.error(f"Failed to initialize Ollama: {e}")
+            raise ValueError(
+                "Failed to connect to Ollama. "
+                "Ensure Ollama is running: 'ollama serve' or start Ollama app"
+            )
 
         # Draft selection state - track pending draft selections
         self.pending_selection = None  # {"drafts": [...], "operation": "send", "to_email": "..."}
@@ -435,7 +439,7 @@ Thought:{agent_scratchpad}"""
             return {"error": f"Failed to update draft: {str(e)}"}
 
     def _smart_enhance_body_with_instruction(self, draft_id: str, instruction: str) -> str:
-        """Use Gemini to intelligently update draft body based on user instruction"""
+        """Use LLM to intelligently update draft body based on user instruction"""
         try:
             draft = get_draft_by_id(draft_id)
             if not draft:
@@ -481,7 +485,7 @@ Your task:
 
 IMPORTANT: Return the FULL email body (greeting + content + closing), not just the modified part."""
 
-            logger.info(f"Sending request to Gemini for body enhancement (Draft ID: {draft_id})...")
+            logger.info(f"Sending request to LLM for body enhancement (Draft ID: {draft_id})...")
             response = self.llm.invoke(enhancement_prompt)
 
             if hasattr(response, 'content'):
@@ -490,13 +494,13 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                 enhanced_text = str(response).strip()
 
             if not enhanced_text:
-                logger.warning(f"Gemini returned empty response for draft {draft_id}")
+                logger.warning(f"LLM returned empty response for draft {draft_id}")
                 return instruction
 
             return enhanced_text
 
         except Exception as e:
-            logger.warning(f"Gemini body enhancement failed for draft {draft_id}: {str(e)}")
+            logger.warning(f"LLM body enhancement failed for draft {draft_id}: {str(e)}")
             return instruction
 
     def _extract_json_from_response(self, response_text: str) -> str:
@@ -723,7 +727,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                             'send draft', 'delete draft']
             is_draft_related = any(kw.lower() in message_stripped.lower() for kw in draft_keywords)
 
-            logger.info("Sending request to Gemini Agent...")
+            logger.info("Sending request to LLM Agent...")
             response = self.agent_executor.invoke({"input": user_message})
             output = response.get("output", "No response generated")
 
