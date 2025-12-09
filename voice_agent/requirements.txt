@@ -1,0 +1,6 @@
+vosk
+sounddevice
+httpx
+python-dotenv
+numpy
+

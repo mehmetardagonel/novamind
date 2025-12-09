@@ -1,8 +1,0 @@
-# LiveKit Packages
-livekit-agents
-livekit-plugins-google
-livekit-plugins-deepgram
-livekit-plugins-silero
-
-# Dotenv package (Required for using .env files)
-python-dotenv
