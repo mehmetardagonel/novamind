@@ -205,7 +205,7 @@ export const setEmailStar = async (messageId, starred, userId) => {
   const resolvedUserId = await resolveUserId(userId)
   const res = await apiClient.post(
     `/emails/${messageId}/star`,
-    { starred },
+    starred, // ✅ send true/false directly
     {
       headers: { 'X-User-Id': resolvedUserId },
     }

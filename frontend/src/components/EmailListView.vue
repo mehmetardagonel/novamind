@@ -31,14 +31,14 @@
       <div class="email-list-panel" :class="{ 'hide-on-mobile': selectedEmail, 'full-width': !selectedEmail }">
         <div class="email-list">
           <div
-            v-for="(email, index) in emails"
-            :key="index"
-            class="email-item"
-            :class="{ 
-              'unread': email.unread, 
-              'selected': email === selectedEmail 
-            }" 
-            @click="selectEmail(email)"
+          v-for="(email, index) in emails"
+          :key="index"
+          class="email-item"
+          :class="{
+            unread: email.isUnread,
+            selected: email === selectedEmail
+          }"
+          @click="!isTrash && selectEmail(email)"
           >
             <div class="email-header">
               <div class="sender-with-label">
@@ -53,6 +53,15 @@
             </div>
             <div class="email-subject">{{ email.subject }}</div>
             <div class="email-preview">{{ getPreview(email.body) }}</div>
+            <div class="email-actions-bottom" v-if="isTrash">
+            <button
+            class="icon-action-btn restore-btn"
+            title="Restore email"
+            @click.stop="handleRestore(email)"
+            >
+            <span class="material-symbols-outlined">restore_from_trash</span>
+            </button>
+            </div>
           </div>
         </div>
         </div>
@@ -67,9 +76,21 @@
           <button class="icon-action-btn" title="Add Label">
             <span class="material-symbols-outlined">label</span>
           </button>
-          
-          <button class="icon-action-btn" title="Favorite">
-            <span class="material-symbols-outlined">star</span>
+
+          <button
+          class="icon-action-btn"
+          v-if="!isTrash && selectedEmail"
+          @click.stop="handleFavorite(selectedEmail)"
+          title="Star"
+          >
+          <span
+          :class="[
+          'material-symbols-outlined star-toggle',
+          selectedEmail.isStarred ? 'star-filled' : 'star-normal'
+          ]"
+          >
+          star
+          </span>
           </button>
           
           <button class="icon-action-btn" title="Delete">
@@ -102,8 +123,8 @@
 </template>
 
 <script>
-import { onMounted, ref, watch } from 'vue' // Removed 'computed'
-import { fetchEmails } from '../api/emails' 
+import { onMounted, ref, watch, computed } from 'vue'
+import { fetchEmails, setEmailStar, deleteEmail, restoreEmail } from '../api/emails'
 
 export default {
   name: "EmailListView",
@@ -115,135 +136,252 @@ export default {
     }
     // Removed emailsPerPage prop
   },
-  setup(props) {
-    const emails = ref([])
-    const loading = ref(false)
-    const errorMessage = ref('')
-    const selectedEmail = ref(null)
-    const authUrl = ref('')
-    
-    // Removed currentPage, totalPages, paginatedEmails, displayedPages
-
-    const loadEmails = async () => {
-      loading.value = true
-      errorMessage.value = ''
-      emails.value = []
-      selectedEmail.value = null
-      authUrl.value = ''
-
-      try {
-        console.log(`Fetching emails for folder: ${props.folder}`)
-        const emailList = await fetchEmails(props.folder) 
-        emails.value = emailList
-      } catch (error) {
-        console.error(`Error fetching ${props.folder} emails:`, error)
-        
-        if (error.response && error.response.status === 401 && error.response.data.auth_url) {
-            authUrl.value = error.response.data.auth_url
-            errorMessage.value = ''
-        } else {
-            errorMessage.value = error.response?.data?.detail 
-                               || error.message 
-                               || 'Failed to load emails. Please ensure Gmail API is configured.'
+    setup(props) {
+      const emails = ref([])
+      const loading = ref(false)
+      const errorMessage = ref('')
+      const selectedEmail = ref(null)
+      const authUrl = ref('')
+      const isTrash = computed(() => props.folder === 'trash')
+  
+      const MAX_RETRIES = 2
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  
+      const loadEmails = async () => {
+        loading.value = true
+        errorMessage.value = ''
+        emails.value = []
+        selectedEmail.value = null
+        authUrl.value = ''
+  
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            console.log(`Fetching emails for folder: ${props.folder} (attempt ${attempt})`)
+            const emailList = await fetchEmails(props.folder)
+  
+            emails.value = emailList.map(email => {
+            const labels =
+            email.label_ids ||
+            email.labelIds ||
+            []
+  
+            const isStarred = Array.isArray(labels) && labels.includes('STARRED')
+            const isUnread = Array.isArray(labels) && labels.includes("UNREAD")
+  
+            return {
+            ...email,
+            isStarred,
+            isUnread,
+            }
+          })
+  
+            loading.value = false
+            return
+          } catch (error) {
+            console.error(`Error fetching ${props.folder} emails (attempt ${attempt}):`, error)
+            const hasResponse = !!error.response
+  
+            if (!hasResponse) {
+              if (attempt < MAX_RETRIES) {
+                console.warn('Network/backend error, retrying...')
+                await sleep(1000)
+                continue
+              }
+  
+              errorMessage.value =
+                'Cannot reach the backend API. Make sure the FastAPI server is running.'
+              loading.value = false
+              return
+            }
+  
+            if (error.response.status === 401 && error.response.data.auth_url) {
+              authUrl.value = error.response.data.auth_url
+              errorMessage.value = ''
+              loading.value = false
+              return
+            }
+  
+            errorMessage.value =
+              error.response?.data?.detail ||
+              error.message ||
+              'Failed to load emails. Please ensure Gmail API is configured.'
+            loading.value = false
+              return
+          }
         }
-      } finally {
+  
         loading.value = false
       }
-    }
-    
-    const authenticate = () => {
-      if (authUrl.value) {
-        // Store current path before redirecting to OAuth
-        sessionStorage.setItem('oauth_redirect_path', window.location.pathname)
-        window.location.href = authUrl.value
-      } else {
-        errorMessage.value = "Authentication URL is missing. Please try reloading the page."
+  
+      const authenticate = () => {
+        if (authUrl.value) {
+          sessionStorage.setItem('oauth_redirect_path', window.location.pathname)
+          window.location.href = authUrl.value
+        } else {
+          errorMessage.value = "Authentication URL is missing. Please try reloading the page."
+        }
       }
-    }
-
-    onMounted(() => {
+  
+      // ⭐ FAVORITE / UNFAVORITE TOGGLE
+      const handleFavorite = async (email) => {
+        if (!email || !email.message_id) return
+        if (isTrash.value) return // safety: no starring in Trash
+  
+        const newValue = !email.isStarred
+  
+        try {
+          await setEmailStar(email.message_id, newValue)
+          email.isStarred = newValue
+  
+          const isFavoritesFolder =
+            props.folder === 'favorites' || props.folder === 'starred'
+  
+          if (!newValue && isFavoritesFolder) {
+            emails.value = emails.value.filter(
+              (e) => e.message_id !== email.message_id
+            )
+  
+            if (
+              selectedEmail.value &&
+              selectedEmail.value.message_id === email.message_id
+            ) {
+              selectedEmail.value = null
+            }
+          }
+        } catch (error) {
+          console.error('Failed to update favorite:', error)
+          errorMessage.value =
+            error.response?.data?.detail ||
+            error.message ||
+            'Failed to update favorite.'
+        }
+      }
+  
+      const handleDelete = async () => {
+        if (!selectedEmail.value) return
+  
+        try {
+          const messageId = selectedEmail.value.message_id
+          await deleteEmail(messageId)
+  
+          emails.value = emails.value.filter(
+            email => email.message_id !== messageId
+          )
+          selectedEmail.value = null
+        } catch (error) {
+          console.error('Failed to delete email:', error)
+          errorMessage.value = error.response?.data?.detail
+            || error.message
+            || 'Failed to delete email.'
+        }
+      }
+  
+      const handleRestore = async (email) => {
+        try {
+          const messageId = email.message_id
+          await restoreEmail(messageId)
+  
+          emails.value = emails.value.filter(e => e.message_id !== messageId)
+  
+          if (selectedEmail.value && selectedEmail.value.message_id === email.message_id) {
+            selectedEmail.value = null
+          }
+        } catch (error) {
+          console.error('Failed to restore email:', error)
+          errorMessage.value =
+            error.response?.data?.detail ||
+            error.message ||
+            'Failed to restore email.'
+        }
+      }
+  
+      onMounted(() => {
         loadEmails()
-    })
-
-    watch(() => props.folder, () => {
-      loadEmails()
-    })
-
-    const selectEmail = (email) => {
-      selectedEmail.value = email
-    }
-
-    const closeEmail = () => {
-      selectedEmail.value = null
-    }
-
-    const formatDate = (dateString) => {
-      if (!dateString) return ''
-      const date = new Date(dateString)
-      const today = new Date()
-      if (date.toDateString() === today.toDateString()) {
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      }
-      const yesterday = new Date(today)
-      yesterday.setDate(yesterday.getDate() - 1)
-      if (date.toDateString() === yesterday.toDateString()) {
-        return 'Yesterday'
-      }
-      return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
-    }
-
-    const formatFullDate = (dateString) => {
-      if (!dateString) return ''
-      const date = new Date(dateString)
-      return date.toLocaleString([], { 
-        weekday: 'short',
-        year: 'numeric', 
-        month: 'short', 
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
       })
-    }
-
-    const getPreview = (body) => {
-      if (!body) return ''
-      const plainText = body.replace(/<[^>]*>/g, '') 
-      return plainText.substring(0, 100) + (plainText.length > 100 ? '...' : '')
-    }
-
-    const sanitizeHtml = (html) => {
-      if (!html) return ''
-      return html
-    }
-
-    const getLabelText = (prediction) => {
-      const labels = {
-        'spam': 'Spam',
-        'ham': 'Normal',
-        'important': 'Important'
+  
+      watch(() => props.folder, () => {
+        loadEmails()
+      })
+  
+      const selectEmail = (email) => {
+        selectedEmail.value = email
       }
-      return labels[prediction] || prediction
-    }
-
-    return {
-      emails,
-      loading,
-      errorMessage,
-      selectedEmail,
-      authUrl,
-      selectEmail,
-      closeEmail,
-      formatDate,
-      formatFullDate,
-      getPreview,
-      sanitizeHtml,
-      getLabelText,
-      loadEmails,
-      authenticate
-    }
-  }
-}
+  
+      const closeEmail = () => {
+        selectedEmail.value = null
+      }
+  
+      const formatDate = (dateString) => {
+        if (!dateString) return ''
+        const date = new Date(dateString)
+        const today = new Date()
+        if (date.toDateString() === today.toDateString()) {
+          return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+        const yesterday = new Date(today)
+        yesterday.setDate(yesterday.getDate() - 1)
+        if (date.toDateString() === yesterday.toDateString()) {
+          return 'Yesterday'
+        }
+        return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+      }
+  
+      const formatFullDate = (dateString) => {
+        if (!dateString) return ''
+        const date = new Date(dateString)
+        return date.toLocaleString([], {
+          weekday: 'short',
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+      }
+  
+      const getPreview = (body) => {
+        if (!body) return ''
+        const plainText = body.replace(/<[^>]*>/g, '')
+        return plainText.substring(0, 100) + (plainText.length > 100 ? '...' : '')
+      }
+  
+      const sanitizeHtml = (html) => {
+        if (!html) return ''
+        return html
+      }
+  
+      const getLabelText = (prediction) => {
+        const labels = {
+          'spam': 'Spam',
+          'ham': 'Normal',
+          'important': 'Important'
+        }
+        return labels[prediction] || prediction
+      }
+  
+      return {
+        emails,
+        loading,
+        errorMessage,
+        selectedEmail,
+        authUrl,
+        selectEmail,
+        closeEmail,
+        handleFavorite,
+        handleDelete,
+        handleRestore,
+        isTrash,
+        formatDate,
+        formatFullDate,
+        getPreview,
+        sanitizeHtml,
+        getLabelText,
+        loadEmails,
+        authenticate
+      }
+    }}
 </script>
+
 
 <style scoped>
 /* Standard Loading & Error Styles */
@@ -275,23 +413,29 @@ export default {
 .auth-prompt p { color: #0050b3; }
 
 .btn-primary {
-    background-color: #4285F4;
-    color: white;
-    border: none;
-    padding: 12px 25px;
-    cursor: pointer;
-    border-radius: 4px;
-    font-size: 1rem;
-    margin-top: 1rem;
-    transition: background-color 0.2s;
+  background-color: #4285F4;
+  color: white;
+  border: none;
+  padding: 12px 25px;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 1rem;
+  margin-top: 1rem;
+  transition: background-color 0.2s;
 }
 .btn-primary:hover {
-    background-color: #337ae2;
+  background-color: #337ae2;
 }
 
 .error-box h3 { margin-top: 0; color: #d46b08; font-weight: 700; }
 .error-box p { color: #d48806; }
-.setup-instructions { margin-top: 1rem; padding: 1rem; background-color: #fff; border-radius: 4px; border: 1px solid var(--light-border-color); }
+.setup-instructions {
+  margin-top: 1rem;
+  padding: 1rem;
+  background-color: #fff;
+  border-radius: 4px;
+  border: 1px solid var(--light-border-color);
+}
 .setup-instructions ol { margin: 0.5rem 0; padding-left: 1.5rem; }
 
 /* Email Container */
@@ -315,8 +459,7 @@ export default {
   border-right: none;
 }
 
-/* IMPORTANT: This ensures the list scrolls if there are too many items
-*/
+/* IMPORTANT: This ensures the list scrolls if there are too many items */
 .email-list {
   flex: 1;
   overflow-y: auto;
@@ -337,11 +480,14 @@ export default {
   background-color: var(--read-email-bg, #f7f8fa);
   border: none;
   border-bottom: 1px solid var(--border-color, #e0e0e0);
-  padding: 1rem 1.25rem; 
+  padding: 1rem 1.25rem;
   cursor: pointer;
   transition: all 0.2s ease;
   box-shadow: none;
-  border-left: 4px solid transparent; 
+  border-left: 4px solid transparent;
+  position: relative;          /* 🔹 needed for bottom-right restore */
+  padding-right: 4.5rem;       /* 🔹 leave space for restore button */
+  padding-bottom: 1.75rem;     /* 🔹 so preview doesn’t overlap button */
 }
 
 .email-item.unread {
@@ -357,7 +503,7 @@ export default {
 }
 
 .email-item.selected {
-  background-color: var(--hover-bg, #f0f4f8); 
+  background-color: var(--hover-bg, #f0f4f8);
   border-left: 4px solid var(--primary-color, #6C63FF);
 }
 
@@ -416,7 +562,7 @@ export default {
 }
 
 .email-subject {
-  font-weight: 500; 
+  font-weight: 500;
   font-size: 1rem;
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
@@ -444,6 +590,7 @@ export default {
   font-weight: 700;
   color: var(--text-primary, #333);
 }
+
 .email-item:not(.selected):hover {
   background-color: var(--hover-bg, #f0f4f8);
   cursor: pointer;
@@ -453,16 +600,6 @@ export default {
 /* REMOVED: All .pagination related styles */
 
 /* Email Detail Styles */
-.email-detail-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--border-color, #e0e0e0);
-  background-color: var(--content-bg, #ffffff);
-}
-
-/* Email Detail Header Styles */
 .email-detail-header {
   display: flex;
   justify-content: space-between;
@@ -487,9 +624,9 @@ export default {
   padding: 0;
   border: 1px solid var(--border-color, #e0e0e0);
   background-color: var(--content-bg, #ffffff);
-  border-radius: 4px; /* Keep your existing rounded look, or use 50% for circles */
+  border-radius: 4px;
   cursor: pointer;
-  color: var(--text-secondary, #666); /* Icon color */
+  color: var(--text-secondary, #666);
   transition: all 0.2s ease;
 }
 
@@ -501,19 +638,13 @@ export default {
 
 /* Material Symbol Font Size Settings */
 .material-symbols-outlined {
-  font-size: 20px; /* Adjust size of the icon inside the button */
+  font-size: 20px;
   font-variation-settings:
-  'FILL' 0,
-  'wght' 400,
-  'GRAD' 0,
-  'opsz' 24
+    'FILL' 0,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
 }
-
-.email-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
 
 .email-detail-content {
   flex: 1;
@@ -560,14 +691,74 @@ export default {
   color: var(--text-primary, #333);
 }
 
+/* 🔹 Bottom-right restore button */
+.restore-btn {
+  position: absolute;
+  bottom: 0.75rem;
+  right: 0.75rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.15s ease,
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+/* Show restore button when the row is hovered (desktop) */
+.email-item:hover .restore-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Hover: turn blue with white icon */
+.restore-btn:hover {
+  background-color: #6C63FF;
+  border-color: #6C63FF;
+  color: #ffffff;
+}
+
+.restore-btn:hover .material-symbols-outlined {
+  color: #ffffff;
+}
+
+/* Star icon in detail header */
+.star-toggle {
+  font-size: 22px;
+  transition: color 0.15s ease, font-variation-settings 0.15s ease;
+}
+
+/* NOT STARRED — outlined gray like other icons */
+.star-normal {
+  color: var(--text-secondary, #666);
+  font-variation-settings:
+    'FILL' 0,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
+}
+
+/* STARRED — filled in app primary color */
+.star-filled {
+  color: #6C63FF;
+  font-variation-settings:
+    'FILL' 1,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
+}
+
 /* Mobile Responsive */
 @media (max-width: 768px) {
- .email-container {
-  display: flex;
-  height: calc(100vh - 100px); 
-  gap: 0;
-  overflow: hidden;
-}
+  .email-container {
+    display: flex;
+    height: calc(100vh - 100px);
+    gap: 0;
+    overflow: hidden;
+  }
 
   .email-list-panel {
     flex: 0 0 auto;
@@ -591,6 +782,15 @@ export default {
     right: 0;
     bottom: 0;
     z-index: 100;
+  }
+
+  /* 🔹 On mobile: keep restore button visible and inline (no absolute) */
+  .restore-btn {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+    margin-top: 0.5rem;
+    align-self: flex-start;
   }
 }
 </style>

@@ -115,6 +115,12 @@ async def get_emails(filters: EmailFilters = Depends()):
     logger.info(f"Endpoint called: /read-email with filters: {filters}")
     try:
         query = filters.to_gmail_query()
+
+        if query:
+            query = f"in:inbox {query}"
+        else:
+            query = "in:inbox"
+
         emails = fetch_messages(query=query)
 
         # Apply ML classification to all emails
