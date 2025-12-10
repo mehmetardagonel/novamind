@@ -13,7 +13,13 @@ from dotenv import load_dotenv
 from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel
 
-from models import EmailOut, EmailRequest
+from models import (
+    EmailOut,
+    EmailRequest,
+    LabelOut,
+    LabelCreate,
+    LabelUpdateRequest,
+)
 from filters import EmailFilters
 # Import our refactored service and its config
 from gmail_service import (
@@ -26,6 +32,10 @@ from gmail_service import (
     untrash_message,
     set_star,
     revoke_gmail_token,
+    list_labels as gmail_list_labels,
+    create_label as gmail_create_label,
+    delete_label as gmail_delete_label,
+    modify_message_labels,
     CLIENT_CONFIG,
     SCOPES
 )
@@ -419,6 +429,106 @@ async def star_email(message_id: str, starred: bool = Body(True), user_id: str =
         resp = set_star(message_id, starred, user_id=user_id)
         return {
             "status": "starred" if starred else "unstarred",
+            "message_id": resp.get("id", message_id),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/emails/by-label/{label_id}", response_model=List[EmailOut])
+async def list_by_label(
+    label_id: str,
+    user_id: str = Header(..., alias="X-User-Id"),
+):
+    """
+    Retrieve emails for a specific Gmail label (by label ID, e.g. 'Label_20').
+    This returns all messages having that label, like Gmail's label view.
+    """
+    try:
+        return fetch_messages_by_label(label_id, max_results=50, user_id=user_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/labels", response_model=List[LabelOut])
+async def list_user_labels(user_id: str = Header(..., alias="X-User-Id")):
+    """
+    Return only user-created labels (not system labels like INBOX, SENT).
+    """
+    try:
+        raw_labels = gmail_list_labels(user_id=user_id)
+
+        result: List[LabelOut] = []
+        for lab in raw_labels:
+            # Gmail returns 'type': 'system' | 'user'
+            if lab.get("type") == "user":
+                result.append(
+                    LabelOut(
+                        id=lab.get("id"),
+                        name=lab.get("name", ""),
+                        type=lab.get("type"),
+                    )
+                )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/labels", response_model=LabelOut)
+async def create_user_label(
+    payload: LabelCreate,
+    user_id: str = Header(..., alias="X-User-Id"),
+):
+    """
+    Create a new user label in Gmail.
+    """
+    try:
+        created = gmail_create_label(payload.name, user_id=user_id)
+        return LabelOut(
+            id=created.get("id"),
+            name=created.get("name", payload.name),
+            type=created.get("type"),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/labels/{label_id}", status_code=204)
+async def delete_user_label(
+    label_id: str,
+    user_id: str = Header(..., alias="X-User-Id"),
+):
+    """
+    Delete a user label by its id.
+    """
+    try:
+        gmail_delete_label(label_id, user_id=user_id)
+        return JSONResponse(status_code=204, content=None)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/emails/{message_id}/labels")
+async def update_email_labels(
+    message_id: str,
+    payload: LabelUpdateRequest,
+    user_id: str = Header(..., alias="X-User-Id"),
+):
+    """
+    Add/remove labels on a specific email.
+
+    Body example:
+    {
+      "add_label_ids": ["Label_123"],
+      "remove_label_ids": ["Label_456"]
+    }
+    """
+    try:
+        resp = modify_message_labels(
+            message_id=message_id,
+            add_label_ids=payload.add_label_ids,
+            remove_label_ids=payload.remove_label_ids,
+            user_id=user_id,
+        )
+        return {
+            "status": "ok",
             "message_id": resp.get("id", message_id),
         }
     except Exception as e:

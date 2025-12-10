@@ -9,20 +9,31 @@
     <div class="content-wrapper">
       <main class="login-container">
         <div class="login-header">
-          <a @click.prevent="goToHome" class="header-logo-wrapper logo-link" href="/">
-            
+          <a
+            @click.prevent="goToHome"
+            class="header-logo-wrapper logo-link"
+            href="/"
+          >
             <div class="logo-icon-container">
               <div class="logo-svg novamind-logo">
-                <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                <svg
+                  fill="none"
+                  viewBox="0 0 48 48"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
                   <path
                     d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
                     fill="currentColor"
                   ></path>
                 </svg>
               </div>
-              
+
               <div class="logo-svg home-icon-overlay">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
                   <path
                     d="M10 20V14H14V20H19V12H22L12 3L2 12H5V20H10Z"
                     stroke="currentColor"
@@ -33,7 +44,7 @@
                 </svg>
               </div>
             </div>
-            
+
             <h1 class="logo-text">Novamind.AI</h1>
           </a>
           <p class="header-subtitle">Your Personal AI Email Assistant</p>
@@ -75,11 +86,13 @@
                   @click.prevent="togglePasswordVisibility"
                 >
                   <span class="material-symbols-outlined icon-adjust">
-                    {{ passwordVisible ? 'visibility_off' : 'visibility' }}
+                    {{ passwordVisible ? "visibility_off" : "visibility" }}
                   </span>
                 </button>
               </div>
-              <p v-if="passwordError" class="error-input">{{ passwordError }}</p>
+              <p v-if="passwordError" class="error-input">
+                {{ passwordError }}
+              </p>
             </label>
           </div>
 
@@ -101,11 +114,15 @@
                   @click.prevent="toggleConfirmPasswordVisibility"
                 >
                   <span class="material-symbols-outlined icon-adjust">
-                    {{ confirmPasswordVisible ? 'visibility_off' : 'visibility' }}
+                    {{
+                      confirmPasswordVisible ? "visibility_off" : "visibility"
+                    }}
                   </span>
                 </button>
               </div>
-              <p v-if="confirmPasswordError" class="error-input">{{ confirmPasswordError }}</p>
+              <p v-if="confirmPasswordError" class="error-input">
+                {{ confirmPasswordError }}
+              </p>
             </label>
           </div>
 
@@ -115,16 +132,20 @@
             :disabled="loading"
             type="submit"
           >
-            {{ loading ? 'Creating Account...' : 'Sign Up' }}
+            {{ loading ? "Creating Account..." : "Sign Up" }}
           </button>
         </form>
 
         <div class="signup-link-wrapper">
           <p>
             Already have an account?
-            <a @click.prevent="goToLogin" class="link-button" href="#">Log In</a>
+            <a @click.prevent="goToLogin" class="link-button" href="#"
+              >Log In</a
+            >
           </p>
-          <p v-if="successMessage" class="success-message">{{ successMessage }}</p>
+          <p v-if="successMessage" class="success-message">
+            {{ successMessage }}
+          </p>
         </div>
       </main>
     </div>
@@ -132,76 +153,76 @@
 </template>
 
 <script>
-import BackgroundImage from '@/assets/background.png';
-import { supabase } from '@/database/supabaseClient'
+import BackgroundImage from "@/assets/background.png";
+import { supabase } from "@/database/supabaseClient";
 
 export default {
   data() {
     return {
       backgroundImageUrl: BackgroundImage,
-      email: '',
-      password: '',
-      confirmPassword: '',
+      email: "",
+      password: "",
+      confirmPassword: "",
 
-      successMessage: '',
+      successMessage: "",
       loading: false,
 
-      emailError: '',
-      passwordError: '',
-      confirmPasswordError: '',
+      emailError: "",
+      passwordError: "",
+      confirmPasswordError: "",
       passwordVisible: false,
       confirmPasswordVisible: false,
-    }
+    };
   },
   methods: {
     // NEW: Home navigation method
     goToHome() {
-        this.$router.push('/home');
+      this.$router.push("/home");
     },
 
     togglePasswordVisibility() {
-      this.passwordVisible = !this.passwordVisible
+      this.passwordVisible = !this.passwordVisible;
     },
     toggleConfirmPasswordVisibility() {
-      this.confirmPasswordVisible = !this.confirmPasswordVisible
+      this.confirmPasswordVisible = !this.confirmPasswordVisible;
     },
 
     async signup() {
       // 1. Reset all errors and success messages
-      this.successMessage = ''
-      this.emailError = ''
-      this.passwordError = ''
-      this.confirmPasswordError = ''
+      this.successMessage = "";
+      this.emailError = "";
+      this.passwordError = "";
+      this.confirmPasswordError = "";
 
-      let hasError = false
+      let hasError = false;
 
       // Append @gmail.com suffix if not present
-      let fullEmail = this.email.trim()
-      if (fullEmail && !fullEmail.includes('@')) {
-        fullEmail = fullEmail + '@gmail.com'
+      let fullEmail = this.email.trim();
+      if (fullEmail && !fullEmail.includes("@")) {
+        fullEmail = fullEmail + "@gmail.com";
       }
 
-      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
       if (!this.email.trim()) {
-        this.emailError = 'Please enter your email!'
-        hasError = true
+        this.emailError = "Please enter your email!";
+        hasError = true;
       } else if (!emailPattern.test(fullEmail)) {
-        this.emailError = 'Please enter a valid email!'
-        hasError = true
+        this.emailError = "Please enter a valid email!";
+        hasError = true;
       }
 
       if (!this.password) {
-        this.passwordError = 'Please enter your password!'
-        hasError = true
+        this.passwordError = "Please enter your password!";
+        hasError = true;
       } else if (this.password.length < 6) {
-        this.passwordError = 'Password must be at least 6 characters!'
-        hasError = true
+        this.passwordError = "Password must be at least 6 characters!";
+        hasError = true;
       }
 
       if (!this.confirmPassword) {
-        this.confirmPasswordError = 'Please confirm your password!'
-        hasError = true
+        this.confirmPasswordError = "Please confirm your password!";
+        hasError = true;
       }
 
       if (
@@ -209,69 +230,73 @@ export default {
         this.confirmPassword &&
         this.password !== this.confirmPassword
       ) {
-        this.passwordError = 'Passwords do not match!'
-        this.confirmPasswordError = 'Passwords do not match!'
-        hasError = true
+        this.passwordError = "Passwords do not match!";
+        this.confirmPasswordError = "Passwords do not match!";
+        hasError = true;
       }
 
       // 2. Stop if validation fails
       if (hasError) {
-        return
+        return;
       }
 
       try {
-        this.loading = true
+        this.loading = true;
 
         const { data, error } = await supabase.auth.signUp({
           email: fullEmail,
           password: this.password,
-        })
+        });
 
         // 3. Check for explicit errors (e.g., password policy violation)
         if (error) {
-          throw error
+          throw error;
         }
 
         // 4. CHECK FOR ALREADY CONFIRMED USER
-        if (data.user && data.user.identities && data.user.identities.length === 0) {
-           this.emailError = 'You already have an account. Please log in.';
-           this.passwordError = '';
-           this.confirmPasswordError = '';
-           return; 
+        if (
+          data.user &&
+          data.user.identities &&
+          data.user.identities.length === 0
+        ) {
+          this.emailError = "You already have an account. Please log in.";
+          this.passwordError = "";
+          this.confirmPasswordError = "";
+          return;
         }
 
-        // 5. CHECK FOR NEW/UNCONFIRMED USER 
+        // 5. CHECK FOR NEW/UNCONFIRMED USER
         if (!data.user) {
-          this.emailError = 'This user already exists. If your account is not verified, check your email.';
+          this.emailError =
+            "This user already exists. If your account is not verified, check your email.";
           return;
         }
 
         // 6. SUCCESS
         this.successMessage =
-          'Account created successfully! Please check your email to verify your account.'
-        console.log('Signup successful', data)
-
+          "Account created successfully! Please check your email to verify your account.";
+        console.log("Signup successful", data);
       } catch (error) {
-        console.error('Signup error:', error)
+        console.error("Signup error:", error);
 
-        const errorMessage = error.message || 'Signup failed. Please try again.'
+        const errorMessage =
+          error.message || "Signup failed. Please try again.";
 
-        if (errorMessage.toLowerCase().includes('password')) {
+        if (errorMessage.toLowerCase().includes("password")) {
           this.passwordError = errorMessage;
         } else {
           this.emailError = errorMessage;
         }
-
       } finally {
-        this.loading = false
+        this.loading = false;
       }
     },
 
     goToLogin() {
-      this.$router.push('/login');
+      this.$router.push("/login");
     },
   },
-}
+};
 </script>
 
 <style>
@@ -290,7 +315,7 @@ export default {
 }
 
 body {
-  font-family: 'Inter', sans-serif;
+  font-family: "Inter", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
@@ -357,83 +382,81 @@ body {
 
 /* The logo-link is the primary interactive area */
 .logo-link {
-    text-decoration: none;
-    cursor: pointer;
-    position: relative; 
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem; 
-    transition: color 0.3s ease;
-    margin-bottom: 0.5rem; 
+  text-decoration: none;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: color 0.3s ease;
+  margin-bottom: 0.5rem;
 }
 
 /* NEW: Container to manage the two layered icons */
 .logo-icon-container {
-    position: relative;
-    width: 2rem;
-    height: 2rem;
+  position: relative;
+  width: 2rem;
+  height: 2rem;
 }
 
 /* Base style for both icons inside the container */
 .logo-svg {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    color: var(--primary-color);
-    transition: opacity 0.3s ease, transform 0.3s ease;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--primary-color);
+  transition: opacity 0.3s ease, transform 0.3s ease;
 }
 
 /* 1. Novamind Logo (Default State) */
 .novamind-logo {
-    opacity: 1; 
-    transform: scale(1); 
-    z-index: 2;
+  opacity: 1;
+  transform: scale(1);
+  z-index: 2;
 }
 
 /* 2. Home Icon (Hidden State) */
 .home-icon-overlay {
-    opacity: 0; 
-    transform: scale(0.5);
-    z-index: 1;
+  opacity: 0;
+  transform: scale(0.5);
+  z-index: 1;
 }
 
 /* The Novamind.AI Text Label (STATIC) */
 .logo-text {
-    font-size: 1.875rem;
-    line-height: 2.25rem;
-    font-weight: 700;
-    letter-spacing: -0.025em;
-    margin: 0;
-    transition: color 0.3s ease;
-    opacity: 1;
-    color: var(--text-primary);
+  font-size: 1.875rem;
+  line-height: 2.25rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  margin: 0;
+  transition: color 0.3s ease;
+  opacity: 1;
+  color: var(--text-primary);
 }
 
 /* --- HOVER EFFECT: The Icon Morph --- */
 
 .logo-link:hover .novamind-logo {
-    opacity: 0;
-    transform: scale(0.5) rotate(-90deg);
+  opacity: 0;
+  transform: scale(0.5) rotate(-90deg);
 }
 
 .logo-link:hover .home-icon-overlay {
-    opacity: 1;
-    transform: scale(1);
-    color: var(--primary-color);
-    filter: 
-      drop-shadow(0 0 5px var(--primary-color)) 
-      drop-shadow(0 0 10px var(--primary-shadow-30));
-    z-index: 3;
+  opacity: 1;
+  transform: scale(1);
+  color: var(--primary-color);
+  filter: drop-shadow(0 0 5px var(--primary-color))
+    drop-shadow(0 0 10px var(--primary-shadow-30));
+  z-index: 3;
 }
 
 .logo-link:hover .logo-text {
-    color: var(--primary-color);
+  color: var(--primary-color);
 }
 /* --- End of Hover Changes --- */
-
 
 .header-subtitle {
   text-align: center;
@@ -486,13 +509,13 @@ body {
 }
 
 /* Input-specific paddings */
-input[placeholder='Email'] {
+input[placeholder="Email"] {
   padding-left: 1rem;
   padding-right: 8rem;
 }
 
-input[placeholder='Password'],
-input[placeholder='Confirm Password'] {
+input[placeholder="Password"],
+input[placeholder="Confirm Password"] {
   padding-left: 1rem;
   padding-right: 3.5rem;
 }
@@ -533,10 +556,9 @@ input[placeholder='Confirm Password'] {
 
 /* New: Styling for the icon element itself */
 .password-toggle .icon-adjust {
-  font-size: 1.5rem; 
-  font-weight: normal; 
+  font-size: 1.5rem;
+  font-weight: normal;
 }
-
 
 .password-toggle:hover {
   color: var(--primary-color);
@@ -570,16 +592,16 @@ input[placeholder='Confirm Password'] {
 .primary-button:focus {
   outline: none;
   box-shadow: 0 10px 15px -3px var(--primary-shadow-30),
-    0 4px 6px -4px var(--primary-shadow-30),
-    0 0 0 2px var(--background-light), 0 0 0 4px var(--primary-color);
+    0 4px 6px -4px var(--primary-shadow-30), 0 0 0 2px var(--background-light),
+    0 0 0 4px var(--primary-color);
 }
 
 /* Disabled state */
 .primary-button:disabled {
-    background-color: #999;
-    cursor: not-allowed;
-    opacity: 0.7;
-    box-shadow: none;
+  background-color: #999;
+  cursor: not-allowed;
+  opacity: 0.7;
+  box-shadow: none;
 }
 
 /* --- 8. Footer & Signup Link --- */
@@ -605,25 +627,25 @@ input[placeholder='Confirm Password'] {
 
 /* --- Error Styling (Red Border/Glow) --- */
 .error-border {
-    border-color: red !important;
-    box-shadow: 0 0 0 1px red !important;
+  border-color: red !important;
+  box-shadow: 0 0 0 1px red !important;
 }
 
 /* Error text positioning and style */
 .error-input {
-    color: red;
-    font-size: 0.85em;
-    text-align: left;
-    min-height: 1.2em;
-    margin: 0;
-    
-    position: absolute;
-    top: calc(100% + 2px);
-    left: 0;
-    width: 100%;
+  color: red;
+  font-size: 0.85em;
+  text-align: left;
+  min-height: 1.2em;
+  margin: 0;
+
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  width: 100%;
 }
 .input-wrapper .error-border + .email-suffix {
-  color: red !important
+  color: red !important;
 }
 
 /* Success Message Styling */

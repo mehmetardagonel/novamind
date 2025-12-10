@@ -5,14 +5,19 @@
         <div class="header-left">
           <div class="logo-container">
             <div class="logo-icon">
-              <svg fill="currentColor" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-                <path d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"></path>
+              <svg
+                fill="currentColor"
+                viewBox="0 0 48 48"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
+                ></path>
               </svg>
             </div>
             <h2 class="logo-text">Novamind.AI</h2>
           </div>
-          <div class="nav-links">
-            </div>
+          <div class="nav-links"></div>
         </div>
         <div class="header-right">
           <button class="btn btn-secondary" @click="goToLogin">
@@ -39,12 +44,13 @@
                   Reclaim Your Inbox. Write Better Emails, 10x Faster.
                 </h1>
                 <h2 class="hero-subtitle">
-                  Novamind is the AI assistant that helps you craft perfect emails in seconds, so you can focus on what matters.
+                  Novamind is the AI assistant that helps you craft perfect
+                  emails in seconds, so you can focus on what matters.
                 </h2>
               </div>
               <div class="hero-cta">
                 <button class="btn btn-primary btn-lg" @click="goToLogin">
-                  <span class="btn-text" >Try Novamind for Free</span>
+                  <span class="btn-text">Try Novamind for Free</span>
                 </button>
               </div>
             </div>
@@ -58,29 +64,51 @@
                 Everything you need to write smarter, not harder
               </h2>
               <p class="section-subtitle">
-                Our powerful AI is designed to streamline your workflow and elevate your communication.
+                Our powerful AI is designed to streamline your workflow and
+                elevate your communication.
               </p>
             </div>
             <div class="features-grid">
               <div class="feature-card">
-                <div class="feature-icon-wrapper"><span class="feature-icon material-symbols-outlined">bolt</span></div>
+                <div class="feature-icon-wrapper">
+                  <span class="feature-icon material-symbols-outlined"
+                    >bolt</span
+                  >
+                </div>
                 <div class="feature-text">
                   <h3 class="feature-title">Write Faster</h3>
-                  <p class="feature-description">Save hours every week by generating drafts and replies in an instant.</p>
+                  <p class="feature-description">
+                    Save hours every week by generating drafts and replies in an
+                    instant.
+                  </p>
                 </div>
               </div>
               <div class="feature-card">
-                <div class="feature-icon-wrapper"><span class="feature-icon material-symbols-outlined">account_circle</span></div>
+                <div class="feature-icon-wrapper">
+                  <span class="feature-icon material-symbols-outlined"
+                    >account_circle</span
+                  >
+                </div>
                 <div class="feature-text">
                   <h3 class="feature-title">Personalize Instantly</h3>
-                  <p class="feature-description">Tailor every message to your audience with smart personalization suggestions.</p>
+                  <p class="feature-description">
+                    Tailor every message to your audience with smart
+                    personalization suggestions.
+                  </p>
                 </div>
               </div>
               <div class="feature-card">
-                <div class="feature-icon-wrapper"><span class="feature-icon material-symbols-outlined">auto_awesome</span></div>
+                <div class="feature-icon-wrapper">
+                  <span class="feature-icon material-symbols-outlined"
+                    >auto_awesome</span
+                  >
+                </div>
                 <div class="feature-text">
                   <h3 class="feature-title">Improve Your Tone</h3>
-                  <p class="feature-description">Ensure your emails sound professional, friendly, and effective every time.</p>
+                  <p class="feature-description">
+                    Ensure your emails sound professional, friendly, and
+                    effective every time.
+                  </p>
                 </div>
               </div>
             </div>
@@ -91,24 +119,38 @@
           <h2 class="how-it-works-title">How It Works</h2>
           <div class="how-it-works-grid">
             <div class="step-card">
-              <div class="step-icon-wrapper"><span class="step-icon material-symbols-outlined">edit</span></div>
+              <div class="step-icon-wrapper">
+                <span class="step-icon material-symbols-outlined">edit</span>
+              </div>
               <div class="step-text">
                 <h3 class="step-title">1. Draft</h3>
-                <p class="step-description">Start with a simple prompt or a rough draft of your email.</p>
+                <p class="step-description">
+                  Start with a simple prompt or a rough draft of your email.
+                </p>
               </div>
             </div>
             <div class="step-card">
-              <div class="step-icon-wrapper"><span class="step-icon material-symbols-outlined">magic_button</span></div>
+              <div class="step-icon-wrapper">
+                <span class="step-icon material-symbols-outlined"
+                  >magic_button</span
+                >
+              </div>
               <div class="step-text">
                 <h3 class="step-title">2. Refine</h3>
-                <p class="step-description">Let our AI enhance your text for clarity, tone, and impact.</p>
+                <p class="step-description">
+                  Let our AI enhance your text for clarity, tone, and impact.
+                </p>
               </div>
             </div>
             <div class="step-card">
-              <div class="step-icon-wrapper"><span class="step-icon material-symbols-outlined">send</span></div>
+              <div class="step-icon-wrapper">
+                <span class="step-icon material-symbols-outlined">send</span>
+              </div>
               <div class="step-text">
                 <h3 class="step-title">3. Send</h3>
-                <p class="step-description">Send your perfectly polished email with confidence in seconds.</p>
+                <p class="step-description">
+                  Send your perfectly polished email with confidence in seconds.
+                </p>
               </div>
             </div>
           </div>
@@ -118,9 +160,13 @@
           <div class="cta-card">
             <div class="cta-content">
               <h2 class="cta-title">Ready to Transform Your Inbox?</h2>
-              <p class="cta-subtitle">Join thousands of professionals who are writing better emails faster. Get started with Novamind for free today—no credit card required.</p>
+              <p class="cta-subtitle">
+                Join thousands of professionals who are writing better emails
+                faster. Get started with Novamind for free today—no credit card
+                required.
+              </p>
               <div class="cta-button-wrapper">
-                <button class="btn btn-primary btn-lg"  @click="goToLogin" >
+                <button class="btn btn-primary btn-lg" @click="goToLogin">
                   <span class="btn-text">Start Writing for Free</span>
                 </button>
               </div>
@@ -143,41 +189,39 @@
 </template>
 
 <script>
-import landingPageImage from '@/assets/landingbackground.png';
+import landingPageImage from "@/assets/landingbackground.png";
 
-export default{
+export default {
   data() {
-        return {
-            heroBackgroundUrl: landingPageImage,
-        };
+    return {
+      heroBackgroundUrl: landingPageImage,
+    };
+  },
+  methods: {
+    goToLogin() {
+      this.$router.push("/login");
     },
-    methods: {
-        goToLogin() {
-          this.$router.push('/login');
-        },
-        goToSignUp() {
-          this.$router.push('/signup');
-        }
+    goToSignUp() {
+      this.$router.push("/signup");
     },
-}
-    
-
+  },
+};
 </script>
 
 <style scoped>
 /* Color Palette (Defined on the component's root element) */
 .landing-page-wrapper {
   --primary: rgb(55, 19, 236);
-  --background-light: #FFFFFF;
-  --surface-light: #F7FAFC;
-  --text-light-primary: #1A202C;
+  --background-light: #ffffff;
+  --surface-light: #f7fafc;
+  --text-light-primary: #1a202c;
   --text-light-secondary: #718096;
-  --border-light: #E2E8F0;
+  --border-light: #e2e8f0;
   --slate-200: #e2e8f0;
 
   /* Base font from tailwind.config.js */
   font-family: "Inter", sans-serif;
-  
+
   /* Base layout styles */
   position: relative;
   display: flex;
@@ -354,8 +398,16 @@ export default{
 }
 .hero-gradient-overlay {
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background-image: linear-gradient(to top, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.2), transparent);
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.6),
+    rgba(0, 0, 0, 0.2),
+    transparent
+  );
 }
 .hero-text-content {
   position: relative;
