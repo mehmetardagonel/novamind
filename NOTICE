@@ -1,0 +1,9 @@
+NOTICE
+
+This project uses a Vosk speech recognition model.
+
+Model License: Apache License 2.0  
+Source: https://alphacephei.com/vosk/models/
+
+The Vosk model files are the property of their respective owners and are redistributed here under the terms of the Apache 2.0 license. No changes have been made to the model.
+
