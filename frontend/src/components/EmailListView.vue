@@ -55,7 +55,14 @@
             @click="!isTrash && selectEmail(email)"
           >
             <div class="email-header">
-              <span class="email-sender">{{ email.sender }}</span>
+              <div class="sender-with-label">
+                <span class="email-sender">{{ email.sender }}</span>
+                <span v-if="email.ml_prediction"
+                      class="ml-label"
+                      :class="'ml-label-' + email.ml_prediction">
+                  {{ getLabelText(email.ml_prediction) }}
+                </span>
+              </div>
               <span class="email-date">{{ formatDate(email.date) }}</span>
             </div>
             <div class="email-subject">{{ email.subject }}</div>
@@ -489,6 +496,15 @@ export default {
       return html;
     };
 
+    const getLabelText = (prediction) => {
+      const labels = {
+        'spam': 'Spam',
+        'ham': 'Normal',
+        'important': 'Important'
+      };
+      return labels[prediction] || prediction;
+    };
+
     const openLabelMenu = async () => {
       if (!selectedEmail.value) return;
 
@@ -617,6 +633,7 @@ export default {
       formatDate,
       formatFullDate,
       getPreview,
+      getLabelText,
       sanitizeHtml,
       loadEmails,
       authenticate,
@@ -782,10 +799,49 @@ export default {
   margin-bottom: 0.5rem;
 }
 
+/* Flexbox wrapper for sender + ML label */
+.sender-with-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+
 .email-sender {
   font-weight: 500;
   color: var(--text-secondary);
   font-size: 1.05rem;
+}
+
+/* ML Classification Label Badges */
+.ml-label {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ml-label-spam {
+  background-color: #fee;
+  color: #c33;
+  border: 1px solid #fcc;
+}
+
+.ml-label-important {
+  background-color: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeaa7;
+}
+
+.ml-label-ham {
+  background-color: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
 }
 
 .email-subject {

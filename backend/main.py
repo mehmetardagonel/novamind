@@ -46,6 +46,25 @@ from ml_service import get_classifier
 
 import logging
 
+
+def apply_ml_classification(emails: List[EmailOut]) -> List[EmailOut]:
+    """
+    Apply ML classification to a list of emails.
+    Returns classified emails, or original emails if ML fails.
+    """
+    if not emails:
+        return emails
+
+    try:
+        classifier = get_classifier()
+        emails_dict = [email.model_dump(mode='json') for email in emails]
+        classified_emails = classifier.classify_batch(emails_dict)
+        logger.info(f"Successfully classified {len(classified_emails)} emails")
+        return classified_emails
+    except Exception as ml_error:
+        logger.warning(f"ML classification failed: {ml_error}. Returning emails without classification.")
+        return emails
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -346,35 +365,40 @@ async def chat(request: ChatRequest):
 @app.get("/emails/drafts", response_model=List[EmailOut])
 async def list_drafts(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        return fetch_drafts(max_results=50, user_id=user_id)
+        emails = fetch_drafts(max_results=50, user_id=user_id)
+        return apply_ml_classification(emails)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/sent", response_model=List[EmailOut])
 async def list_sent(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        return fetch_messages_by_label("SENT", max_results=50, user_id=user_id)
+        emails = fetch_messages_by_label("SENT", max_results=50, user_id=user_id)
+        return apply_ml_classification(emails)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/favorites", response_model=List[EmailOut])
 async def list_starred(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        return fetch_messages_by_label("STARRED", max_results=50, user_id=user_id)
+        emails = fetch_messages_by_label("STARRED", max_results=50, user_id=user_id)
+        return apply_ml_classification(emails)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/important", response_model=List[EmailOut])
 async def list_important(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        return fetch_messages_by_label("IMPORTANT", max_results=50, user_id=user_id)
+        emails = fetch_messages_by_label("IMPORTANT", max_results=50, user_id=user_id)
+        return apply_ml_classification(emails)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/spam", response_model=List[EmailOut])
 async def list_spam(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        return fetch_messages_by_label("SPAM", max_results=50, include_spam_trash=True, user_id=user_id)
+        emails = fetch_messages_by_label("SPAM", max_results=50, include_spam_trash=True, user_id=user_id)
+        return apply_ml_classification(emails)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -384,7 +408,8 @@ async def list_trash(user_id: str = Header(..., alias="X-User-Id")):
     Retrieve deleted emails (Trash folder).
     """
     try:
-        return fetch_messages_by_label("TRASH", max_results=50, include_spam_trash=True, user_id=user_id)
+        emails = fetch_messages_by_label("TRASH", max_results=50, include_spam_trash=True, user_id=user_id)
+        return apply_ml_classification(emails)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -444,7 +469,8 @@ async def list_by_label(
     This returns all messages having that label, like Gmail's label view.
     """
     try:
-        return fetch_messages_by_label(label_id, max_results=50, user_id=user_id)
+        emails = fetch_messages_by_label(label_id, max_results=50, user_id=user_id)
+        return apply_ml_classification(emails)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
