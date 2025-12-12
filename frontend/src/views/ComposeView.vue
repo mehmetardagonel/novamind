@@ -71,10 +71,6 @@
         </div>
       </div>
 
-      <div v-if="isListening" class="listening-box">
-        Listening<span class="dot-animation">{{ listeningDots }}</span>
-      </div>
-
       <div class="chat-input-area">
         <div class="input-wrapper">
           <input
@@ -82,7 +78,7 @@
             placeholder="Type your prompt here..."
             v-model="userPrompt"
             @keyup.enter="sendMessage"
-            :disabled="isLoading || isListening"
+            :disabled="isLoading"
           />
 
           <!-- Send button -->
@@ -102,15 +98,29 @@
             </svg>
           </button>
 
-          <!-- Voice button (always visible, disabled while loading) -->
-          <button
-            class="inner-voice"
-            @click="toggleVoiceInput"
-            :disabled="isLoading"
-            :class="{ 'listening-active': isListening }"
-          >
-            <span class="material-symbols-outlined mic-icon">mic</span>
-          </button>
+          <!-- Voice button (always visible) -->
+          <div class="voice-wrap">
+            <button
+              class="inner-voice"
+              @click="toggleVoiceInput"
+              :disabled="isLoading"
+              :class="{ 'listening-active': isListening }"
+              :aria-pressed="isListening"
+              :title="isListening ? 'Stop listening' : 'Start voice input'"
+            >
+              <span class="material-symbols-outlined mic-icon">mic</span>
+            </button>
+
+            <button
+              v-if="isListening"
+              class="voice-cancel-icon"
+              @click="cancelVoice"
+              title="Cancel recording"
+              type="button"
+            >
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -118,7 +128,7 @@
 </template>
 
 <script>
-import { ref, nextTick, onUnmounted } from "vue";
+import { ref, nextTick } from "vue";
 
 export default {
   name: "ComposeView",
@@ -127,8 +137,6 @@ export default {
     const isLoading = ref(false);
     const historyContainer = ref(null);
     const isListening = ref(false); // New state for listening box
-    const listeningDots = ref(""); // New state for dot animation
-    let dotInterval = null; // For managing the dot animation timer
     const API_URL = "http://localhost:8001/chat";
 
     const STORAGE_KEY_HISTORY = "chat_history";
@@ -283,45 +291,30 @@ export default {
       }
     };
 
-    // New function for dot animation
-    const startDotAnimation = () => {
-      listeningDots.value = "";
-      dotInterval = setInterval(() => {
-        listeningDots.value =
-          listeningDots.value.length < 3 ? listeningDots.value + "." : "";
-      }, 500); // Change dot every 0.5 seconds
-    };
-
-    // New function to clear the dot animation
-    const stopDotAnimation = () => {
-      if (dotInterval) {
-        clearInterval(dotInterval);
-        dotInterval = null;
-      }
-      listeningDots.value = "";
-    };
-
-    // New function to toggle the voice input state
     const toggleVoiceInput = () => {
-      if (isLoading.value) return; // Prevent toggling if a message is being processed
+      if (isLoading.value) return;
 
-      isListening.value = !isListening.value;
-
+      // Stop listening -> SEND (if we have text)
       if (isListening.value) {
-        startDotAnimation();
-        // Here you would typically start the Web Speech API recognition
-        // console.log("Starting voice recognition...");
-      } else {
-        stopDotAnimation();
-        // Here you would typically stop the Web Speech API recognition
-        // console.log("Stopping voice recognition...");
+        isListening.value = false;
+
+        if (userPrompt.value.trim()) {
+          sendMessage();
+        }
+        return;
       }
+
+      // Start listening
+      isListening.value = true;
+
+      // Start Web Speech API here later if you add it
     };
 
-    // Clear interval when component is destroyed
-    onUnmounted(() => {
-      stopDotAnimation();
-    });
+    const cancelVoice = () => {
+      isListening.value = false;
+      // Optional: clear whatever was dictated
+      // userPrompt.value = "";
+    };
 
     const clearChat = () => {
       chatHistory.value = [initialBotMessage];
@@ -334,12 +327,12 @@ export default {
       userPrompt,
       isLoading,
       isListening,
-      listeningDots,
       chatHistory,
       sendMessage,
       formatBody,
       historyContainer,
       toggleVoiceInput,
+      cancelVoice,
       clearChat,
     };
   },
@@ -508,91 +501,180 @@ export default {
 .input-wrapper {
   position: relative;
   flex-grow: 1;
-}
+  z-index: 1;
 
-/* Input field */
-.input-wrapper input {
-  width: 100%;
-  padding: 10px 90px 10px 14px;
+  /* NEW: make the wrapper the pill */
   border: 1px solid var(--border-color);
   border-radius: 999px;
+  background: var(--content-bg);
+  overflow: visible; /* IMPORTANT: clips the right side cleanly */
+}
+
+/* Input should not draw its own border anymore */
+.input-wrapper input {
+  width: 100%;
+  padding: 10px 190px 10px 14px;
+
+  border: none; /* NEW */
+  border-radius: 999px; /* ok to keep */
+  background: transparent; /* NEW */
+
   font-size: 0.96rem;
-  background-color: var(--content-bg);
   color: var(--text-primary);
   outline: none;
 }
 
-.input-wrapper input:focus {
+.input-wrapper:focus-within {
   border-color: var(--primary-color);
   box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.15);
 }
 
 /* Send & voice buttons */
+/* Send & voice buttons (single source of truth) */
 .inner-send,
 .inner-voice {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
   border: none;
-  background: transparent;
   cursor: pointer;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: transparent;
+
+  transition: transform 120ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
-.listening-box {
-  background-color: var(--primary-color);
-  color: #fff;
-  padding: 10px 15px;
-  margin: 0.75rem 1rem 0; /* Align above input area */
-  border-radius: 8px;
-  font-weight: 500;
-  font-size: 1rem;
-  text-align: center;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.dot-animation {
-  display: inline-block;
-  min-width: 15px; /* Ensure space for three dots */
-  margin-left: 5px;
-  font-family: monospace; /* Monospace for consistent dot spacing */
-  overflow: hidden;
-}
-
-/* Style for voice button when active */
-.inner-voice.listening-active {
-  background-color: #fdd835; /* A noticeable color when active (e.g., yellow) */
-  color: #333;
-}
-
+/* Send button placement + subtle hover */
 .inner-send {
-  right: 50px;
+  right: 52px; /* <-- this is the key */
   color: var(--primary-color);
 }
 
+.inner-send:hover:not(:disabled) {
+  background: rgba(124, 77, 255, 0.1);
+}
+
+/* Voice button placement + styled background */
 .inner-voice {
   right: 10px;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background-color: var(--primary-color);
-  color: #fff;
+  background: rgba(124, 77, 255, 0.16);
+  border: 1px solid var(--border-color);
+  color: var(--primary-color);
 }
 
-.inner-voice:disabled,
-.inner-send:disabled {
-  opacity: 0.5;
+.inner-voice:hover:not(:disabled) {
+  transform: translateY(-1px); /* keep the lift */
+  background: rgba(124, 77, 255, 0.22);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.12);
+}
+
+/* Listening state: red + subtle pulse */
+.inner-voice.listening-active {
+  background: rgba(255, 77, 109, 0.18);
+  border-color: rgba(255, 77, 109, 0.35);
+  color: #ff4d6d;
+  box-shadow: 0 10px 22px rgba(255, 77, 109, 0.12);
+  animation: micPulse 1.2s ease-out infinite;
+}
+
+@keyframes micPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 77, 109, 0.25);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(255, 77, 109, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 77, 109, 0);
+  }
+}
+
+.inner-send:disabled,
+.inner-voice:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
+  box-shadow: none;
+  transform: translateY(-50%);
 }
 
+/* Mic icon sizing */
 .mic-icon.material-symbols-outlined {
   font-size: 20px;
-  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  line-height: 1;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
+}
+
+/* anchor container exactly where mic lives */
+.voice-wrap {
+  position: absolute;
+  right: 10px; /* same as old mic right */
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+}
+
+/* mic becomes normal inside wrapper */
+.voice-wrap .inner-voice {
+  position: relative;
+  right: auto;
+  top: auto;
+  transform: none;
+}
+/* Cancel (X) — perfectly centered and never jumps */
+.voice-wrap .voice-cancel-icon {
+  position: absolute;
+  left: 50%;
+  bottom: 42px;
+
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 999px;
+
+  border: 1px solid var(--border-color);
+  background: var(--content-bg);
+  color: var(--text-secondary);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  cursor: pointer;
+  z-index: 10;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.12);
+
+  /* keep centering ALWAYS */
+  transform: translateX(-50%);
+  transition: transform 120ms ease, background 120ms ease, box-shadow 120ms ease,
+    color 120ms ease;
+}
+
+.voice-wrap .voice-cancel-icon:hover {
+  background: rgba(255, 77, 109, 0.1);
+  color: #ff4d6d;
+
+  /* keep centering + tiny lift */
+  transform: translateX(-50%) translateY(-1px);
+}
+
+.voice-wrap .voice-cancel-icon:active {
+  /* keep centering + press */
+  transform: translateX(-50%) scale(0.98);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Icon sizing */
+.voice-wrap .voice-cancel-icon .material-symbols-outlined {
+  font-size: 18px;
+  line-height: 1;
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 20;
 }
 </style>

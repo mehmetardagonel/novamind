@@ -13,7 +13,7 @@
 
 /* 👇 this is the important part */
 body {
-  font-family: 'Inter', sans-serif;  /* or whatever you want */
+  font-family: "Inter", sans-serif; /* or whatever you want */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
