@@ -369,12 +369,15 @@ async def logout_endpoint():
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(
+    request: ChatRequest,
+    user_id: str = Header(..., alias="X-User-Id")
+):
     """
     AI Chat endpoint for email assistance.
     Maintains session state for multi-turn conversations.
     """
-    logger.info(f"Endpoint called: /chat with session_id: {request.session_id}")
+    logger.info(f"Endpoint called: /chat with session_id: {request.session_id}, user_id: {user_id}")
     try:
         # Validate input
         if not request.message or not request.message.strip():
@@ -385,8 +388,8 @@ async def chat(request: ChatRequest):
 
         # Get or create ChatService instance for this session
         if session_id not in chat_sessions:
-            logger.info(f"Creating new ChatService for session_id: {session_id}")
-            chat_sessions[session_id] = ChatService()
+            logger.info(f"Creating new ChatService for session_id: {session_id}, user_id: {user_id}")
+            chat_sessions[session_id] = ChatService(user_id=user_id)
 
         chat_service = chat_sessions[session_id]
 

@@ -562,13 +562,14 @@ def get_drafts(max_results: int = 25) -> List[dict]:
     return drafts
 
 
-def get_drafts_by_recipient(to_email: str, max_results: int = 25) -> List[dict]:
+def get_drafts_by_recipient(to_email: str, max_results: int = 25, service=None) -> List[dict]:
     """
-    Get all drafts for a specific recipient email address.
+    Get all drafts for a specific recipient email address with multi-account support.
     Returns list of draft objects with full message details.
     Uses Gmail Drafts API (not Messages API) to get actual draft IDs.
     """
-    service = get_gmail_service()
+    if service is None:
+        service = get_gmail_service()
 
     try:
         # Get all drafts
@@ -731,12 +732,13 @@ def update_draft(draft_id: str, to: Optional[str] = None,
         return None
 
 
-def delete_all_spam() -> dict:
+def delete_all_spam(service=None) -> dict:
     """
-    Delete all spam emails from Gmail (query: is:spam).
+    Delete all spam emails from Gmail (query: is:spam) with multi-account support.
     Returns dict with deleted_count, failed_count, and failed_ids for tracking.
     """
-    service = get_gmail_service()
+    if service is None:
+        service = get_gmail_service()
 
     try:
         # Find all spam messages
@@ -786,9 +788,9 @@ def delete_all_spam() -> dict:
         }
 
 
-def move_mails(email_ids: List[str], target_label_name: str, remove_from_inbox: bool = True) -> int:
+def move_mails(email_ids: List[str], target_label_name: str, remove_from_inbox: bool = True, service=None) -> int:
     """
-    Move emails to a target folder/label.
+    Move emails to a target folder/label with multi-account support.
     Gmail doesn't have folders, it uses labels. This function adds the target label
     and optionally removes INBOX label (for true "move" behavior).
 
@@ -796,10 +798,12 @@ def move_mails(email_ids: List[str], target_label_name: str, remove_from_inbox: 
         email_ids: List of message IDs to move
         target_label_name: Name of the target label (e.g., 'Work', 'Archive')
         remove_from_inbox: If True, removes INBOX label when moving (default: True for true move behavior)
+        service: Gmail service instance (if None, uses legacy token.json)
 
     Returns: Count of successfully moved emails
     """
-    service = get_gmail_service()
+    if service is None:
+        service = get_gmail_service()
 
     try:
         logger.info(f"Moving {len(email_ids)} emails to label '{target_label_name}' via Gmail API")

@@ -39,16 +39,26 @@ from email_tools import (
 )
 
 class ChatService:
-    def __init__(self):
+    def __init__(self, user_id: str = None):
+        """
+        Initialize ChatService with user context.
+
+        Args:
+            user_id: User ID for multi-account support.
+                     If None, falls back to legacy token.json.
+        """
+        self.user_id = user_id  # Store user_id for use in methods
+
         # Gemini API key'i al
         api_key = os.getenv("GEMINI_API_KEY")
 
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found! Check your .env file.")
-
+        masked_key = f"{api_key[:10]}...{api_key[-4:]}" if len(api_key) > 14 else "***"
+        logger.info(f"🔑 Using GEMINI_API_KEY: {masked_key}")
         # Gemini modeli oluştur
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-flash-lite",
             google_api_key=api_key,
             temperature=0.7,
         )
@@ -83,7 +93,7 @@ class ChatService:
             ),
             Tool(
                 name="delete_all_spam",
-                func=lambda _: json.dumps(delete_all_spam(), indent=2),
+                func=lambda _: json.dumps(delete_all_spam(user_id=self.user_id), indent=2),
                 description="Delete all spam emails from the inbox. No input needed."
             ),
             Tool(
@@ -137,7 +147,7 @@ class ChatService:
             ),
             Tool(
                 name="get_drafts",
-                func=lambda _: json.dumps(get_drafts(), indent=2),
+                func=lambda _: json.dumps(get_drafts(user_id=self.user_id), indent=2),
                 description="Get all draft emails. No input needed."
             ),
             Tool(
@@ -298,10 +308,11 @@ Thought:{agent_scratchpad}"""
                     since_date=filters.get("since_date"),
                     until_date=filters.get("until_date"),
                     subject_keyword=filters.get("subject_keyword"),
-                    folder=filters.get("folder")
+                    folder=filters.get("folder"),
+                    user_id=self.user_id
                 )
             else:
-                return fetch_mails()
+                return fetch_mails(user_id=self.user_id)
         except json.JSONDecodeError:
             return {"error": "Invalid JSON format for fetch_mails"}
         except Exception as e:
@@ -390,7 +401,7 @@ Thought:{agent_scratchpad}"""
                     "message": "Both sender and target_folder are required"
                 }
 
-            return move_mails_by_sender(sender, target_folder)
+            return move_mails_by_sender(sender, target_folder, user_id=self.user_id)
 
         except Exception as e:
             return {
@@ -407,7 +418,8 @@ Thought:{agent_scratchpad}"""
             to = parts[0].strip()
             subject = parts[1].strip()
             body = parts[2].strip()
-            return send_email(to, subject, body)
+            # Pass user_id to send_email for multi-account support
+            return send_email(to, subject, body, user_id=self.user_id)
         except (ValueError, IndexError, AttributeError) as e:
             logger.warning(f"Error parsing send_email input: {str(e)}")
             return {"success": False, "message": "Invalid input format. Use: 'to|subject|body'"}
@@ -432,8 +444,8 @@ Thought:{agent_scratchpad}"""
                 to = ""
                 subject = ""
 
-            # Call draft_email with parsed values
-            result = draft_email(to, subject, body)
+            # Call draft_email with parsed values, pass user_id for multi-account support
+            result = draft_email(to, subject, body, user_id=self.user_id)
 
             # Check if recipient is required (missing or invalid)
             if result.get("requires_recipient"):
@@ -497,9 +509,17 @@ Thought:{agent_scratchpad}"""
                 if isinstance(msg, dict):
                     msg_id = msg.get("id")
                     if msg_id:
-                        from gmail_service import get_gmail_service, _decode_body
-                        service = get_gmail_service()
+                        from gmail_service import get_gmail_service, get_primary_account_service, _decode_body
+                        import asyncio
+
                         try:
+                            # Use primary account service if user_id is available
+                            if self.user_id:
+                                service = asyncio.run(get_primary_account_service(self.user_id))
+                            else:
+                                # Fallback to legacy for backward compatibility
+                                service = get_gmail_service()
+
                             full_msg = service.users().messages().get(
                                 userId="me",
                                 id=msg_id,
@@ -646,7 +666,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
     def _send_draft_for_recipient(self, to_email: str) -> str:
         try:
-            drafts = get_drafts_for_recipient(to_email)
+            drafts = get_drafts_for_recipient(to_email, user_id=self.user_id)
 
             if not drafts:
                 return f"❌ No drafts found for {to_email}"
@@ -684,7 +704,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
     def _delete_draft_for_recipient(self, to_email: str) -> str:
         try:
-            drafts = get_drafts_for_recipient(to_email)
+            drafts = get_drafts_for_recipient(to_email, user_id=self.user_id)
 
             if not drafts:
                 return f"❌ No drafts found for {to_email}"
@@ -713,7 +733,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
     def _update_draft_for_recipient(self, to_email: str, update_instruction: str) -> str:
         try:
-            drafts = get_drafts_for_recipient(to_email)
+            drafts = get_drafts_for_recipient(to_email, user_id=self.user_id)
 
             if not drafts:
                 return f"❌ No drafts found for {to_email}"
@@ -755,7 +775,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
     def _get_drafts_for_recipient_display(self, to_email: str) -> str:
         try:
-            drafts = get_drafts_for_recipient(to_email)
+            drafts = get_drafts_for_recipient(to_email, user_id=self.user_id)
 
             if not drafts:
                 return f"No drafts found for {to_email}"
@@ -939,7 +959,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
         
         try:
             filters = json.loads(input_str) if input_str.strip().startswith("{") else {}
-            emails = fetch_mails(**filters, max_results=50)
+            emails = fetch_mails(**filters, max_results=50, user_id=self.user_id)
             
             if not emails:
                 return "No emails found to classify."

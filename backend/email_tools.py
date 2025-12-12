@@ -82,11 +82,38 @@ def get_emails_from_sender(sender: str) -> List[Dict]:
         return []
 
 
-def send_email(to: str, subject: str, body: str) -> Dict:
-    """Send an email via Gmail"""
+def send_email(to: str, subject: str, body: str, user_id: str = None) -> Dict:
+    """
+    Send an email via Gmail with multi-account support.
+
+    Args:
+        to: Recipient email address
+        subject: Email subject
+        body: Email body
+        user_id: User ID for multi-account support (optional, uses legacy if None)
+    """
     try:
-        current_user = get_current_user_email()
-        result = gmail_send_email(sender=current_user or "me", to=to, subject=subject, body=body)
+        import asyncio
+        from gmail_service import get_primary_account_service
+
+        # Get service based on user_id
+        if user_id:
+            # Multi-account: primary account kullan
+            service = asyncio.run(get_primary_account_service(user_id))
+            profile = service.users().getProfile(userId="me").execute()
+            current_user = profile.get("emailAddress", "me")
+        else:
+            # Legacy behavior
+            current_user = get_current_user_email()
+            service = None
+
+        result = gmail_send_email(
+            sender=current_user or "me",
+            to=to,
+            subject=subject,
+            body=body,
+            service=service
+        )
         return {
             "success": True,
             "message": "Email sent successfully",
@@ -100,10 +127,16 @@ def send_email(to: str, subject: str, body: str) -> Dict:
         }
 
 
-def draft_email(to: str = "", subject: str = "", body: str = "") -> Dict:
+def draft_email(to: str = "", subject: str = "", body: str = "", user_id: str = None) -> Dict:
     """
-    Create a draft email without sending it.
+    Create a draft email without sending it with multi-account support.
     MANDATORY: Recipient email is required. Body content is optional (can be empty for draft editing later).
+
+    Args:
+        to: Recipient email address
+        subject: Email subject
+        body: Email body
+        user_id: User ID for multi-account support (optional, uses legacy if None)
     """
     try:
         # CRITICAL: Recipient email is MANDATORY for all drafts
@@ -127,8 +160,16 @@ def draft_email(to: str = "", subject: str = "", body: str = "") -> Dict:
                 "hint": "Please provide a valid email address (e.g., john@example.com)"
             }
 
+        # Get service based on user_id
+        if user_id:
+            import asyncio
+            from gmail_service import get_primary_account_service
+            service = asyncio.run(get_primary_account_service(user_id))
+        else:
+            service = None  # create_draft uses legacy
+
         # Body is optional - drafts can be created with empty body for later editing
-        draft = create_draft(to=to, subject=subject, body=body or "")
+        draft = create_draft(to=to, subject=subject, body=body or "", service=service)
         draft_id = draft.get("id")
 
         return {
@@ -149,12 +190,18 @@ def draft_email(to: str = "", subject: str = "", body: str = "") -> Dict:
         }
 
 
-def get_drafts() -> List[Dict]:
-    """Get all draft emails"""
+def get_drafts(user_id: str = None) -> List[Dict]:
+    """Get all draft emails with multi-account support"""
     try:
-        # Query for drafts label
-        emails = fetch_messages(query='label:DRAFT')
-        return [email.model_dump(mode='json') for email in emails]
+        if user_id:
+            import asyncio
+            from gmail_service import fetch_drafts_multi
+            drafts = asyncio.run(fetch_drafts_multi(user_id, max_per_account=50))
+        else:
+            # Query for drafts label (legacy)
+            drafts = fetch_messages(query='label:DRAFT')
+
+        return [draft.model_dump(mode='json') for draft in drafts]
     except Exception as e:
         logger.error(f"Error fetching drafts: {str(e)}")
         return []
@@ -172,18 +219,26 @@ def get_draft_by_id(draft_id: str) -> Optional[Dict]:
         return None
 
 
-def get_drafts_for_recipient(to_email: str) -> List[Dict]:
+def get_drafts_for_recipient(to_email: str, user_id: str = None) -> List[Dict]:
     """
-    Get all draft emails for a specific recipient email address.
+    Get all draft emails for a specific recipient email address with multi-account support.
 
     Args:
         to_email: The recipient email address to filter drafts by
+        user_id: User ID for multi-account support
 
     Returns:
         List of draft emails for the specified recipient
     """
     try:
-        drafts = get_gmail_drafts_by_recipient(to_email)
+        if user_id:
+            import asyncio
+            from gmail_service import get_primary_account_service
+            service = asyncio.run(get_primary_account_service(user_id))
+            drafts = get_gmail_drafts_by_recipient(to_email, service=service)
+        else:
+            drafts = get_gmail_drafts_by_recipient(to_email)
+
         return [draft if isinstance(draft, dict) else draft.model_dump(mode='json')
                 for draft in drafts]
     except Exception as e:
@@ -407,7 +462,8 @@ def fetch_mails(
     until_date: Optional[str] = None,
     subject_keyword: Optional[str] = None,
     folder: Optional[str] = None,
-    max_results: int = 50
+    max_results: int = 50,
+    user_id: str = None
 ) -> List[Dict]:
     """
     Advanced email fetching with multiple filter options
@@ -491,20 +547,37 @@ def fetch_mails(
             query += f' in:{folder}'
 
         # Pass max_results to fetch_messages so Gmail API respects the limit
-        emails = fetch_messages(query=query or None, max_results=max_results)
+        if user_id:
+            import asyncio
+            from gmail_service import fetch_messages_multi_account
+            emails = asyncio.run(fetch_messages_multi_account(
+                user_id,
+                query=query or "in:inbox",
+                max_per_account=max_results
+            ))
+        else:
+            emails = fetch_messages(query=query or None, max_results=max_results)
+
         return [email.model_dump(mode='json') for email in emails]
     except Exception as e:
         logger.error(f"Error in fetch_mails: {str(e)}")
         return []
 
 
-def delete_all_spam() -> Dict:
+def delete_all_spam(user_id: str = None) -> Dict:
     """
-    Delete all spam emails from Gmail (query: is:spam).
+    Delete all spam emails from Gmail (query: is:spam) with multi-account support.
     Returns the count of deleted spam emails.
     """
     try:
-        deleted_count = delete_all_gmail_spam()
+        if user_id:
+            import asyncio
+            from gmail_service import get_primary_account_service
+            service = asyncio.run(get_primary_account_service(user_id))
+            deleted_count = delete_all_gmail_spam(service=service)
+        else:
+            deleted_count = delete_all_gmail_spam()
+
         return {
             "success": True,
             "deleted_count": deleted_count,
@@ -519,9 +592,9 @@ def delete_all_spam() -> Dict:
         }
 
 
-def move_mails_by_sender(sender: str, target_folder: str, max_results: int = 50) -> Dict:
+def move_mails_by_sender(sender: str, target_folder: str, max_results: int = 50, user_id: str = None) -> Dict:
     """
-    Move multiple emails from a specific sender to a target folder.
+    Move multiple emails from a specific sender to a target folder with multi-account support.
 
     Parameters:
     - sender: Sender name or email (partial match, case-insensitive)
@@ -529,12 +602,13 @@ def move_mails_by_sender(sender: str, target_folder: str, max_results: int = 50)
     - target_folder: Target label/folder name
       Examples: 'game', 'shopping', 'work'
     - max_results: Maximum emails to fetch and move (default: 50)
+    - user_id: User ID for multi-account support
 
     Returns: Dict with success status and count of moved emails
     """
     try:
         # Find all emails from this sender
-        emails = fetch_mails(sender=sender, max_results=max_results)
+        emails = fetch_mails(sender=sender, max_results=max_results, user_id=user_id)
 
         if not emails:
             return {
@@ -553,8 +627,15 @@ def move_mails_by_sender(sender: str, target_folder: str, max_results: int = 50)
                 "message": f"Could not extract email IDs from {len(emails)} emails"
             }
 
-        # Move the emails using the internal function
-        moved_count = move_gmail_mails(email_ids=email_ids, target_label_name=target_folder)
+        # Get service for multi-account
+        if user_id:
+            import asyncio
+            from gmail_service import get_primary_account_service
+            service = asyncio.run(get_primary_account_service(user_id))
+            moved_count = move_gmail_mails(email_ids=email_ids, target_label_name=target_folder, service=service)
+        else:
+            # Move the emails using the internal function
+            moved_count = move_gmail_mails(email_ids=email_ids, target_label_name=target_folder)
 
         return {
             "success": moved_count > 0,
