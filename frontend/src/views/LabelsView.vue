@@ -1,7 +1,13 @@
 <template>
   <div class="labels-view">
-    <div v-if="loading" class="labels-loading">
-      <p>Loading labels...</p>
+    <div v-if="loading" class="labels-skeleton">
+      <div v-for="n in 4" :key="n" class="labels-skeleton-row">
+        <div class="labels-skel-left">
+          <div class="labels-skel-icon shimmer"></div>
+          <div class="labels-skel-line shimmer"></div>
+        </div>
+        <div class="labels-skel-trash shimmer"></div>
+      </div>
     </div>
 
     <div v-else class="labels-content">
@@ -294,7 +300,7 @@ export default {
 }
 
 .label-row:hover {
-  background-color: var(--hover-bg-color, #f5f5f7);
+  background-color: var(--hover-bg);
 }
 
 /* normal row layout */
@@ -498,29 +504,19 @@ export default {
 }
 
 .new-label-input {
-  flex: 1;
-  min-width: 0;
-
-  /* visual style */
-  background: #fafafa;
-  border: 1px solid #dcdcdc;
-  border-radius: 8px;
-
-  padding: 0.55rem 0.75rem;
-  font-size: 0.9rem;
+  background: var(--content-bg);
+  border: 1px solid var(--border-color);
   color: var(--text-primary);
-
-  transition: all 0.15s ease;
 }
 
-/* on focus */
+.new-label-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
 .new-label-input:focus {
-  outline: none;
-  background: #ffffff;
-  border-color: var(--primary-color, #6c63ff);
-  box-shadow: 0 0 0 2px rgba(108, 99, 255, 0.15);
+  background: var(--content-bg);
 }
-
 .new-label-actions {
   display: flex;
   flex-shrink: 0;
@@ -562,7 +558,7 @@ export default {
 }
 
 .btn-ghost:hover {
-  background-color: var(--hover-bg-color, #f5f5f7);
+  background-color: var(--hover-bg);
 }
 
 .add-inline-row {
@@ -596,5 +592,82 @@ export default {
   margin-top: 0.75rem;
   font-size: 0.9rem;
   color: var(--danger-color, #e53935);
+}
+
+/* Skeleton container – matches list padding and width */
+.labels-skeleton {
+  margin-top: 0.25rem;
+}
+
+/* One skeleton row = one label row */
+.labels-skeleton-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem; /* same as .label-row */
+  border-radius: 8px;
+  min-height: 32px; /* approximate text row height */
+}
+
+/* Left side: icon + text */
+.labels-skel-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Icon box where the #/tag icon is */
+.labels-skel-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background-color: #e3e3e3;
+}
+
+/* Label name line */
+.labels-skel-line {
+  width: 90px;
+  height: 12px;
+  border-radius: 4px;
+  background-color: #e3e3e3;
+}
+
+/* Right delete icon placeholder */
+.labels-skel-trash {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background-color: #e3e3e3;
+}
+
+/* Shimmer animation reused */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -150%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(
+    120deg,
+    transparent,
+    rgba(255, 255, 255, 0.6),
+    transparent
+  );
+  animation: shimmer 1.2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    left: -150%;
+  }
+  100% {
+    left: 150%;
+  }
 }
 </style>

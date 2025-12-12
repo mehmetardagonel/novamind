@@ -264,6 +264,7 @@ export default {
   /* --- Typography Palette (DARK MODE) --- */
   --text-primary: #f0f0f0; /* White/light grey for main text */
   --text-secondary: #aaaaaa; /* Medium grey for secondary text */
+  --primary-color-light: rgba(108, 99, 255, 0.18);
 }
 
 /* * SIDEBAR */
