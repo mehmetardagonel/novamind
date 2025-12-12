@@ -36,6 +36,26 @@
     <div class="main-content">
       <div class="main-header">
         <h1>{{ currentPageTitle }}</h1>
+
+        <!-- Account Selector (only show on inbox) -->
+        <div v-if="isInboxView" class="account-selector">
+          <span class="material-symbols-outlined selector-icon">account_circle</span>
+          <select
+            v-model="selectedAccountId"
+            class="account-dropdown"
+          >
+            <option :value="null">Tüm Hesaplar</option>
+            <option
+              v-for="account in accounts"
+              :key="account.id"
+              :value="account.id"
+            >
+              {{ account.email_address }}
+              <span v-if="account.is_primary"> ⭐</span>
+            </option>
+          </select>
+        </div>
+
         <button
           class="theme-toggle-btn"
           @click="toggleTheme"
@@ -47,7 +67,7 @@
         </button>
       </div>
       <div class="content-view-wrapper">
-        <router-view></router-view>
+        <router-view :selected-account-id="selectedAccountId"></router-view>
       </div>
     </div>
   </div>
@@ -58,6 +78,7 @@ import { useAuthStore } from "../stores/auth";
 import { onMounted, computed, ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import SidebarNav from "../components/SidebarNav.vue";
+import { fetchGmailAccounts } from "../api/accounts";
 
 export default {
   name: "MainApp",
@@ -69,6 +90,8 @@ export default {
     const router = useRouter();
     const route = useRoute();
     const isDarkTheme = ref(false);
+    const accounts = ref([]);
+    const selectedAccountId = ref(null);
 
     // Removed searchQuery and performSearch, as the search bar is deleted
     const toggleTheme = () => {
@@ -79,12 +102,24 @@ export default {
       return isDarkTheme.value ? "dark-theme" : "";
     });
 
+    // Check if we're on inbox view
+    const isInboxView = computed(() => {
+      return route.path.includes('/email/inbox') || route.path === '/app';
+    });
+
     onMounted(async () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       if (!authStore.isAuthenticated) {
         router.push("/login");
         return;
+      }
+
+      // Load Gmail accounts for account selector
+      try {
+        accounts.value = await fetchGmailAccounts();
+      } catch (error) {
+        console.error("Failed to load Gmail accounts:", error);
       }
 
       // Check if user just completed OAuth
@@ -176,6 +211,9 @@ export default {
       isDarkTheme,
       toggleTheme,
       themeClass,
+      accounts,
+      selectedAccountId,
+      isInboxView,
     };
   },
 };
@@ -395,6 +433,51 @@ export default {
   color: var(--text-primary);
   flex-grow: 1;
   text-align: left;
+}
+
+/* Account Selector Styles */
+.account-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  margin-right: 1rem;
+}
+
+.selector-icon {
+  font-size: 1.2rem;
+  color: var(--text-secondary);
+}
+
+.account-dropdown {
+  padding: 0.5rem 2rem 0.5rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--content-bg);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  min-width: 200px;
+}
+
+.account-dropdown:hover {
+  border-color: var(--primary-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.account-dropdown:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.account-dropdown option {
+  padding: 0.5rem;
 }
 
 /* Removed search-bar, search-bar input, etc. CSS */

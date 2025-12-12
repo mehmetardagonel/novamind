@@ -93,6 +93,12 @@ const routes = [
         name: 'Compose',
         component: () => import(/* webpackChunkName: "compose-view" */ '../views/ComposeView.vue')
       },
+      // Accounts Management
+      {
+        path: 'accounts',
+        name: 'Accounts',
+        component: () => import(/* webpackChunkName: "accounts-view" */ '../views/AccountsView.vue')
+      },
       // Default child route -> inbox
       {
         path: '',

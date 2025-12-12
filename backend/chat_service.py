@@ -48,7 +48,7 @@ class ChatService:
 
         # Gemini modeli oluştur
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-lite",
+            model="gemini-2.5-flash",
             google_api_key=api_key,
             temperature=0.7,
         )
@@ -69,6 +69,10 @@ class ChatService:
                 2. since_date and/or until_date: ISO format (YYYY-MM-DD)
 
                 All filters are optional and can be combined.
+                IMPORTANT:
+- For a         SINGLE specific day, use BOTH since_date AND until_date with the SAME date
+- For a         date range, use different since_date and until_date
+- For "f        rom X onwards", use only since_date
                 Examples:
                 - {"sender": "boss", "time_period": "today"} for emails from boss today
                 - {"since_date": "2025-11-01"} for emails from November 1st onwards
@@ -113,17 +117,22 @@ class ChatService:
             Tool(
                 name="draft_email",
                 func=lambda x: json.dumps(self._parse_draft_email(x), indent=2),
-                description="""Create a draft email without sending it. You should compose a professional email based on the user's request.
+                description="""Create a draft email without sending it. You MUST ALWAYS provide the recipient email address.
                 Input format: 'to_email|subject|body' where:
-                - to_email: recipient's email address (optional, can be empty: '|subject|body' or '||body' for body-only)
+                - to_email: recipient's email address (REQUIRED - cannot be empty)
                 - subject: a clear, concise subject line (optional, can be empty)
                 - body: a well-written, professional email body that addresses the user's intent
 
-                You can create drafts with just the body (body-only), and the user can add recipient and subject later by updating the draft.
+                CRITICAL RULES:
+                1. The recipient email address is MANDATORY - drafts cannot be created without it
+                2. If user provides only a name (e.g., "John"), ask for their full email address
+                3. If user does not provide a recipient, you MUST ASK for it before creating the draft
+                4. If the system returns "requires_recipient": true, prompt user for the email address
+
                 Examples:
                 - Full: 'berat@company.com|Project Meeting|Hi Berat, I hope this email finds you well...'
-                - Body only: '||Hi Berat, I hope this email finds you well...'
-                - With subject: '|Project Meeting|Hi Berat, I hope this email finds you well...'
+                - User didn't provide email: Wait for their response and ask "What is the recipient's email address?"
+                - User provided name only: Ask "What is John's email address?"
                 """
             ),
             Tool(
@@ -188,6 +197,19 @@ When users ask you to draft, send, or reply to emails:
 3. Use appropriate tone (formal/informal) based on the context
 4. Include relevant details from the user's request
 5. For drafts, create complete emails that users can review before sending
+
+MANDATORY REQUIREMENT FOR DRAFTS:
+- Recipient email address is REQUIRED for all drafts
+- You MUST NOT generate or assume email addresses
+- You MUST ALWAYS ask user for email if not provided
+- If user doesn't provide a recipient email, you MUST:
+  1. Compose the email content based on their request
+  2. Use the draft_email tool (which will return requires_recipient: true)
+  3. When the system indicates recipient is needed, ASK THE USER for the recipient email
+  4. Wait for user to provide the email address
+  5. Then retry draft creation with the provided email
+- If user provides only a name (e.g., "John"), politely ask for the full email address
+- Never create "body-only" drafts
 
 CRITICAL RULE FOR DRAFT OPERATIONS (UPDATE, SEND, DELETE):
 When user asks about draft operations (update draft, send draft, delete draft), you MUST:
@@ -346,7 +368,7 @@ Thought:{agent_scratchpad}"""
             
             # HAFİFLETİLMİŞ listeyi JSON'a çevir
             json_str = json.dumps(emails_for_json, indent=2, cls=DateTimeEncoder)
-            return f"{formatted_response}\n\n```json\n{json_str}\n```"
+            return f"```json\n{json_str}\n```"
 
         return json.dumps(emails, indent=2, cls=DateTimeEncoder)
 
@@ -410,9 +432,36 @@ Thought:{agent_scratchpad}"""
                 to = ""
                 subject = ""
 
-            return draft_email(to, subject, body)
+            # Call draft_email with parsed values
+            result = draft_email(to, subject, body)
+
+            # Check if recipient is required (missing or invalid)
+            if result.get("requires_recipient"):
+                # Save composed content for later when user provides email
+                self.pending_selection = {
+                    "action": "draft_awaiting_recipient",
+                    "composed_subject": subject,
+                    "composed_body": body
+                }
+
+                # Return a message structure that tells agent to ask user
+                return {
+                    "success": False,
+                    "action_required": "ask_recipient",
+                    "message": result.get("message"),
+                    "hint": result.get("hint", ""),
+                    "system_message": "Ask for the recipient email address. Wait for user response."
+                }
+
+            # If successful or other error, return the result from draft_email
+            return result
+
         except Exception as e:
-            return {"success": False, "message": f"Invalid input format. Use: 'to|subject|body' or '||body' for body-only draft. Error: {str(e)}"}
+            logger.error(f"Error parsing draft_email input: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Draft oluşturmada hata: {str(e)}"
+            }
 
 
     def _parse_update_draft_for_recipient(self, input_str: str) -> dict:
@@ -465,6 +514,8 @@ Thought:{agent_scratchpad}"""
                 logger.warning(f"Draft {draft_id} has empty body")
                 return instruction
 
+            logger.info(f"Sending request to Gemini for body enhancement (Draft ID: {draft_id})...")
+
             enhancement_prompt = f"""You are helping to update an email draft body.
 
 Current draft body:
@@ -481,7 +532,6 @@ Your task:
 
 IMPORTANT: Return the FULL email body (greeting + content + closing), not just the modified part."""
 
-            logger.info(f"Sending request to Gemini for body enhancement (Draft ID: {draft_id})...")
             response = self.llm.invoke(enhancement_prompt)
 
             if hasattr(response, 'content'):
@@ -550,9 +600,13 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
         try:
             if operation == "send":
-                send_draft(draft_id)
-                self.pending_selection = None
-                return f"✅ Draft sent: '{subject}'"
+                # ✨ Confirmation state SET ET
+                self.pending_selection = {
+                    "action": "send_draft_after_selection",
+                    "draft_id": draft_id,
+                    "subject": subject
+                }
+                return f"Are you sure you want to send the draft '{subject}'?\n\nReply with 'Yes' or 'No'"
 
             elif operation == "delete":
                 delete_draft(draft_id)
@@ -577,7 +631,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                 )
                 
                 if result.get("success"):
-                    return f"✅ Draft updated: '{subject}'"
+                    return f"✅ Draft updated: '{subject} \n New body is: {new_body}'"
                 else:
                     return f"❌ Failed to update draft: {result.get('message', 'Unknown error')}"
 
@@ -600,8 +654,17 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
             elif len(drafts) == 1:
                 draft_id = drafts[0].get("id")
                 subject = drafts[0].get("subject", "(No subject)")
-                send_draft(draft_id)
-                return f"✅ Draft sent: '{subject}'"
+    
+                # ✨ CONFIRMATION STATE SET ET (direkt gönderme yerine)
+                self.pending_selection = {
+                    "action": "send_draft",
+                    "draft_id": draft_id,
+                    "to_email": to_email,
+                    "subject": subject
+                }
+    
+                # Kullanıcıdan onay iste
+                return f"Are you sure you want to send the draft '{subject}' to {to_email}?\n\nReply with 'Yes' or 'No'"
 
             else:
                 draft_list = "\n".join([
@@ -669,7 +732,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                 )
                 
                 if result.get("success"):
-                    return f"✅ Draft updated: '{subject}'"
+                    return f"✅ Draft updated: '{subject} \n New body is: {new_body}'"
                 else:
                     return f"❌ Failed to update draft: {result.get('message', 'Unknown error')}"
 
@@ -708,12 +771,115 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
             logger.error(f"Error getting drafts for {to_email}: {str(e)}")
             return f"❌ Error: {str(e)}"
 
+    def _validate_email_format(self, email: str) -> bool:
+        """
+        Basic email format validation.
+        Returns True if email looks valid (minimal check).
+        Gmail API will do comprehensive validation.
+        """
+        if not email or not isinstance(email, str):
+            return False
+
+        email = email.strip()
+        # Basic pattern: something@something.something
+        if "@" not in email:
+            return False
+
+        parts = email.split("@")
+        if len(parts) != 2:
+            return False
+
+        local, domain = parts
+        if not local or not domain:
+            return False
+
+        if "." not in domain:
+            return False
+
+        return True
+
+    def _handle_draft_recipient_input(self, user_input: str) -> str:
+        """
+        Handle user input when draft is awaiting recipient email.
+        Called when pending_selection["action"] == "draft_awaiting_recipient"
+        """
+        if not self.pending_selection:
+            return "Error: No pending draft. Please try again."
+
+        email_input = user_input.strip()
+
+        # Validate email format
+        if not self._validate_email_format(email_input):
+            return f"'{email_input}' doesn't look like a valid email address.\n\nPlease provide a valid email (e.g., john@example.com)"
+
+        # Email is valid - now create the draft with saved subject and body
+        composed_subject = self.pending_selection.get("composed_subject", "")
+        composed_body = self.pending_selection.get("composed_body", "")
+
+        try:
+            result = draft_email(
+                to=email_input,
+                subject=composed_subject,
+                body=composed_body
+            )
+
+            # Clear pending state
+            self.pending_selection = None
+
+            if result.get("success"):
+                preview = result.get("draft", {})
+                return f"✅ Draft created successfully!\n\nRecipient: {email_input}\nSubject: {preview.get('subject', '(No subject)')}\nPreview: {preview.get('body', '')[:100]}..."
+            else:
+                return f"❌ Error creating draft: {result.get('message', 'Unknown error')}"
+
+        except Exception as e:
+            logger.error(f"Error creating draft with recipient: {str(e)}")
+            self.pending_selection = None
+            return f"❌ Error: {str(e)}"
+
     def chat(self, user_message: str) -> str:
         try:
             if not user_message or not user_message.strip():
                 return "Please provide a message to get started."
 
             message_stripped = user_message.strip()
+
+            # Handle pending selections and actions
+            if self.pending_selection and "action" in self.pending_selection:
+                action = self.pending_selection.get("action")
+
+                # NEW: Handle draft awaiting recipient email
+                if action == "draft_awaiting_recipient":
+                    return self._handle_draft_recipient_input(message_stripped)
+
+                # Existing: Handle confirmation for actions (Yes/No)
+                if message_stripped.lower() in ['yes', 'y']:
+                    # ✅ ONAY VERİLDİ - İŞLEMİ YAP
+                    if action == "send_draft":
+                        draft_id = self.pending_selection["draft_id"]
+                        to_email = self.pending_selection["to_email"]
+                        subject = self.pending_selection["subject"]
+                        result = send_draft(draft_id)
+                        self.pending_selection = None  # Reset
+                        return f"✅ Draft sent to {to_email}!"
+                    
+                    elif action == "send_draft_after_selection":  # ← YENİ
+                        draft_id = self.pending_selection["draft_id"]
+                        subject = self.pending_selection["subject"]
+                        result = send_draft(draft_id)
+                        self.pending_selection = None
+            
+                        if result.get("success"):
+                            return f"✅ Draft sent: '{subject}'"
+    
+                elif message_stripped.lower() in ['no', 'n']:
+                    # ❌ ONAY VERİLMEDİ
+                    self.pending_selection = None  # Reset
+                    return "❌ Draft not sent. Operation cancelled."
+    
+                else:
+                    # Geçersiz yanıt
+                    return "Please reply with 'Yes' or 'No'"
 
             if self.pending_selection and message_stripped.isdigit():
                 return self._handle_draft_selection(int(message_stripped))
@@ -724,6 +890,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
             is_draft_related = any(kw.lower() in message_stripped.lower() for kw in draft_keywords)
 
             logger.info("Sending request to Gemini Agent...")
+
             response = self.agent_executor.invoke({"input": user_message})
             output = response.get("output", "No response generated")
 

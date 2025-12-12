@@ -193,6 +193,38 @@ export const getTrashEmails = async (userId) => {
   return res.data;
 };
 
+export const fetchUnifiedEmails = async (userId, accountId = null, filters = {}, maxPerAccount = 25) => {
+  const resolvedUserId = await resolveUserId(userId);
+
+  const params = new URLSearchParams();
+
+  // Add account_id if filtering by specific account
+  if (accountId) params.append("account_id", accountId);
+  if (maxPerAccount) params.append("max_per_account", String(maxPerAccount));
+  if (filters.sender) params.append("sender", filters.sender);
+  if (filters.subject_contains)
+    params.append("subject_contains", filters.subject_contains);
+  if (filters.unread !== undefined)
+    params.append("unread", String(filters.unread));
+  if (filters.labels && filters.labels.length > 0) {
+    filters.labels.forEach((label) => params.append("labels", label));
+  }
+  if (filters.newer_than_days != null) {
+    params.append("newer_than_days", String(filters.newer_than_days));
+  }
+  if (filters.since) params.append("since", filters.since);
+  if (filters.until) params.append("until", filters.until);
+
+  const query = params.toString();
+  const endpoint = query ? `/read-email/unified?${query}` : "/read-email/unified";
+
+  const res = await apiClient.get(endpoint, {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+
+  return res.data;
+};
+
 export const logoutGmail = async () => {
   // No X-User-Id needed, backend /logout is global for now
   const res = await apiClient.post("/logout");
@@ -330,6 +362,7 @@ export default {
   getImportantEmails,
   getSpamEmails,
   getTrashEmails,
+  fetchUnifiedEmails,
   deleteEmail,
   restoreEmail,
   setEmailStar,

@@ -21,7 +21,7 @@ from gmail_service import (
     move_mails as move_gmail_mails
 )
 from filters import EmailFilters
-from datetime import timedelta, date
+from datetime import timedelta, date, datetime
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -103,28 +103,49 @@ def send_email(to: str, subject: str, body: str) -> Dict:
 def draft_email(to: str = "", subject: str = "", body: str = "") -> Dict:
     """
     Create a draft email without sending it.
-    At least the body is required for a draft.
+    MANDATORY: Recipient email is required. Body content is optional (can be empty for draft editing later).
     """
     try:
-        if not body:
+        # CRITICAL: Recipient email is MANDATORY for all drafts
+        if not to or not to.strip():
             return {
                 "success": False,
-                "message": "At least body content is required for a draft"
+                "requires_recipient": True,
+                "message": "Recipient email address is required to create a draft",
+                "hint": "Please provide the email address of who you want to send this to"
             }
 
-        draft = create_draft(to=to, subject=subject, body=body)
+        # Basic email format validation (@ and . check)
+        # Gmail API will do full validation
+        to_stripped = to.strip()
+        if "@" not in to_stripped or "." not in to_stripped.split("@")[-1]:
+            return {
+                "success": False,
+                "requires_recipient": True,
+                "message": f"Invalid email format: '{to_stripped}'",
+                "invalid_email": to_stripped,
+                "hint": "Please provide a valid email address (e.g., john@example.com)"
+            }
+
+        # Body is optional - drafts can be created with empty body for later editing
+        draft = create_draft(to=to, subject=subject, body=body or "")
         draft_id = draft.get("id")
 
         return {
             "success": True,
             "message": "Draft created successfully",
-            "draft_id": draft_id
+            "draft_id": draft_id,
+            "draft": {
+            "to": to,
+            "subject": subject,
+            "body": body[:200] + "..." if len(body) > 200 else body  # Preview
+    }
         }
     except Exception as e:
         logger.error(f"Error creating draft: {str(e)}")
         return {
             "success": False,
-            "message": f"Failed to create draft: {str(e)}"
+            "message": f"Error creating draft: {str(e)}"
         }
 
 
@@ -420,12 +441,37 @@ def fetch_mails(
             elif time_period == 'last_3_months':
                 calculated_since = today - timedelta(days=90)
 
+        # Parse string dates to date objects with error handling
+        parsed_since = None
+        parsed_until = None
+
+        try:
+            # Handle since_date (string to date conversion)
+            if since_date:
+                # since_date is ISO format string like "2025-11-01"
+                parsed_since = datetime.fromisoformat(since_date).date()
+            elif calculated_since:
+                # calculated_since is already a date object
+                parsed_since = calculated_since
+
+            # Handle until_date (string to date conversion)
+            if until_date:
+                # until_date is ISO format string like "2025-11-30"
+                parsed_until = datetime.fromisoformat(until_date).date()
+
+        except ValueError as e:
+            # Invalid date format provided
+            logger.error(f"Invalid date format in fetch_mails: {str(e)}")
+            return [{
+                "error": f"Invalid date format. Please use YYYY-MM-DD format (e.g., 2025-11-01)",
+                "details": str(e)
+            }]
+
         filters = EmailFilters(
             sender=sender,
             subject_contains=subject_keyword,
-            since=calculated_since,
-            since_custom=since_date,
-            until_custom=until_date
+            since=parsed_since,  # Now always a date object or None
+            until=parsed_until   # Now always a date object or None
         )
 
         query = filters.to_gmail_query()
@@ -523,3 +569,4 @@ def move_mails_by_sender(sender: str, target_folder: str, max_results: int = 50)
             "moved_count": 0,
             "message": f"Failed to move emails: {str(e)}"
         }
+    

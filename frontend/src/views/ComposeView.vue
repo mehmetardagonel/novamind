@@ -119,10 +119,12 @@
 
 <script>
 import { ref, nextTick, onUnmounted } from "vue";
+import { useAuthStore } from "../stores/auth";
 
 export default {
   name: "ComposeView",
   setup() {
+    const authStore = useAuthStore();
     const userPrompt = ref("");
     const isLoading = ref(false);
     const historyContainer = ref(null);
@@ -245,7 +247,10 @@ export default {
       try {
         const response = await fetch(API_URL, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-User-Id": authStore.user?.id,
+          },
           body: JSON.stringify({
             message: messageText,
             session_id: sessionId.value,

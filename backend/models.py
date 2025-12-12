@@ -2,6 +2,15 @@ from pydantic import BaseModel, Field, EmailStr
 from datetime import datetime, timezone
 from typing import Optional, List
 
+class GmailAccountOut(BaseModel):
+    """Gmail account information returned to frontend"""
+    id: str
+    email_address: str
+    display_name: str
+    is_primary: bool
+    created_at: datetime
+    last_sync_at: Optional[datetime] = None
+
 class EmailOut(BaseModel):
     message_id: str
     sender: str
@@ -11,6 +20,9 @@ class EmailOut(BaseModel):
     date: datetime
     ml_prediction: Optional[str] = None  # ML classification: spam, ham, or important
     label_ids: List[str] = []
+    # Multi-account support
+    account_id: Optional[str] = None
+    account_email: Optional[str] = None
 
 class EmailRequest(BaseModel):
     to: EmailStr

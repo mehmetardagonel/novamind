@@ -64,6 +64,12 @@ export default {
         icon: "label",
         to: "/app/email/labels",
       },
+      {
+        view: "accounts",
+        label: "Hesaplar",
+        icon: "manage_accounts",
+        to: "/app/accounts",
+      },
     ]);
 
     return {

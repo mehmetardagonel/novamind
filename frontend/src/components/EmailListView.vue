@@ -57,6 +57,9 @@
             <div class="email-header">
               <div class="sender-with-label">
                 <span class="email-sender">{{ email.sender }}</span>
+                <span v-if="email.account_email" class="account-badge" :title="email.account_email">
+                  {{ email.account_email }}
+                </span>
                 <span v-if="email.ml_prediction"
                       class="ml-label"
                       :class="'ml-label-' + email.ml_prediction">
@@ -206,6 +209,9 @@
                 <div class="email-date-full">
                   {{ formatFullDate(selectedEmail.date) }}
                 </div>
+                <div v-if="selectedEmail.account_email" class="account-info">
+                  <span class="account-badge">{{ selectedEmail.account_email }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -232,6 +238,7 @@ import { onMounted, ref, watch, computed } from "vue";
 import { useRoute } from "vue-router";
 import {
   fetchEmails,
+  fetchUnifiedEmails,
   deleteEmail,
   setEmailStar,
   restoreEmail,
@@ -247,6 +254,10 @@ export default {
       type: String,
       required: true,
       default: "inbox",
+    },
+    selectedAccountId: {
+      type: String,
+      default: null,
     },
     // Removed emailsPerPage prop
   },
@@ -299,8 +310,9 @@ export default {
           // → use dedicated label endpoint (by label ID)
           data = await getEmailsByLabel(labelId);
         } else if (props.folder === "inbox") {
-          // Normal inbox
-          data = await fetchEmails("inbox");
+          // Unified inbox - fetch emails from all connected Gmail accounts
+          // Pass selectedAccountId to filter by specific account if selected
+          data = await fetchUnifiedEmails(null, props.selectedAccountId);
         } else {
           // Sent / Favorites / Important / Spam / Drafts / Trash
           data = await fetchEmails(props.folder);
@@ -437,6 +449,16 @@ export default {
 
     watch(
       () => route.query.label,
+      () => {
+        if (props.folder === "inbox") {
+          loadEmails();
+        }
+      }
+    );
+
+    // Watch for account selection changes
+    watch(
+      () => props.selectedAccountId,
       () => {
         if (props.folder === "inbox") {
           loadEmails();
@@ -814,6 +836,23 @@ export default {
   font-size: 1.05rem;
 }
 
+/* Account Badge */
+.account-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  background-color: #e3f2fd;
+  color: #1565c0;
+  border: 1px solid #bbdefb;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ML Classification Label Badges */
 .ml-label {
   display: inline-block;
@@ -963,6 +1002,10 @@ export default {
 .email-date-full {
   font-size: 0.9rem;
   color: var(--text-secondary);
+}
+
+.account-info {
+  margin-top: 0.5rem;
 }
 
 .email-body {

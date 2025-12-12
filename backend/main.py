@@ -19,6 +19,7 @@ from models import (
     LabelOut,
     LabelCreate,
     LabelUpdateRequest,
+    GmailAccountOut,
 )
 from filters import EmailFilters
 # Import our refactored service and its config
@@ -36,6 +37,20 @@ from gmail_service import (
     create_label as gmail_create_label,
     delete_label as gmail_delete_label,
     modify_message_labels,
+    get_gmail_service,
+    get_user_gmail_service,
+    fetch_messages_with_service,
+    # Multi-account functions
+    fetch_messages_multi_account,
+    fetch_messages_by_label_multi,
+    fetch_drafts_multi,
+    trash_message_multi,
+    untrash_message_multi,
+    set_star_multi,
+    modify_message_labels_multi,
+    list_labels_multi,
+    create_label_multi,
+    delete_label_multi,
     CLIENT_CONFIG,
     SCOPES
 )
@@ -43,6 +58,8 @@ from gmail_service import (
 from chat_service import ChatService
 # Import ML Service
 from ml_service import get_classifier
+# Import Gmail Account Service
+from gmail_account_service import gmail_account_service
 
 import logging
 
@@ -136,12 +153,15 @@ class ChatResponse(BaseModel):
 
 
 @app.get("/read-email", response_model=List[EmailOut])
-async def get_emails(filters: EmailFilters = Depends()):
+async def get_emails(
+    user_id: str = Header(..., alias="X-User-Id"),
+    filters: EmailFilters = Depends()
+):
     """
     Fetch emails using Gmail API with ML classification.
-    If auth is required, return 401 with an auth_url for the frontend.
+    Multi-account support: fetches from all connected accounts and merges results.
     """
-    logger.info(f"Endpoint called: /read-email with filters: {filters}")
+    logger.info(f"Endpoint called: /read-email for user {user_id} with filters: {filters}")
     try:
         query = filters.to_gmail_query()
 
@@ -150,7 +170,7 @@ async def get_emails(filters: EmailFilters = Depends()):
         else:
             query = "in:inbox"
 
-        emails = fetch_messages(query=query)
+        emails = await fetch_messages_multi_account(user_id, query, max_per_account=25)
 
         # Apply ML classification to all emails
         try:
@@ -207,34 +227,55 @@ async def get_auth_status():
 
 
 @app.get("/auth/callback")
-async def auth_callback(code: str):
+async def auth_callback(code: str, state: Optional[str] = None):
     """
-    This is the endpoint Google redirects to after user login.
-    It exchanges the 'code' for a 'token.json'.
+    OAuth callback - saves token to database (multi-account) or token.json (legacy).
+    State parameter contains user_id for multi-account flow.
     """
     logger.info("Endpoint called: /auth/callback")
-    try:
-        flow = Flow.from_client_config(
-            CLIENT_CONFIG,
-            scopes=SCOPES
-        )
-        flow.redirect_uri = REDIRECT_URI
 
-        # Exchange the code for credentials
+    try:
+        import json
+
+        # Check if this is a multi-account flow (state contains user_id)
+        user_id = None
+        if state:
+            try:
+                state_data = json.loads(state)
+                user_id = state_data.get("user_id")
+            except:
+                pass
+
+        flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
+        flow.redirect_uri = REDIRECT_URI
         flow.fetch_token(code=code)
         creds = flow.credentials
 
-        # Save the credentials to token.json
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
-            
-        logger.info("Successfully exchanged code for token and saved to token.json")
-        # Redirect the user's browser back to the frontend app
-        return RedirectResponse(url=FRONTEND_URL)
-        
+        if user_id:
+            # Multi-account flow: save to database
+            service = get_gmail_service(credentials=creds)
+            profile = service.users().getProfile(userId="me").execute()
+            email_address = profile.get("emailAddress")
+
+            await gmail_account_service.save_account(
+                user_id=user_id,
+                email_address=email_address,
+                credentials=creds
+            )
+
+            logger.info(f"Connected Gmail account {email_address} for user {user_id}")
+            return RedirectResponse(url=f"{FRONTEND_URL}/inbox?connected={email_address}")
+        else:
+            # Legacy flow: save to token.json (backward compatibility)
+            with open("token.json", "w") as token:
+                token.write(creds.to_json())
+
+            logger.info("Successfully exchanged code for token and saved to token.json")
+            return RedirectResponse(url=FRONTEND_URL)
+
     except Exception as e:
         logger.error(f"Authentication failed: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}")
+        return RedirectResponse(url=f"{FRONTEND_URL}/inbox?error=connection_failed")
 
 
 @app.post("/send-email")
@@ -365,40 +406,40 @@ async def chat(request: ChatRequest):
 @app.get("/emails/drafts", response_model=List[EmailOut])
 async def list_drafts(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        emails = fetch_drafts(max_results=50, user_id=user_id)
-        return apply_ml_classification(emails)
+        emails = await fetch_drafts_multi(user_id, max_per_account=50)
+        return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/sent", response_model=List[EmailOut])
 async def list_sent(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        emails = fetch_messages_by_label("SENT", max_results=50, user_id=user_id)
-        return apply_ml_classification(emails)
+        emails = await fetch_messages_by_label_multi(user_id, "SENT", max_per_account=50)
+        return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/favorites", response_model=List[EmailOut])
 async def list_starred(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        emails = fetch_messages_by_label("STARRED", max_results=50, user_id=user_id)
-        return apply_ml_classification(emails)
+        emails = await fetch_messages_by_label_multi(user_id, "STARRED", max_per_account=50)
+        return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/important", response_model=List[EmailOut])
 async def list_important(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        emails = fetch_messages_by_label("IMPORTANT", max_results=50, user_id=user_id)
-        return apply_ml_classification(emails)
+        emails = await fetch_messages_by_label_multi(user_id, "IMPORTANT", max_per_account=50)
+        return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/spam", response_model=List[EmailOut])
 async def list_spam(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        emails = fetch_messages_by_label("SPAM", max_results=50, include_spam_trash=True, user_id=user_id)
-        return apply_ml_classification(emails)
+        emails = await fetch_messages_by_label_multi(user_id, "SPAM", max_per_account=50, include_spam_trash=True)
+        return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -408,8 +449,8 @@ async def list_trash(user_id: str = Header(..., alias="X-User-Id")):
     Retrieve deleted emails (Trash folder).
     """
     try:
-        emails = fetch_messages_by_label("TRASH", max_results=50, include_spam_trash=True, user_id=user_id)
-        return apply_ml_classification(emails)
+        emails = await fetch_messages_by_label_multi(user_id, "TRASH", max_per_account=50, include_spam_trash=True)
+        return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -419,7 +460,7 @@ async def delete_email(message_id: str, user_id: str = Header(..., alias="X-User
     Move an email to Trash.
     """
     try:
-        resp = trash_message(message_id, user_id=user_id)
+        resp = await trash_message_multi(user_id, message_id)
         return {
             "status": "trashed",
             "message_id": resp.get("id", message_id),
@@ -433,14 +474,14 @@ async def restore_email(message_id: str, user_id: str = Header(..., alias="X-Use
     Restore an email from Trash back to the mailbox (Inbox).
     """
     try:
-        resp = untrash_message(message_id, user_id=user_id)
+        resp = await untrash_message_multi(user_id, message_id)
         return {
             "status": "restored",
             "message_id": resp.get("id", message_id),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 @app.post("/emails/{message_id}/star")
 async def star_email(message_id: str, starred: bool = Body(True), user_id: str = Header(..., alias="X-User-Id")):
     """
@@ -451,14 +492,14 @@ async def star_email(message_id: str, starred: bool = Body(True), user_id: str =
     { "starred": false }   -> remove star
     """
     try:
-        resp = set_star(message_id, starred, user_id=user_id)
+        resp = await set_star_multi(user_id, message_id, starred)
         return {
             "status": "starred" if starred else "unstarred",
             "message_id": resp.get("id", message_id),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 @app.get("/emails/by-label/{label_id}", response_model=List[EmailOut])
 async def list_by_label(
     label_id: str,
@@ -469,18 +510,18 @@ async def list_by_label(
     This returns all messages having that label, like Gmail's label view.
     """
     try:
-        emails = fetch_messages_by_label(label_id, max_results=50, user_id=user_id)
-        return apply_ml_classification(emails)
+        emails = await fetch_messages_by_label_multi(user_id, label_id, max_per_account=50)
+        return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/labels", response_model=List[LabelOut])
 async def list_user_labels(user_id: str = Header(..., alias="X-User-Id")):
     """
-    Return only user-created labels (not system labels like INBOX, SENT).
+    Return only user-created labels from primary account (not system labels like INBOX, SENT).
     """
     try:
-        raw_labels = gmail_list_labels(user_id=user_id)
+        raw_labels = await list_labels_multi(user_id)
 
         result: List[LabelOut] = []
         for lab in raw_labels:
@@ -504,10 +545,10 @@ async def create_user_label(
     user_id: str = Header(..., alias="X-User-Id"),
 ):
     """
-    Create a new user label in Gmail.
+    Create a new user label in the primary Gmail account.
     """
     try:
-        created = gmail_create_label(payload.name, user_id=user_id)
+        created = await create_label_multi(user_id, payload.name)
         return LabelOut(
             id=created.get("id"),
             name=created.get("name", payload.name),
@@ -523,14 +564,14 @@ async def delete_user_label(
     user_id: str = Header(..., alias="X-User-Id"),
 ):
     """
-    Delete a user label by its id.
+    Delete a user label by its id from the primary account.
     """
     try:
-        gmail_delete_label(label_id, user_id=user_id)
+        await delete_label_multi(user_id, label_id)
         return JSONResponse(status_code=204, content=None)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 @app.post("/emails/{message_id}/labels")
 async def update_email_labels(
     message_id: str,
@@ -547,15 +588,174 @@ async def update_email_labels(
     }
     """
     try:
-        resp = modify_message_labels(
+        resp = await modify_message_labels_multi(
+            user_id=user_id,
             message_id=message_id,
             add_label_ids=payload.add_label_ids,
-            remove_label_ids=payload.remove_label_ids,
-            user_id=user_id,
+            remove_label_ids=payload.remove_label_ids
         )
         return {
             "status": "ok",
             "message_id": resp.get("id", message_id),
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== Multi-Account Gmail Management Endpoints =====
+
+@app.get("/gmail/accounts", response_model=List[GmailAccountOut])
+async def list_gmail_accounts(user_id: str = Header(..., alias="X-User-Id")):
+    """List all connected Gmail accounts for the user"""
+    try:
+        accounts = await gmail_account_service.get_all_accounts(user_id)
+        return accounts
+    except Exception as e:
+        logger.error(f"Error listing Gmail accounts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/gmail/accounts/{account_id}/set-primary")
+async def set_primary_account(
+    account_id: str,
+    user_id: str = Header(..., alias="X-User-Id")
+):
+    """Set an account as primary"""
+    try:
+        success = await gmail_account_service.set_primary(user_id, account_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error setting primary account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/gmail/accounts/{account_id}")
+async def delete_gmail_account(
+    account_id: str,
+    user_id: str = Header(..., alias="X-User-Id")
+):
+    """Disconnect a Gmail account"""
+    try:
+        success = await gmail_account_service.delete_account(user_id, account_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting Gmail account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/gmail/auth/connect")
+async def initiate_gmail_connect(user_id: str = Header(..., alias="X-User-Id")):
+    """
+    Initiate Gmail OAuth flow for connecting a new account.
+    Returns auth URL that includes user_id in state parameter.
+    """
+    try:
+        import json
+        flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
+        flow.redirect_uri = REDIRECT_URI
+
+        # Include user_id in state to identify user after OAuth callback
+        state = json.dumps({"user_id": user_id})
+        auth_url, _ = flow.authorization_url(prompt='consent', state=state)
+
+        return {"auth_url": auth_url}
+    except Exception as e:
+        logger.error(f"Error initiating Gmail connection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/read-email/unified", response_model=List[EmailOut])
+async def get_unified_emails(
+    user_id: str = Header(..., alias="X-User-Id"),
+    account_id: Optional[str] = None,
+    max_per_account: int = 25,
+    filters: EmailFilters = Depends()
+):
+    """
+    Fetch emails from connected Gmail accounts.
+    If account_id is provided, fetch only from that account.
+    Otherwise, fetch from all accounts (unified view).
+    Sorted by date (newest first).
+    """
+    logger.info(f"Unified inbox request for user {user_id}")
+
+    try:
+        # Get all connected accounts
+        accounts = await gmail_account_service.get_all_accounts(user_id)
+
+        if not accounts:
+            # Return empty array instead of 401 to avoid triggering logout
+            logger.info(f"No Gmail accounts found for user {user_id}")
+            return []
+
+        # Filter to specific account if requested
+        if account_id:
+            accounts = [acc for acc in accounts if acc["id"] == account_id]
+            if not accounts:
+                raise HTTPException(status_code=404, detail="Account not found")
+            logger.info(f"Filtering emails for account: {account_id}")
+
+        all_emails = []
+        query = filters.to_gmail_query()
+        if query:
+            query = f"in:inbox {query}"
+        else:
+            query = "in:inbox"
+
+        # Fetch emails from each account
+        for account in accounts:
+            try:
+                service = await get_user_gmail_service(user_id, account["id"])
+
+                # Use existing fetch logic but with specific service
+                emails = fetch_messages_with_service(
+                    service=service,
+                    query=query,
+                    max_results=max_per_account
+                )
+
+                # Add account information to each email
+                for email in emails:
+                    email.account_id = account["id"]
+                    email.account_email = account["email_address"]
+
+                all_emails.extend(emails)
+
+            except Exception as e:
+                logger.error(f"Failed to fetch from account {account['id']}: {e}")
+                # Continue with other accounts even if one fails
+                continue
+
+        # Sort all emails by date (newest first)
+        # Normalize all dates to timezone-aware UTC for comparison
+        from datetime import datetime as dt_class, timezone
+
+        def normalize_date(date_obj):
+            """Convert any datetime to timezone-aware UTC for comparison."""
+            if date_obj is None:
+                return dt_class.min.replace(tzinfo=timezone.utc)
+            if date_obj.tzinfo is None:
+                # Assume UTC if no timezone info
+                return date_obj.replace(tzinfo=timezone.utc)
+            # Convert to UTC
+            return date_obj.astimezone(timezone.utc)
+
+        all_emails.sort(key=lambda x: normalize_date(x.date), reverse=True)
+
+        # Apply ML classification
+        all_emails = apply_ml_classification(all_emails)
+
+        logger.info(f"Unified inbox: fetched {len(all_emails)} emails from {len(accounts)} accounts")
+        return all_emails
+
+    except Exception as e:
+        logger.error(f"Error fetching unified emails: {e}")
         raise HTTPException(status_code=500, detail=str(e))

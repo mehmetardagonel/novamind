@@ -1,6 +1,10 @@
 <template>
   <div class="main-content-wrapper">
-    <EmailListView :folder="folder" :key="folder" />
+    <EmailListView
+      :folder="folder"
+      :selected-account-id="selectedAccountId"
+      :key="folder"
+    />
   </div>
 </template>
 
@@ -18,6 +22,10 @@ export default {
         type: String,
         required: true,
         default: 'inbox'
+    },
+    selectedAccountId: {
+        type: String,
+        default: null
     }
   },
   setup(props) {

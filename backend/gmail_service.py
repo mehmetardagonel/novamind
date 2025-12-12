@@ -2,7 +2,7 @@ import os
 import base64
 import logging
 from email.mime.text import MIMEText
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 from dotenv import load_dotenv
 
@@ -74,10 +74,73 @@ def _get_credentials() -> Credentials:
     return creds
 
 
-def get_gmail_service(user_id: str | None = None):
-    # user_id kept for future multi-user support, but ignored for now
-    creds = _get_credentials()
-    return build("gmail", "v1", credentials=creds)
+def get_gmail_service(credentials: Credentials = None, user_id: str | None = None):
+    """
+    Build Gmail API service with provided credentials.
+    If no credentials provided, falls back to legacy token.json (backward compatibility).
+    """
+    if credentials is None:
+        # Backward compatibility: use old token.json approach
+        credentials = _get_credentials()
+    return build("gmail", "v1", credentials=credentials)
+
+
+async def get_user_gmail_service(user_id: str, account_id: str):
+    """
+    Get Gmail service for a specific user's account.
+    Fetches credentials from database.
+    """
+    from gmail_account_service import gmail_account_service
+
+    credentials = await gmail_account_service.get_credentials(user_id, account_id)
+    if not credentials:
+        raise Exception("ACCOUNT_NOT_FOUND")
+
+    if not credentials.valid:
+        if credentials.expired and credentials.refresh_token:
+            try:
+                credentials.refresh(Request())
+                # Get email address from token info or Gmail profile
+                service_temp = build("gmail", "v1", credentials=credentials)
+                profile = service_temp.users().getProfile(userId="me").execute()
+                email_address = profile.get("emailAddress")
+
+                # Save refreshed token back to database
+                await gmail_account_service.save_account(
+                    user_id=user_id,
+                    email_address=email_address,
+                    credentials=credentials
+                )
+            except Exception as e:
+                logger.error(f"Token refresh failed: {e}")
+                raise Exception("AUTH_REQUIRED")
+        else:
+            raise Exception("AUTH_REQUIRED")
+
+    return build("gmail", "v1", credentials=credentials)
+
+
+async def get_primary_account_service(user_id: str):
+    """
+    Get Gmail service for user's primary account.
+    Falls back to first account if no primary is set.
+    Raises exception if no accounts connected.
+    """
+    from gmail_account_service import gmail_account_service
+
+    accounts = await gmail_account_service.get_all_accounts(user_id)
+    if not accounts:
+        raise Exception("NO_GMAIL_ACCOUNTS_CONNECTED")
+
+    # Find primary account, or use first as fallback
+    primary_account = next(
+        (acc for acc in accounts if acc.get("is_primary", False)),
+        accounts[0]
+    )
+
+    logger.info(f"Using primary account: {primary_account['email_address']} for user {user_id}")
+
+    return await get_user_gmail_service(user_id, primary_account["id"])
 
 
 def _extract_header(headers: List[dict], name: str) -> str:
@@ -203,13 +266,95 @@ def fetch_messages(query: Optional[str] = None, max_results: int = 25) -> List[E
         return emails  # Return what we've fetched so far
 
 
-def send_email(sender: str, to: str, subject: str, body: str) -> dict:
+def fetch_messages_with_service(
+    service,
+    query: Optional[str] = None,
+    max_results: int = 25
+) -> List[EmailOut]:
+    """
+    Fetch messages using a provided Gmail service instance.
+    Used for multi-account support where service is already authenticated.
+    """
+    all_message_refs = []
+    page_token = None
+    emails: List[EmailOut] = []
+
+    try:
+        logger.info(f"Requesting messages with custom service, query: '{query or 'ALL'}'")
+        # Fetch message references with pagination
+        while len(all_message_refs) < max_results:
+            remaining = max_results - len(all_message_refs)
+            page_size = min(500, remaining)
+
+            list_resp = service.users().messages().list(
+                userId="me",
+                q=query or "",
+                maxResults=page_size,
+                pageToken=page_token
+            ).execute()
+
+            message_refs = list_resp.get("messages", [])
+            all_message_refs.extend(message_refs)
+
+            page_token = list_resp.get("nextPageToken")
+            if not page_token:
+                break
+
+        all_message_refs = all_message_refs[:max_results]
+
+        # Fetch full message details
+        for ref in all_message_refs:
+            try:
+                msg = service.users().messages().get(
+                    userId="me",
+                    id=ref["id"],
+                    format="full",
+                ).execute()
+
+                headers = msg.get("payload", {}).get("headers", [])
+                subject = _extract_header(headers, "Subject")
+                sender = _extract_header(headers, "From")
+                recipient = _extract_header(headers, "To")
+                date_str = _extract_header(headers, "Date")
+
+                date_value: Optional[datetime] = None
+                if date_str:
+                    try:
+                        date_value = parsedate_to_datetime(date_str)
+                    except Exception:
+                        date_value = None
+
+                body = _decode_body(msg.get("payload", {}))
+
+                emails.append(
+                    EmailOut(
+                        message_id=msg["id"],
+                        sender=sender,
+                        recipient=recipient,
+                        subject=subject,
+                        body=body,
+                        date=date_value,
+                        label_ids=msg.get("labelIds", []),
+                    )
+                )
+            except Exception as e:
+                logging.warning(f"Failed to fetch message {ref['id']}: {str(e)}")
+                continue
+
+        return emails
+    except Exception as e:
+        logging.error(f"Error fetching messages with service: {str(e)}")
+        return emails
+
+
+def send_email(sender: str, to: str, subject: str, body: str, service=None) -> dict:
     """
     Send an email via Gmail API.
     `sender` can be "me" or a full email address.
     """
-    service = get_gmail_service()
-    
+    if service is None:
+        service = get_gmail_service()
+
     logger.info(f"Sending email via Gmail API to: {to}")
 
     message = MIMEText(body)
@@ -375,13 +520,14 @@ def set_star(message_id: str, starred: bool, user_id: str = "") -> dict:
     ).execute()
 
 
-def create_draft(to: str, subject: str, body: str) -> dict:
+def create_draft(to: str, subject: str, body: str, service=None) -> dict:
     """
     Create a draft email in Gmail (stored with DRAFT label).
     Returns draft object with draft id and message details.
     """
-    service = get_gmail_service()
-    
+    if service is None:
+        service = get_gmail_service()
+
     logger.info(f"Creating draft via Gmail API for: {to}")
 
     message = MIMEText(body)
@@ -472,12 +618,13 @@ def get_drafts_by_recipient(to_email: str, max_results: int = 25) -> List[dict]:
         return []
 
 
-def get_draft_by_id(draft_id: str) -> Optional[dict]:
+def get_draft_by_id(draft_id: str, service=None) -> Optional[dict]:
     """
     Get a specific draft by ID.
     Returns draft object or None if not found.
     """
-    service = get_gmail_service()
+    if service is None:
+        service = get_gmail_service()
 
     try:
         draft = service.users().drafts().get(
@@ -489,12 +636,13 @@ def get_draft_by_id(draft_id: str) -> Optional[dict]:
         return None
 
 
-def delete_draft(draft_id: str) -> bool:
+def delete_draft(draft_id: str, service=None) -> bool:
     """
     Delete a draft email by ID.
     Returns True if successful, False otherwise.
     """
-    service = get_gmail_service()
+    if service is None:
+        service = get_gmail_service()
 
     try:
         service.users().drafts().delete(
@@ -506,12 +654,13 @@ def delete_draft(draft_id: str) -> bool:
         return False
 
 
-def send_draft(draft_id: str) -> Optional[dict]:
+def send_draft(draft_id: str, service=None) -> Optional[dict]:
     """
     Send a draft email and remove it from drafts.
     Returns sent message object or None if failed.
     """
-    service = get_gmail_service()
+    if service is None:
+        service = get_gmail_service()
 
     try:
         sent = service.users().drafts().send(
@@ -526,7 +675,7 @@ def send_draft(draft_id: str) -> Optional[dict]:
 
 
 def update_draft(draft_id: str, to: Optional[str] = None,
-                subject: Optional[str] = None, body: Optional[str] = None) -> Optional[dict]:
+                subject: Optional[str] = None, body: Optional[str] = None, service=None) -> Optional[dict]:
     """
     Update a draft email. Since Gmail API doesn't support partial updates,
     we delete the old draft and create a new one with updated content.
@@ -536,14 +685,16 @@ def update_draft(draft_id: str, to: Optional[str] = None,
         to: New recipient email
         subject: New subject
         body: New body content
+        service: Optional Gmail service (for multi-account support)
 
     Returns: New draft object or None if failed
     """
-    service = get_gmail_service()
+    if service is None:
+        service = get_gmail_service()
 
     try:
         # Get existing draft to preserve unmodified fields
-        existing_draft = get_draft_by_id(draft_id)
+        existing_draft = get_draft_by_id(draft_id, service=service)
         if not existing_draft:
             return None
 
@@ -849,3 +1000,202 @@ def revoke_gmail_token(token_path: str = "token.json") -> bool:
             logger.error(f"Could not delete token file: {str(delete_error)}")
 
         return False
+
+
+# ============ MULTI-ACCOUNT SUPPORT FUNCTIONS ============
+
+
+async def fetch_messages_multi_account(
+    user_id: str,
+    query: str,
+    max_per_account: int = 25
+) -> List[EmailOut]:
+    """
+    Fetch messages from all connected accounts and merge them.
+    Used for implementing unified views across multiple Gmail accounts.
+    """
+    from gmail_account_service import gmail_account_service
+
+    accounts = await gmail_account_service.get_all_accounts(user_id)
+    if not accounts:
+        return []
+
+    all_emails = []
+    for account in accounts:
+        try:
+            service = await get_user_gmail_service(user_id, account["id"])
+            emails = fetch_messages_with_service(service, query, max_per_account)
+
+            # Add account metadata to each email
+            for email in emails:
+                email.account_id = account["id"]
+                email.account_email = account["email_address"]
+
+            all_emails.extend(emails)
+        except Exception as e:
+            logger.error(f"Failed to fetch from account {account['id']}: {e}")
+            # Continue with other accounts even if one fails
+            continue
+
+    # Sort by date (newest first) with timezone normalization
+    from datetime import datetime as dt_class, timezone
+
+    def normalize_date(date_obj):
+        """Convert any datetime to timezone-aware UTC for comparison."""
+        if date_obj is None:
+            return dt_class.min.replace(tzinfo=timezone.utc)
+        if date_obj.tzinfo is None:
+            # Assume UTC if no timezone info
+            return date_obj.replace(tzinfo=timezone.utc)
+        # Convert to UTC
+        return date_obj.astimezone(timezone.utc)
+
+    all_emails.sort(key=lambda x: normalize_date(x.date), reverse=True)
+    return all_emails
+
+
+async def fetch_messages_by_label_multi(
+    user_id: str,
+    label_id: str,
+    max_per_account: int = 25,
+    include_spam_trash: bool = False
+) -> List[EmailOut]:
+    """
+    Fetch messages by label from all connected accounts.
+    """
+    query = f"label:{label_id}"
+    return await fetch_messages_multi_account(user_id, query, max_per_account)
+
+
+async def fetch_drafts_multi(user_id: str, max_per_account: int = 25) -> List[EmailOut]:
+    """
+    Fetch draft emails from all connected accounts.
+    """
+    query = "label:DRAFT"
+    return await fetch_messages_multi_account(user_id, query, max_per_account)
+
+
+async def modify_message_multi_account(
+    user_id: str,
+    message_id: str,
+    modify_func
+) -> Dict:
+    """
+    Try to modify a message across all accounts until one succeeds.
+    Message IDs are unique per account, so only one will match.
+    """
+    from gmail_account_service import gmail_account_service
+
+    accounts = await gmail_account_service.get_all_accounts(user_id)
+    if not accounts:
+        raise Exception("No Gmail accounts connected")
+
+    last_error = None
+    for account in accounts:
+        try:
+            service = await get_user_gmail_service(user_id, account["id"])
+            result = modify_func(service, message_id)
+            logger.info(f"Successfully modified message {message_id} in account {account['email_address']}")
+            return result
+        except Exception as e:
+            last_error = e
+            # Try next account
+            continue
+
+    # If we get here, message wasn't found in any account
+    raise Exception(f"Message {message_id} not found in any account: {last_error}")
+
+
+async def trash_message_multi(user_id: str, message_id: str) -> Dict:
+    """
+    Move message to trash in whichever account it belongs to.
+    """
+    def trash_func(service, msg_id):
+        return service.users().messages().trash(userId="me", id=msg_id).execute()
+
+    return await modify_message_multi_account(user_id, message_id, trash_func)
+
+
+async def untrash_message_multi(user_id: str, message_id: str) -> Dict:
+    """
+    Restore message from trash in whichever account it belongs to.
+    """
+    def untrash_func(service, msg_id):
+        return service.users().messages().untrash(userId="me", id=msg_id).execute()
+
+    return await modify_message_multi_account(user_id, message_id, untrash_func)
+
+
+async def set_star_multi(user_id: str, message_id: str, starred: bool) -> Dict:
+    """
+    Star or unstar a message in whichever account it belongs to.
+    """
+    def star_func(service, msg_id):
+        body = {
+            "addLabelIds": ["STARRED"] if starred else [],
+            "removeLabelIds": [] if starred else ["STARRED"]
+        }
+        return service.users().messages().modify(userId="me", id=msg_id, body=body).execute()
+
+    return await modify_message_multi_account(user_id, message_id, star_func)
+
+
+async def modify_message_labels_multi(
+    user_id: str,
+    message_id: str,
+    add_label_ids: List[str] = None,
+    remove_label_ids: List[str] = None
+) -> Dict:
+    """
+    Modify message labels in whichever account it belongs to.
+    """
+    def modify_func(service, msg_id):
+        body = {
+            "addLabelIds": add_label_ids or [],
+            "removeLabelIds": remove_label_ids or []
+        }
+        return service.users().messages().modify(userId="me", id=msg_id, body=body).execute()
+
+    return await modify_message_multi_account(user_id, message_id, modify_func)
+
+
+async def get_primary_account_service(user_id: str):
+    """
+    Get Gmail service for the primary account (or first account as fallback).
+    Used for label operations which are per-account.
+    """
+    from gmail_account_service import gmail_account_service
+
+    accounts = await gmail_account_service.get_all_accounts(user_id)
+    if not accounts:
+        raise Exception("No Gmail accounts connected")
+
+    # Find primary account, or use first as fallback
+    primary = next((acc for acc in accounts if acc.get("is_primary")), accounts[0])
+    return await get_user_gmail_service(user_id, primary["id"])
+
+
+async def list_labels_multi(user_id: str) -> List[Dict]:
+    """
+    List labels from the primary account.
+    """
+    service = await get_primary_account_service(user_id)
+    resp = service.users().labels().list(userId="me").execute()
+    return resp.get("labels", [])
+
+
+async def create_label_multi(user_id: str, name: str) -> Dict:
+    """
+    Create a label in the primary account.
+    """
+    service = await get_primary_account_service(user_id)
+    body = {"name": name}
+    return service.users().labels().create(userId="me", body=body).execute()
+
+
+async def delete_label_multi(user_id: str, label_id: str) -> None:
+    """
+    Delete a label from the primary account.
+    """
+    service = await get_primary_account_service(user_id)
+    service.users().labels().delete(userId="me", id=label_id).execute()
