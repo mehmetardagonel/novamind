@@ -63,6 +63,10 @@ from gmail_account_service import gmail_account_service
 
 import logging
 
+# Fix: Enable nested event loop for asyncio.run() calls in sync context
+import nest_asyncio
+nest_asyncio.apply()
+
 
 def apply_ml_classification(emails: List[EmailOut]) -> List[EmailOut]:
     """

@@ -63,3 +63,6 @@ google-generativeai==0.7.2
 # ML Classification
 scikit-learn==1.6.1
 sentence-transformers>=2.7.0
+
+# Async Event Loop Support
+nest-asyncio==1.6.0

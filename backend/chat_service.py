@@ -58,7 +58,7 @@ class ChatService:
         logger.info(f"🔑 Using GEMINI_API_KEY: {masked_key}")
         # Gemini modeli oluştur
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash-lite",
+            model="gemini-2.5-flash",
             google_api_key=api_key,
             temperature=0.7,
         )
