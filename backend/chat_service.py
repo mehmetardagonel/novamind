@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime
 
-from langchain.agents import AgentExecutor, create_react_agent
+from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain.tools import Tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -40,6 +40,8 @@ class DateTimeEncoder(json.JSONEncoder):
 
 
 class ChatService:
+    _AGENT_EARLY_STOP_OUTPUT = "Agent stopped due to iteration limit or time limit."
+
     def __init__(self, user_id: str = None):
         """
         Initialize ChatService with user context.
@@ -73,7 +75,7 @@ class ChatService:
                 func=self._format_fetch_mails_response,
                 description=(
                     "Advanced email fetching with multiple filter options. Provide filters as JSON.\n"
-                    "Available filters: label, sender, importance (true/false), subject_keyword, folder\n\n"
+                    "Available filters: label, sender, importance (true/false), subject_keyword, folder, max_results (int, default 25)\n\n"
                     "For dates, use ONE of:\n"
                     "1. time_period: 'today', 'yesterday', 'last_week', 'last_month', 'last_3_months'\n"
                     "2. since_date and/or until_date: ISO format (YYYY-MM-DD)\n\n"
@@ -177,7 +179,22 @@ class ChatService:
             ),
         ]
 
-        react_prompt = """You are an AI email assistant. Your job is to help users manage their emails efficiently.
+        try:
+            self.ml_classifier = get_classifier()
+            if self.ml_classifier:
+                logger.info(" ML Classifier integrated into ChatService")
+                self.tools.append(
+                    Tool(
+                        name="classify_emails_ml",
+                        func=self._classify_emails_with_ml,
+                        description="Classify emails using ML model (spam/ham/important). Input: JSON filters or empty string",
+                    )
+                )
+        except Exception as e:
+            logger.error(f" Could not load ML classifier: {str(e)}")
+            self.ml_classifier = None
+
+        system_prompt = """You are an AI email assistant. Your job is to help users manage their emails efficiently.
 
 When users ask you to draft, send, or reply to emails:
 1. Understand their intent and context
@@ -216,64 +233,54 @@ When using the 'fetch_mails' tool, the tool will return a response containing bo
 You MUST include that raw JSON block in your 'Final Answer' exactly as it appears.
 The frontend relies on this JSON to render the UI cards.
 NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
+"""
 
-You have access to the following tools:
+        from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-{tools}
-
-Use the following format:
-
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
-
-Begin!
-
-Question: {input}
-Thought:{agent_scratchpad}"""
-
-        from langchain.prompts import PromptTemplate
-
-        prompt = PromptTemplate(
-            input_variables=["input", "agent_scratchpad", "tools", "tool_names"],
-            template=react_prompt,
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", system_prompt),
+                ("human", "{input}"),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
+            ]
         )
 
-        agent = create_react_agent(llm=self.llm, tools=self.tools, prompt=prompt)
+        agent = create_tool_calling_agent(llm=self.llm, tools=self.tools, prompt=prompt)
+
+        max_iterations = 30
+        max_execution_time = 180.0
+        try:
+            max_iterations = int(os.getenv("LANGCHAIN_AGENT_MAX_ITERATIONS", str(max_iterations)))
+        except ValueError:
+            pass
+        try:
+            max_execution_time = float(
+                os.getenv("LANGCHAIN_AGENT_MAX_EXECUTION_TIME", str(max_execution_time))
+            )
+        except ValueError:
+            pass
 
         self.agent_executor = AgentExecutor(
             agent=agent,
             tools=self.tools,
             verbose=False,
             handle_parsing_errors=True,
-            max_iterations=10,
+            return_intermediate_steps=True,
+            max_iterations=max_iterations,
+            max_execution_time=max_execution_time,
+            early_stopping_method="force",
         )
-
-        try:
-            self.ml_classifier = get_classifier()
-            logger.info(" ML Classifier integrated into ChatService")
-        except Exception as e:
-            logger.error(f" Could not load ML classifier: {str(e)}")
-            self.ml_classifier = None
-
-        if self.ml_classifier:
-            self.tools.append(
-                Tool(
-                    name="classify_emails_ml",
-                    func=self._classify_emails_with_ml,
-                    description="Classify emails using ML model (spam/ham/important). Input: JSON filters or empty string",
-                )
-            )
 
     def _parse_fetch_mails(self, input_str: str) -> dict:
         try:
             if input_str.strip().startswith("{"):
                 filters = json.loads(input_str)
+                max_results_raw = filters.get("max_results", 25)
+                try:
+                    max_results = int(max_results_raw)
+                except (TypeError, ValueError):
+                    max_results = 25
+                max_results = max(1, min(max_results, 50))
                 return fetch_mails(
                     label=filters.get("label"),
                     sender=filters.get("sender"),
@@ -283,9 +290,10 @@ Thought:{agent_scratchpad}"""
                     until_date=filters.get("until_date"),
                     subject_keyword=filters.get("subject_keyword"),
                     folder=filters.get("folder"),
+                    max_results=max_results,
                     user_id=self.user_id,
                 )
-            return fetch_mails(user_id=self.user_id)
+            return fetch_mails(max_results=25, user_id=self.user_id)
         except json.JSONDecodeError:
             return {"error": "Invalid JSON format for fetch_mails"}
         except Exception as e:
@@ -473,32 +481,61 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
     def _extract_json_from_response(self, response_text: str) -> str:
         import re
 
-        code_block_match = re.search(r"```json\\n([\\s\\S]*?)\\n```", response_text)
+        code_block_match = re.search(
+            r"```json\s*([\s\S]*?)\s*```", response_text, re.IGNORECASE
+        )
 
         if code_block_match:
-            json_str = code_block_match.group(1).strip()
+            json_str = (code_block_match.group(1) or "").strip()
             try:
                 json.loads(json_str)
+                code_block = response_text[code_block_match.start() : code_block_match.end()]
                 intro_text = response_text[: code_block_match.start()].strip()
-                if "📧 Email" in intro_text:
-                    return f"{intro_text}\n\n```json\n{json_str}\n```"
-                return f"{intro_text} {json_str}".strip()
+                if intro_text:
+                    return f"{intro_text}\n\n{code_block}"
+                return code_block
             except json.JSONDecodeError:
                 pass
 
-        json_match = re.search(r"\\[[\\s\\S]*?\\]", response_text)
+        json_match = re.search(r"\[[\s\S]*?\]", response_text)
         if json_match:
             json_str = json_match.group(0)
             try:
                 json.loads(json_str)
                 intro_text = response_text[: json_match.start()].strip()
-                if "📧 Email" in intro_text:
+                if intro_text:
                     return f"{intro_text}\n\n```json\n{json_str}\n```"
-                return f"{intro_text} {json_str}".strip()
+                return f"```json\n{json_str}\n```"
             except json.JSONDecodeError:
                 return response_text
 
         return response_text
+
+    def _get_last_tool_observation(
+        self, intermediate_steps: list, tool_name: str
+    ) -> str | None:
+        for action, observation in reversed(intermediate_steps or []):
+            try:
+                if getattr(action, "tool", None) != tool_name:
+                    continue
+                if isinstance(observation, str) and observation.strip():
+                    return observation
+            except Exception:
+                continue
+        return None
+
+    def _ensure_fetch_mails_json_block(self, output: str, intermediate_steps: list) -> str:
+        fetch_obs = self._get_last_tool_observation(intermediate_steps, "fetch_mails")
+        if not fetch_obs:
+            return output
+
+        # If the model already included a JSON fence, don't duplicate.
+        if "```json" in (output or "").lower():
+            return output
+
+        if output and output.strip():
+            return f"{output.strip()}\n\n{fetch_obs}"
+        return fetch_obs
 
     def _handle_draft_selection(self, selection_idx: int) -> str:
         """Handle draft selection when user picks a number."""
@@ -775,11 +812,36 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
             response = self.agent_executor.invoke({"input": user_message})
             output = response.get("output", "No response generated")
+            intermediate_steps = response.get("intermediate_steps", [])
+
+            if output and output.strip() == self._AGENT_EARLY_STOP_OUTPUT:
+                logger.warning(
+                    "Agent stopped early (steps=%s). Returning best-effort tool output.",
+                    len(intermediate_steps) if isinstance(intermediate_steps, list) else "unknown",
+                )
+                best_effort = None
+                if isinstance(intermediate_steps, list):
+                    best_effort = self._get_last_tool_observation(intermediate_steps, "fetch_mails")
+                    if not best_effort:
+                        # If some other tool ran, return its last observation.
+                        for _action, observation in reversed(intermediate_steps):
+                            if isinstance(observation, str) and observation.strip():
+                                best_effort = observation
+                                break
+                if best_effort:
+                    return best_effort
+                return (
+                    "I couldn't finish that request in time. "
+                    "Please try again with a shorter query (e.g., limit dates, sender, or max_results)."
+                )
+
+            if isinstance(intermediate_steps, list):
+                output = self._ensure_fetch_mails_json_block(output, intermediate_steps)
 
             if is_draft_related and not self.pending_selection:
                 import re
 
-                email_match = re.search(r"[\\w\\.-]+@[\\w\\.-]+\\.\\w+", message_stripped)
+                email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", message_stripped)
                 if email_match:
                     email = email_match.group()
                     instruction = message_stripped.split(email, 1)[1].strip()
@@ -845,4 +907,3 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
     def clear_history(self):
         pass
-

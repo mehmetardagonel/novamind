@@ -1,4 +1,5 @@
 import os
+import re
 import base64
 import logging
 from email.mime.text import MIMEText
@@ -150,6 +151,12 @@ def _extract_header(headers: List[dict], name: str) -> str:
     return ""
 
 
+def _clean_text(text: str) -> str:
+    """Helper to strip HTML tags and normalize whitespace."""
+    text = re.sub(r'<[^>]+>', ' ', text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
 def _decode_body(payload: dict) -> str:
     """
     Extracts a text/plain body from the Gmail message payload.
@@ -162,17 +169,21 @@ def _decode_body(payload: dict) -> str:
             if mime_type.startswith("text/plain"):
                 body = part.get("body", {}).get("data")
                 if body:
-                    return base64.urlsafe_b64decode(body).decode("utf-8", errors="ignore")
-        # fallback: first part text/html or so
+                    text = base64.urlsafe_b64decode(body).decode("utf-8", errors="ignore")
+                    return _clean_text(text)[:3000]
+        # fallback: look for text/html
         for part in payload["parts"]:
-            body = part.get("body", {}).get("data")
-            if body:
-                return base64.urlsafe_b64decode(body).decode("utf-8", errors="ignore")
+            if part.get("mimeType", "").startswith("text/html"):
+                body = part.get("body", {}).get("data")
+                if body:
+                    html = base64.urlsafe_b64decode(body).decode("utf-8", errors="ignore")
+                    return _clean_text(html)[:3000]
 
     # Non-multipart
     body = payload.get("body", {}).get("data")
     if body:
-        return base64.urlsafe_b64decode(body).decode("utf-8", errors="ignore")
+        text = base64.urlsafe_b64decode(body).decode("utf-8", errors="ignore")
+        return _clean_text(text)[:3000]
 
     return ""
 
