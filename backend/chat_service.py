@@ -464,9 +464,6 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
         elif "today" in msg_lower:
             time_period = "today"
 
-        if not provider and not (importance and time_period):
-            return None
-
         # Avoid hijacking non-inbox/connection troubleshooting.
         negative_keywords = [
             "connect",
@@ -532,6 +529,32 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
         ]
         max_results = 1 if any(k in msg_lower for k in latest_keywords) else 25
 
+        # If the user asks for "latest" without specifying a provider, ask a deterministic clarifying question.
+        if max_results == 1 and not provider:
+            try:
+                accounts = list_email_accounts(user_id=self.user_id) or []
+                providers = {a.get("provider") for a in accounts if isinstance(a, dict)}
+                providers = {p for p in providers if p}
+                if len(providers) >= 2:
+                    # Store a lightweight pending action so a follow-up like "Outlook" works reliably.
+                    # (This mirrors the UI flow shown in the product screenshot.)
+                    self.pending_selection = {
+                        "action": "inbox_provider_choice",
+                        "max_results": max_results,
+                        "folder": "inbox",
+                    }
+                    return (
+                        "I see you have both Gmail and Outlook accounts connected. "
+                        "Which one should I check for the latest email?"
+                    )
+            except Exception:
+                pass
+        elif not provider and not (importance and time_period):
+            # Only auto-handle provider-agnostic requests for:
+            # - time-bounded importance queries ("important this week")
+            # - latest email (handled above)
+            return None
+
         payload = {"folder": "inbox", "max_results": max_results}
         if provider:
             payload["provider"] = provider
@@ -564,10 +587,59 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
 
         return f"{intro}\n\n{emails_block}"
 
-    def _parse_fetch_mails(self, input_str: str) -> dict:
+    def _parse_fetch_mails(self, input_str) -> dict:
+        # LangChain tool calling may pass non-string inputs (dict/float/etc).
+        # Be defensive and normalize to a JSON string our parser can handle.
+        if input_str is None:
+            input_str = ""
+        if isinstance(input_str, (int, float)):
+            # Interpret a raw number as a "max_results" request.
+            try:
+                max_results = int(input_str)
+            except (TypeError, ValueError):
+                max_results = 25
+            return fetch_mails(max_results=max(1, min(max_results, 50)), user_id=self.user_id)
+        if isinstance(input_str, dict):
+            try:
+                input_str = json.dumps(input_str)
+            except Exception:
+                input_str = str(input_str)
+        if not isinstance(input_str, str):
+            input_str = str(input_str)
+
         try:
             if input_str.strip().startswith("{"):
                 filters = json.loads(input_str)
+                if not isinstance(filters, dict):
+                    filters = {}
+
+                def _coerce_str(val):
+                    if val is None:
+                        return None
+                    if isinstance(val, str):
+                        return val
+                    return str(val)
+
+                # Normalize filter types (LLMs sometimes send numbers/objects).
+                sender = _coerce_str(filters.get("sender"))
+                label = _coerce_str(filters.get("label"))
+                subject_keyword = _coerce_str(filters.get("subject_keyword"))
+                folder = _coerce_str(filters.get("folder"))
+                provider = _coerce_str(filters.get("provider"))
+                account_id = _coerce_str(filters.get("account_id"))
+                time_period = _coerce_str(filters.get("time_period"))
+                since_date = _coerce_str(filters.get("since_date"))
+                until_date = _coerce_str(filters.get("until_date"))
+
+                importance = filters.get("importance")
+                if isinstance(importance, str):
+                    if importance.strip().lower() in {"true", "1", "yes"}:
+                        importance = True
+                    elif importance.strip().lower() in {"false", "0", "no"}:
+                        importance = False
+                    else:
+                        importance = None
+
                 max_results_raw = filters.get("max_results", 25)
                 try:
                     max_results = int(max_results_raw)
@@ -575,17 +647,17 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
                     max_results = 25
                 max_results = max(1, min(max_results, 50))
                 return fetch_mails(
-                    label=filters.get("label"),
-                    sender=filters.get("sender"),
-                    importance=filters.get("importance"),
-                    time_period=filters.get("time_period"),
-                    since_date=filters.get("since_date"),
-                    until_date=filters.get("until_date"),
-                    subject_keyword=filters.get("subject_keyword"),
-                    folder=filters.get("folder"),
+                    label=label,
+                    sender=sender,
+                    importance=importance,
+                    time_period=time_period,
+                    since_date=since_date,
+                    until_date=until_date,
+                    subject_keyword=subject_keyword,
+                    folder=folder,
                     max_results=max_results,
-                    provider=filters.get("provider"),
-                    account_id=filters.get("account_id"),
+                    provider=provider,
+                    account_id=account_id,
                     user_id=self.user_id,
                 )
             return fetch_mails(max_results=25, user_id=self.user_id)
@@ -1035,6 +1107,40 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
             if self.pending_selection and "action" in self.pending_selection:
                 action = self.pending_selection.get("action")
+
+                if action == "inbox_provider_choice":
+                    choice_lower = message_stripped.lower()
+                    provider = None
+                    if "outlook" in choice_lower:
+                        provider = "outlook"
+                    elif "gmail" in choice_lower:
+                        provider = "gmail"
+
+                    if not provider:
+                        return "Please reply with 'Outlook' or 'Gmail'."
+
+                    max_results = self.pending_selection.get("max_results", 1)
+                    folder = self.pending_selection.get("folder", "inbox")
+                    self.pending_selection = None
+
+                    try:
+                        payload = {"folder": folder, "max_results": max_results, "provider": provider}
+                        emails_block = self._format_fetch_mails_response(json.dumps(payload))
+                        if provider == "outlook" and int(max_results) == 1:
+                            intro = "Here’s your latest Outlook email:"
+                        elif provider == "outlook":
+                            intro = "Here are your Outlook inbox emails:"
+                        elif int(max_results) == 1:
+                            intro = "Here’s your latest Gmail email:"
+                        else:
+                            intro = "Here are your Gmail inbox emails:"
+
+                        response_text = f"{intro}\n\n{emails_block}"
+                        self._append_to_history(message_stripped, response_text)
+                        return response_text
+                    except Exception as e:
+                        logger.error(f"Provider choice fetch failed: {e}")
+                        return "I couldn't fetch emails for that account. Please try again."
 
                 if action == "draft_awaiting_recipient":
                     return self._handle_draft_recipient_input(message_stripped)

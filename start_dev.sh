@@ -64,7 +64,16 @@ fi
 # Backend port must be stable because Google OAuth redirect URIs require an exact match (no wildcards).
 print_info "Selecting ports..."
 BACKEND_PORT="${BACKEND_PORT:-8001}"
-FRONTEND_PORT=$(find_free_port 5173)
+if [ -n "${FRONTEND_PORT:-}" ]; then
+    # If user explicitly sets FRONTEND_PORT, respect it (useful for Playwright).
+    if ! python3 -c "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(('', int('$FRONTEND_PORT'))); s.close()" 2>/dev/null; then
+        print_error "Frontend port $FRONTEND_PORT is already in use."
+        print_info "Free the port and try again, or unset FRONTEND_PORT to auto-select a free port."
+        exit 1
+    fi
+else
+    FRONTEND_PORT=$(find_free_port 5173)
+fi
 
 # Ensure they are different
 if [ "$BACKEND_PORT" -eq "$FRONTEND_PORT" ]; then
@@ -112,13 +121,17 @@ source "$VENV_DIR/bin/activate"
 # Always run pip install to ensure requirements.txt changes are picked up
 print_info "Checking backend dependencies..."
 cd "$BACKEND_DIR"
-pip install --upgrade pip > /dev/null 2>&1
-pip install -r requirements.txt --quiet
-if [ $? -eq 0 ]; then
-    print_success "Backend dependencies installed"
+if [ "${NOVAMIND_SKIP_INSTALL:-0}" = "1" ]; then
+    print_warning "Skipping backend dependency install (NOVAMIND_SKIP_INSTALL=1)"
 else
-    print_error "Failed to install backend dependencies"
-    exit 1
+    pip install --upgrade pip > /dev/null 2>&1
+    pip install -r requirements.txt --quiet
+    if [ $? -eq 0 ]; then
+        print_success "Backend dependencies installed"
+    else
+        print_error "Failed to install backend dependencies"
+        exit 1
+    fi
 fi
 
 # Check for .env file
@@ -167,12 +180,22 @@ fi
 
 # Check if node_modules exists
 if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
+    if [ "${NOVAMIND_SKIP_INSTALL:-0}" = "1" ]; then
+        print_error "Frontend dependencies missing ($FRONTEND_DIR/node_modules) but NOVAMIND_SKIP_INSTALL=1"
+        print_info "Unset NOVAMIND_SKIP_INSTALL or run npm install once."
+        exit 1
+    fi
+
     print_info "Installing frontend dependencies..."
     cd "$FRONTEND_DIR"
     npm install
     print_success "Frontend dependencies installed"
 else
-    print_success "Frontend dependencies already installed"
+    if [ "${NOVAMIND_SKIP_INSTALL:-0}" = "1" ]; then
+        print_warning "Skipping frontend dependency install (NOVAMIND_SKIP_INSTALL=1)"
+    else
+        print_success "Frontend dependencies already installed"
+    fi
 fi
 
 # Check for .env file
