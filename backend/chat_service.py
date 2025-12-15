@@ -11,13 +11,122 @@ from datetime import datetime
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain.tools import Tool
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, AIMessage
+
+def _patch_langchain_google_genai_finish_reason() -> None:
+    """
+    Patch langchain-google-genai to handle newer/unknown finish_reason values.
+
+    Some versions of google generativeai return finish_reason as an int for unknown enums,
+    but langchain-google-genai expects an enum with a .name attribute.
+
+    This patch is compatible with both langchain-google-genai 1.x and 2.x.
+    """
+    import warnings
+
+    # Suppress the proto-plus enum warning
+    warnings.filterwarnings("ignore", message="Unrecognized FinishReason enum value")
+
+    try:
+        import langchain_google_genai.chat_models as genai_chat_models  # type: ignore
+    except ImportError:
+        return
+
+    if getattr(genai_chat_models, "_novamind_finish_reason_patch", False):
+        return
+
+    # Check if this is langchain-google-genai 2.x (uses google-genai SDK)
+    # vs 1.x (uses google-generativeai SDK)
+    original = getattr(genai_chat_models, "_response_to_result", None)
+    if not callable(original):
+        # In 2.x, the structure is different - the patch may not be needed
+        # as the new SDK handles unknown enums better
+        genai_chat_models._novamind_finish_reason_patch = True
+        return
+
+    def _safe_finish_reason(fr) -> str:
+        name = getattr(fr, "name", None)
+        if name is not None:
+            return str(name)
+        return str(fr)
+
+    def patched(response, stream: bool = False):  # type: ignore[no-untyped-def]
+        try:
+            llm_output = {
+                "prompt_feedback": genai_chat_models.proto.Message.to_dict(response.prompt_feedback)
+            }
+        except Exception:
+            llm_output = {}
+
+        try:
+            input_tokens = response.usage_metadata.prompt_token_count
+            output_tokens = response.usage_metadata.candidates_token_count
+            total_tokens = response.usage_metadata.total_token_count
+            if input_tokens + output_tokens + total_tokens > 0:
+                lc_usage = genai_chat_models.UsageMetadata(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                )
+            else:
+                lc_usage = None
+        except (AttributeError, Exception):
+            lc_usage = None
+
+        generations = []
+        for candidate in response.candidates:
+            generation_info = {}
+            finish_reason = getattr(candidate, "finish_reason", None)
+            if finish_reason:
+                generation_info["finish_reason"] = _safe_finish_reason(finish_reason)
+            try:
+                generation_info["safety_ratings"] = [
+                    genai_chat_models.proto.Message.to_dict(
+                        safety_rating, use_integers_for_enums=False
+                    )
+                    for safety_rating in candidate.safety_ratings
+                ]
+            except Exception:
+                generation_info["safety_ratings"] = []
+
+            message = genai_chat_models._parse_response_candidate(candidate, streaming=stream)
+            message.usage_metadata = lc_usage
+            generations.append(
+                (genai_chat_models.ChatGenerationChunk if stream else genai_chat_models.ChatGeneration)(
+                    message=message,
+                    generation_info=generation_info,
+                )
+            )
+
+        if not response.candidates:
+            genai_chat_models.logger.warning(
+                "Gemini produced an empty response. Continuing with empty message\n"
+                f"Feedback: {response.prompt_feedback}"
+            )
+            generations = [
+                (genai_chat_models.ChatGenerationChunk if stream else genai_chat_models.ChatGeneration)(
+                    message=(
+                        genai_chat_models.AIMessageChunk if stream else genai_chat_models.AIMessage
+                    )(content=""),
+                    generation_info={},
+                )
+            ]
+
+        return genai_chat_models.ChatResult(generations=generations, llm_output=llm_output)
+
+    genai_chat_models._response_to_result = patched  # type: ignore[assignment]
+    genai_chat_models._novamind_finish_reason_patch = True
+
+
+_patch_langchain_google_genai_finish_reason()
 
 from email_tools import (
     delete_all_spam,
     delete_draft,
     draft_email,
     fetch_mails,
-    get_draft_by_id,
+    get_draft_body,
+    list_email_accounts,
     get_drafts,
     get_drafts_for_recipient,
     move_mails_by_sender,
@@ -59,8 +168,11 @@ class ChatService:
         masked_key = f"{api_key[:10]}...{api_key[-4:]}" if len(api_key) > 14 else "***"
         logger.info(f"🔑 Using GEMINI_API_KEY: {masked_key}")
 
+        # Use configured Gemini model (defaults to gemini-2.0-flash-lite)
+        # Note: 2.0-flash series is recommended for stable tool calling
+        # (2.5 has known issues with LangChain agents - see: https://github.com/langchain-ai/langgraph/issues/4780)
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite"),
             google_api_key=api_key,
             temperature=0.7,
         )
@@ -68,14 +180,25 @@ class ChatService:
         # Draft selection state - track pending draft selections
         # Example: {"drafts": [...], "operation": "send", "to_email": "..."}
         self.pending_selection = None
+        self.chat_history: list = []
+        self._max_history_messages = 12
 
         self.tools = [
+            Tool(
+                name="list_email_accounts",
+                func=lambda _: json.dumps(list_email_accounts(user_id=self.user_id), indent=2),
+                description=(
+                    "List connected email accounts (Gmail + Outlook) for the current user.\n"
+                    "Use this when you need to choose a specific provider/account.\n"
+                    "No input needed."
+                ),
+            ),
             Tool(
                 name="fetch_mails",
                 func=self._format_fetch_mails_response,
                 description=(
                     "Advanced email fetching with multiple filter options. Provide filters as JSON.\n"
-                    "Available filters: label, sender, importance (true/false), subject_keyword, folder, max_results (int, default 25)\n\n"
+                    "Available filters: label, sender, importance (true/false), subject_keyword, folder, max_results (int, default 25), provider ('gmail'|'outlook'), account_id\n\n"
                     "For dates, use ONE of:\n"
                     "1. time_period: 'today', 'yesterday', 'last_week', 'last_month', 'last_3_months'\n"
                     "2. since_date and/or until_date: ISO format (YYYY-MM-DD)\n\n"
@@ -196,6 +319,10 @@ class ChatService:
 
         system_prompt = """You are an AI email assistant. Your job is to help users manage their emails efficiently.
 
+This system can access both Gmail and Outlook accounts.
+- Use the tool `list_email_accounts` when you need to choose a specific account/provider.
+- The tool `fetch_mails` can filter by `provider` ('gmail'|'outlook') and/or `account_id`.
+
 When users ask you to draft, send, or reply to emails:
 1. Understand their intent and context
 2. Compose professional, well-written emails with proper greetings and closings
@@ -229,8 +356,8 @@ ALWAYS use the draft_related tools first (update_draft_for_recipient, send_draft
 User may need to select a draft (1, 2, 3...) - show that selection list clearly.
 
 CRITICAL RULE FOR FETCHING EMAILS:
-When using the 'fetch_mails' tool, the tool will return a response containing both text and a JSON block.
-You MUST include that raw JSON block in your 'Final Answer' exactly as it appears.
+When using the 'fetch_mails' tool, the tool will return a JSON block fenced in ```json ...```.
+You MUST include that raw JSON block in your final answer exactly as it appears.
 The frontend relies on this JSON to render the UI cards.
 NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
 """
@@ -240,6 +367,8 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", system_prompt),
+                ("system", "{context}"),
+                MessagesPlaceholder(variable_name="chat_history"),
                 ("human", "{input}"),
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ]
@@ -271,6 +400,132 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
             early_stopping_method="force",
         )
 
+    def _append_to_history(self, user_text: str, assistant_text: str) -> None:
+        try:
+            if user_text and user_text.strip():
+                self.chat_history.append(HumanMessage(content=user_text.strip()))
+
+            assistant_clean = (assistant_text or "").strip()
+            if assistant_clean:
+                import re
+
+                assistant_clean = re.sub(r"```[\s\S]*?```", "", assistant_clean).strip()
+                self.chat_history.append(AIMessage(content=assistant_clean[:2000]))
+
+            if len(self.chat_history) > self._max_history_messages:
+                self.chat_history = self.chat_history[-self._max_history_messages :]
+        except Exception:
+            # History is best-effort; never break the chat flow.
+            return
+
+    def _extract_raw_user_message(self, user_message: str) -> str:
+        """Extract the actual user text when RAG context is prepended by the API layer."""
+        if not user_message:
+            return ""
+
+        marker = "User message:"
+        if marker in user_message:
+            return user_message.split(marker, 1)[1].strip()
+        return user_message.strip()
+
+    def _maybe_handle_direct_inbox_fetch(self, raw_user_message: str) -> str | None:
+        """Handle common provider-specific inbox requests without the LLM.
+
+        This acts as a safety net for cases where the LLM returns an empty response
+        (Gemini occasionally produces empty candidates), and it also avoids
+        unnecessary multi-turn clarification when the provider is explicit.
+        """
+        msg = (raw_user_message or "").strip()
+        if not msg:
+            return None
+
+        msg_lower = msg.lower()
+
+        provider = None
+        if "outlook" in msg_lower:
+            provider = "outlook"
+        elif "gmail" in msg_lower:
+            provider = "gmail"
+
+        if not provider:
+            return None
+
+        # Avoid hijacking non-inbox/connection troubleshooting.
+        negative_keywords = [
+            "connect",
+            "connection",
+            "integration",
+            "oauth",
+            "token",
+            "login",
+            "log in",
+            "sign in",
+            "signin",
+            "authenticate",
+            "auth",
+        ]
+        email_keywords = [
+            "email",
+            "emails",
+            "inbox",
+            "message",
+            "messages",
+            "mail",
+            "mails",
+        ]
+        action_keywords = [
+            "latest",
+            "newest",
+            "most recent",
+            "recent",
+            "last",
+            "check",
+            "show",
+            "read",
+            "fetch",
+            "get",
+        ]
+
+        if any(k in msg_lower for k in ["draft", "send", "reply", "forward"]):
+            return None
+
+        if any(k in msg_lower for k in negative_keywords) and not any(
+            k in msg_lower for k in email_keywords
+        ):
+            return None
+
+        if not (any(k in msg_lower for k in email_keywords) or any(k in msg_lower for k in action_keywords)):
+            return None
+
+        latest_keywords = [
+            "latest",
+            "newest",
+            "most recent",
+            "last message",
+            "last email",
+            "latest message",
+            "latest email",
+        ]
+        max_results = 1 if any(k in msg_lower for k in latest_keywords) else 25
+
+        payload = {"provider": provider, "folder": "inbox", "max_results": max_results}
+        try:
+            emails_block = self._format_fetch_mails_response(json.dumps(payload))
+        except Exception as e:
+            logger.error(f"Direct inbox fetch failed: {e}")
+            return None
+
+        if provider == "outlook" and max_results == 1:
+            intro = "Here’s your latest Outlook email:"
+        elif provider == "outlook":
+            intro = "Here are your Outlook inbox emails:"
+        elif max_results == 1:
+            intro = "Here’s your latest Gmail email:"
+        else:
+            intro = "Here are your Gmail inbox emails:"
+
+        return f"{intro}\n\n{emails_block}"
+
     def _parse_fetch_mails(self, input_str: str) -> dict:
         try:
             if input_str.strip().startswith("{"):
@@ -291,6 +546,8 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
                     subject_keyword=filters.get("subject_keyword"),
                     folder=filters.get("folder"),
                     max_results=max_results,
+                    provider=filters.get("provider"),
+                    account_id=filters.get("account_id"),
                     user_id=self.user_id,
                 )
             return fetch_mails(max_results=25, user_id=self.user_id)
@@ -414,38 +671,8 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
     def _smart_enhance_body_with_instruction(self, draft_id: str, instruction: str) -> str:
         """Use Gemini to intelligently update draft body based on user instruction."""
         try:
-            draft = get_draft_by_id(draft_id, user_id=self.user_id)
-            if not draft:
-                logger.warning(f"Draft {draft_id} not found for body enhancement")
-                return instruction
-
-            current_body = ""
-            if isinstance(draft, dict):
-                msg = draft.get("message", {})
-                if isinstance(msg, dict):
-                    msg_id = msg.get("id")
-                    if msg_id:
-                        from gmail_service import _decode_body, get_gmail_service, get_primary_account_service
-                        import asyncio
-
-                        try:
-                            if self.user_id:
-                                service = asyncio.run(get_primary_account_service(self.user_id))
-                            else:
-                                service = get_gmail_service()
-
-                            full_msg = (
-                                service.users()
-                                .messages()
-                                .get(userId="me", id=msg_id, format="full")
-                                .execute()
-                            )
-                            current_body = _decode_body(full_msg.get("payload", {}))
-                        except Exception as e:
-                            logger.warning(f"Could not fetch full message {msg_id}: {e}")
-                            return instruction
-
-            if not current_body:
+            current_body = get_draft_body(draft_id, user_id=self.user_id) or ""
+            if not current_body.strip():
                 logger.warning(f"Draft {draft_id} has empty body")
                 return instruction
 
@@ -757,12 +984,16 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
             self.pending_selection = None
             return f"❌ Error: {str(e)}"
 
-    def chat(self, user_message: str) -> str:
+    def chat(self, user_message: str, context: str = "") -> str:
         try:
             if not user_message or not user_message.strip():
                 return "Please provide a message to get started."
 
-            message_stripped = user_message.strip()
+            raw_user_message = self._extract_raw_user_message(user_message)
+            if not raw_user_message:
+                return "Please provide a message to get started."
+
+            message_stripped = raw_user_message.strip()
 
             if self.pending_selection and "action" in self.pending_selection:
                 action = self.pending_selection.get("action")
@@ -808,11 +1039,37 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
             ]
             is_draft_related = any(kw in message_stripped.lower() for kw in draft_keywords)
 
+            direct_fetch = self._maybe_handle_direct_inbox_fetch(message_stripped)
+            if direct_fetch:
+                self._append_to_history(message_stripped, direct_fetch)
+                return direct_fetch
+
             logger.info("Sending request to Gemini Agent...")
 
-            response = self.agent_executor.invoke({"input": user_message})
+            response = self.agent_executor.invoke(
+                {
+                    "input": raw_user_message,
+                    "context": context or "",
+                    "chat_history": self.chat_history,
+                }
+            )
+
+            # Debug: Log full response structure
+            logger.info(f"Agent response keys: {response.keys() if isinstance(response, dict) else type(response)}")
+
             output = response.get("output", "No response generated")
             intermediate_steps = response.get("intermediate_steps", [])
+
+            # Debug: Log output and steps
+            logger.info(f"Agent raw output (first 500 chars): {repr(output[:500]) if output else 'EMPTY'}")
+            logger.info(f"Intermediate steps count: {len(intermediate_steps) if intermediate_steps else 0}")
+
+            # If intermediate steps exist, log the tools that were called
+            if intermediate_steps:
+                for i, (action, observation) in enumerate(intermediate_steps):
+                    tool_name = getattr(action, 'tool', 'unknown')
+                    obs_preview = str(observation)[:200] if observation else 'None'
+                    logger.info(f"  Step {i+1}: Tool={tool_name}, Observation preview={obs_preview}")
 
             if output and output.strip() == self._AGENT_EARLY_STOP_OUTPUT:
                 logger.warning(
@@ -829,11 +1086,14 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                                 best_effort = observation
                                 break
                 if best_effort:
+                    self._append_to_history(message_stripped, best_effort)
                     return best_effort
-                return (
+                timeout_msg = (
                     "I couldn't finish that request in time. "
                     "Please try again with a shorter query (e.g., limit dates, sender, or max_results)."
                 )
+                self._append_to_history(message_stripped, timeout_msg)
+                return timeout_msg
 
             if isinstance(intermediate_steps, list):
                 output = self._ensure_fetch_mails_json_block(output, intermediate_steps)
@@ -863,7 +1123,26 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                             )
                             return self._delete_draft_for_recipient(email)
 
-            return self._extract_json_from_response(output)
+            final_response = self._extract_json_from_response(output)
+            logger.info(f"Final response length: {len(final_response) if final_response else 0}")
+            logger.info(f"Final response preview: {final_response[:500] if final_response else 'EMPTY'}...")
+
+            # Ensure we never return an empty response
+            if not final_response or not final_response.strip():
+                logger.warning("Final response is empty! Returning output directly.")
+                if output and output.strip():
+                    self._append_to_history(message_stripped, output)
+                    return output
+
+                # Agent/LLM returned nothing; try a deterministic fallback when possible.
+                direct_fetch = self._maybe_handle_direct_inbox_fetch(message_stripped)
+                if direct_fetch:
+                    self._append_to_history(message_stripped, direct_fetch)
+                    return direct_fetch
+                return "I couldn't process that request. Please try again."
+
+            self._append_to_history(message_stripped, final_response)
+            return final_response
 
         except ValueError as e:
             logger.warning(f"Input validation error: {str(e)}")

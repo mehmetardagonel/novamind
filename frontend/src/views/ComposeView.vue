@@ -41,7 +41,8 @@
                 'user-message': message.role === 'user',
               }"
             >
-              <p v-if="message.text" class="message-text">{{ message.text }}</p>
+              <p v-if="message.text" class="message-text" v-html="formatMessageText(message.text)"></p>
+              <p v-else-if="message.role === 'bot' && message.emails && message.emails.length > 0" class="message-text">Here are the emails I found:</p>
 
               <div
                 v-if="message.emails && message.emails.length > 0"
@@ -150,7 +151,7 @@
 </template>
 
 <script>
-import { computed, ref, nextTick, onUnmounted, watch } from "vue";
+import { computed, ref, nextTick, onUnmounted, onMounted, watch } from "vue";
 import { useAuthStore } from "../stores/auth";
 import { useChatStore } from "../stores/chat";
 
@@ -177,6 +178,18 @@ export default {
     const formatBody = (text) => {
       if (!text) return "";
       return text.replace(/\n/g, "<br>");
+    };
+
+    const formatMessageText = (text) => {
+      if (!text) return "";
+      // Escape HTML entities first, then convert newlines to <br>
+      const escaped = text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+      return escaped.replace(/\n/g, "<br>");
     };
 
     const isEmailArray = (parsed) => {
@@ -282,19 +295,34 @@ export default {
           }),
         });
 
-        if (!response.ok) throw new Error("API request failed");
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("API error response:", errorText);
+          throw new Error(`API request failed: ${response.status}`);
+        }
 
         const data = await response.json();
+        console.log("Chat response data:", data);
 
         if (data.session_id) {
           chatStore.setSessionId(chatId, data.session_id);
         }
 
-        const extracted = extractJsonFromText(data.response);
+        // Handle response - extract JSON and text
+        const responseText = data.response || "";
+        const extracted = extractJsonFromText(responseText);
+
+        // Ensure we always have some text to display
+        let displayText = extracted.textBefore;
+        if (!displayText && extracted.json && extracted.json.length > 0) {
+          displayText = `Found ${extracted.json.length} email(s):`;
+        } else if (!displayText && !extracted.json) {
+          displayText = responseText || "I processed your request.";
+        }
 
         chatStore.appendMessage(chatId, {
           role: "bot",
-          text: extracted.textBefore,
+          text: displayText,
           emails: extracted.json,
         });
       } catch (error) {
@@ -350,22 +378,28 @@ export default {
       stopDotAnimation();
     });
 
-    const clearChat = () => {
-      chatStore.clearAll();
+    // Initialize chat store on mount
+    onMounted(async () => {
+      await chatStore.initialize();
+      nextTick(scrollToBottom);
+    });
+
+    const clearChat = async () => {
+      await chatStore.clearAll();
     };
 
-    const createChat = () => {
-      chatStore.createChat();
+    const createChat = async () => {
+      await chatStore.createChat();
       nextTick(scrollToBottom);
     };
 
-    const deleteChat = (chatId) => {
-      chatStore.deleteChat(chatId);
+    const deleteChat = async (chatId) => {
+      await chatStore.deleteChat(chatId);
       nextTick(scrollToBottom);
     };
 
-    const setActiveChat = (chatId) => {
-      chatStore.setActiveChat(chatId);
+    const setActiveChat = async (chatId) => {
+      await chatStore.setActiveChat(chatId);
       nextTick(scrollToBottom);
     };
 
@@ -387,6 +421,7 @@ export default {
       activeMessages,
       sendMessage,
       formatBody,
+      formatMessageText,
       historyContainer,
       toggleVoiceInput,
       clearChat,

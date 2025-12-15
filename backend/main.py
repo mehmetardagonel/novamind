@@ -6,6 +6,8 @@ os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 from typing import List, Dict, Optional
 import uuid
 import asyncio
+from datetime import datetime
+from supabase import create_client, Client
 
 from fastapi import FastAPI, Depends, HTTPException, Request, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -127,6 +129,11 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# Initialize Supabase client for chat history persistence
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 app = FastAPI()
 
 # Get redirect URI and frontend URL from config/env
@@ -167,6 +174,7 @@ app.add_middleware(
 # Session management for ChatService instances
 # Each user/session gets its own ChatService instance to maintain pending_selection state
 chat_sessions: Dict[str, ChatService] = {}
+chat_session_locks: Dict[str, asyncio.Lock] = {}
 
 # Startup event to preload ML models
 @app.on_event("startup")
@@ -396,9 +404,10 @@ async def logout_endpoint():
         cleanup_status["gmail_token_revoked"] = token_revoked
 
         # Step 2: Clear all chat sessions from memory
-        global chat_sessions
+        global chat_sessions, chat_session_locks
         sessions_count = len(chat_sessions)
         chat_sessions.clear()
+        chat_session_locks.clear()
         cleanup_status["chat_sessions_cleared"] = True
         cleanup_status["sessions_cleared_count"] = sessions_count
 
@@ -466,18 +475,26 @@ async def chat(
         except Exception as e:
             logger.error(f"Failed to build RAG context for chat: {e}")
 
-        augmented_message = request.message
+        context_message = ""
         if context:
-            augmented_message = (
+            context_message = (
                 f"{context}\n\n"
                 f"Use the context above if it is relevant. "
-                f"Do not mention it explicitly unless asked.\n\n"
-                f"User message: {request.message}"
+                f"Do not mention it explicitly unless asked."
             )
 
-        # Get AI response
-        ai_response = chat_service.chat(augmented_message)
+        # Get AI response (run in a thread to avoid blocking the event loop).
+        # This also allows sync tool functions to safely use asyncio.run().
+        lock = chat_session_locks.get(session_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            chat_session_locks[session_key] = lock
+
+        async with lock:
+            ai_response = await asyncio.to_thread(chat_service.chat, request.message, context_message)
         logger.info("Successfully generated AI response")
+        logger.info(f"AI response length: {len(ai_response) if ai_response else 0}")
+        logger.info(f"AI response preview: {ai_response[:500] if ai_response else 'Empty'}...")
 
         # RAG memory: store this exchange for future retrieval (best-effort).
         try:
@@ -1168,4 +1185,286 @@ async def star_outlook_email(
         raise
     except Exception as e:
         logger.error(f"Error starring Outlook email: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============ CHAT HISTORY PERSISTENCE API ============
+
+class ChatSessionCreate(BaseModel):
+    title: Optional[str] = "New chat"
+    backend_session_id: Optional[str] = None
+
+class ChatSessionUpdate(BaseModel):
+    title: Optional[str] = None
+    backend_session_id: Optional[str] = None
+
+class ChatMessageCreate(BaseModel):
+    role: str  # 'user' or 'bot'
+    text: Optional[str] = None
+    emails: Optional[List[Dict]] = None
+
+class ChatSessionOut(BaseModel):
+    id: str
+    title: str
+    backend_session_id: Optional[str]
+    created_at: str
+    updated_at: str
+
+class ChatMessageOut(BaseModel):
+    id: str
+    role: str
+    text: Optional[str]
+    emails: Optional[List[Dict]]
+    created_at: str
+
+class ChatSessionWithMessages(ChatSessionOut):
+    messages: List[ChatMessageOut]
+
+
+@app.get("/chat/sessions", response_model=List[ChatSessionOut])
+async def list_chat_sessions(user_id: str = Header(..., alias="X-User-Id")):
+    """Get all chat sessions for the current user, ordered by most recent."""
+    try:
+        result = supabase.table("chat_sessions")\
+            .select("id,title,backend_session_id,created_at,updated_at")\
+            .eq("user_id", user_id)\
+            .order("updated_at", desc=True)\
+            .execute()
+
+        sessions = []
+        for row in (result.data or []):
+            sessions.append(ChatSessionOut(
+                id=row["id"],
+                title=row["title"],
+                backend_session_id=row.get("backend_session_id"),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"]
+            ))
+        return sessions
+    except Exception as e:
+        logger.error(f"Error listing chat sessions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat/sessions", response_model=ChatSessionOut)
+async def create_chat_session(
+    data: ChatSessionCreate,
+    user_id: str = Header(..., alias="X-User-Id")
+):
+    """Create a new chat session."""
+    try:
+        session_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
+
+        result = supabase.table("chat_sessions").insert({
+            "id": session_id,
+            "user_id": user_id,
+            "title": data.title or "New chat",
+            "backend_session_id": data.backend_session_id,
+            "created_at": now,
+            "updated_at": now
+        }).execute()
+
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to create chat session")
+
+        row = result.data[0]
+        return ChatSessionOut(
+            id=row["id"],
+            title=row["title"],
+            backend_session_id=row.get("backend_session_id"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating chat session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/chat/sessions/{session_id}", response_model=ChatSessionWithMessages)
+async def get_chat_session(
+    session_id: str,
+    user_id: str = Header(..., alias="X-User-Id")
+):
+    """Get a chat session with all its messages."""
+    try:
+        # Get session
+        session_result = supabase.table("chat_sessions")\
+            .select("id,title,backend_session_id,created_at,updated_at")\
+            .eq("id", session_id)\
+            .eq("user_id", user_id)\
+            .execute()
+
+        if not session_result.data:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+
+        session = session_result.data[0]
+
+        # Get messages
+        messages_result = supabase.table("chat_messages")\
+            .select("id,role,text,emails,created_at")\
+            .eq("session_id", session_id)\
+            .order("created_at", desc=False)\
+            .execute()
+
+        messages = []
+        for row in (messages_result.data or []):
+            messages.append(ChatMessageOut(
+                id=row["id"],
+                role=row["role"],
+                text=row.get("text"),
+                emails=row.get("emails"),
+                created_at=row["created_at"]
+            ))
+
+        return ChatSessionWithMessages(
+            id=session["id"],
+            title=session["title"],
+            backend_session_id=session.get("backend_session_id"),
+            created_at=session["created_at"],
+            updated_at=session["updated_at"],
+            messages=messages
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting chat session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/chat/sessions/{session_id}", response_model=ChatSessionOut)
+async def update_chat_session(
+    session_id: str,
+    data: ChatSessionUpdate,
+    user_id: str = Header(..., alias="X-User-Id")
+):
+    """Update a chat session (title or backend_session_id)."""
+    try:
+        # Check ownership
+        check = supabase.table("chat_sessions")\
+            .select("id")\
+            .eq("id", session_id)\
+            .eq("user_id", user_id)\
+            .execute()
+
+        if not check.data:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+
+        update_data = {"updated_at": datetime.utcnow().isoformat()}
+        if data.title is not None:
+            update_data["title"] = data.title
+        if data.backend_session_id is not None:
+            update_data["backend_session_id"] = data.backend_session_id
+
+        result = supabase.table("chat_sessions")\
+            .update(update_data)\
+            .eq("id", session_id)\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to update session")
+
+        row = result.data[0]
+        return ChatSessionOut(
+            id=row["id"],
+            title=row["title"],
+            backend_session_id=row.get("backend_session_id"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating chat session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/chat/sessions/{session_id}")
+async def delete_chat_session(
+    session_id: str,
+    user_id: str = Header(..., alias="X-User-Id")
+):
+    """Delete a chat session and all its messages."""
+    try:
+        # Check ownership
+        check = supabase.table("chat_sessions")\
+            .select("id")\
+            .eq("id", session_id)\
+            .eq("user_id", user_id)\
+            .execute()
+
+        if not check.data:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+
+        # Delete session (messages are cascade deleted)
+        supabase.table("chat_sessions")\
+            .delete()\
+            .eq("id", session_id)\
+            .execute()
+
+        return {"status": "deleted", "session_id": session_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting chat session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat/sessions/{session_id}/messages", response_model=ChatMessageOut)
+async def add_chat_message(
+    session_id: str,
+    data: ChatMessageCreate,
+    user_id: str = Header(..., alias="X-User-Id")
+):
+    """Add a message to a chat session."""
+    try:
+        # Check ownership
+        check = supabase.table("chat_sessions")\
+            .select("id,title")\
+            .eq("id", session_id)\
+            .eq("user_id", user_id)\
+            .execute()
+
+        if not check.data:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+
+        session = check.data[0]
+
+        message_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
+
+        result = supabase.table("chat_messages").insert({
+            "id": message_id,
+            "session_id": session_id,
+            "role": data.role,
+            "text": data.text,
+            "emails": data.emails,
+            "created_at": now
+        }).execute()
+
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to add message")
+
+        # Update session title if it's the first user message and title is "New chat"
+        if data.role == "user" and data.text and session["title"] == "New chat":
+            title = data.text[:40] + "..." if len(data.text) > 40 else data.text
+            supabase.table("chat_sessions")\
+                .update({"title": title, "updated_at": now})\
+                .eq("id", session_id)\
+                .execute()
+
+        row = result.data[0]
+        return ChatMessageOut(
+            id=row["id"],
+            role=row["role"],
+            text=row.get("text"),
+            emails=row.get("emails"),
+            created_at=row["created_at"]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding chat message: {e}")
         raise HTTPException(status_code=500, detail=str(e))

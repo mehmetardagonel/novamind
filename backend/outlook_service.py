@@ -150,9 +150,15 @@ def _make_graph_request(
         if method == "GET":
             response = requests.get(url, headers=headers)
         elif method == "POST":
-            response = requests.post(url, headers=headers, json=data)
+            if data is None:
+                response = requests.post(url, headers=headers)
+            else:
+                response = requests.post(url, headers=headers, json=data)
         elif method == "PATCH":
-            response = requests.patch(url, headers=headers, json=data)
+            if data is None:
+                response = requests.patch(url, headers=headers)
+            else:
+                response = requests.patch(url, headers=headers, json=data)
         elif method == "DELETE":
             response = requests.delete(url, headers=headers)
         else:
@@ -164,7 +170,14 @@ def _make_graph_request(
         if method == "DELETE":
             return {"success": True}
 
-        return response.json()
+        # Some Graph endpoints (e.g., sendMail, PATCH updates) return 202/204 with no body.
+        if not response.content:
+            return {"success": True}
+
+        try:
+            return response.json()
+        except ValueError:
+            return {"success": True}
 
     except requests.exceptions.HTTPError as e:
         logger.error(f"Graph API error: {e.response.status_code} - {e.response.text}")
@@ -235,7 +248,7 @@ def _parse_outlook_message(msg: Dict) -> Dict:
         # Simple HTML stripping (for preview)
         import re
         body = re.sub(r'<[^>]+>', '', body)
-        body = body[:500]  # Truncate for preview
+    body = (body or "")[:3000]
 
     # Map importance
     importance = msg.get("importance", "normal")
@@ -325,6 +338,76 @@ async def fetch_trash(access_token: str, max_results: int = 25) -> List[Dict]:
 async def fetch_spam(access_token: str, max_results: int = 25) -> List[Dict]:
     """Fetch junk/spam messages."""
     return await fetch_messages(access_token, "junkemail", max_results=max_results)
+
+
+async def get_message(access_token: str, message_id: str) -> Optional[Dict]:
+    """
+    Get a single message by id (includes full body content).
+    Returns parsed message dict or None if request fails.
+    """
+    try:
+        endpoint = (
+            f"/me/messages/{message_id}"
+            "?$select=id,subject,bodyPreview,body,from,toRecipients,receivedDateTime,isRead,importance,categories,flag"
+        )
+        response = _make_graph_request(access_token, endpoint)
+        return _parse_outlook_message(response)
+    except Exception as e:
+        logger.error(f"Error fetching Outlook message {message_id}: {e}")
+        return None
+
+
+async def send_draft(access_token: str, message_id: str) -> Dict:
+    """Send an existing draft message by id."""
+    try:
+        _make_graph_request(access_token, f"/me/messages/{message_id}/send", method="POST")
+        return {"success": True, "id": message_id}
+    except Exception as e:
+        logger.error(f"Error sending Outlook draft {message_id}: {e}")
+        return {"success": False, "message": str(e)}
+
+
+async def delete_message(access_token: str, message_id: str) -> Dict:
+    """Delete a message (including drafts) by id."""
+    try:
+        _make_graph_request(access_token, f"/me/messages/{message_id}", method="DELETE")
+        return {"success": True, "id": message_id}
+    except Exception as e:
+        logger.error(f"Error deleting Outlook message {message_id}: {e}")
+        return {"success": False, "message": str(e)}
+
+
+async def update_message(
+    access_token: str,
+    message_id: str,
+    to: Optional[str] = None,
+    subject: Optional[str] = None,
+    body: Optional[str] = None,
+    is_html: bool = False,
+) -> Dict:
+    """Update an existing message (draft) by id."""
+    try:
+        data: Dict[str, Any] = {}
+        if to is not None:
+            data["toRecipients"] = (
+                [{"emailAddress": {"address": to}}] if to.strip() else []
+            )
+        if subject is not None:
+            data["subject"] = subject
+        if body is not None:
+            data["body"] = {
+                "contentType": "HTML" if is_html else "Text",
+                "content": body,
+            }
+
+        if not data:
+            return {"success": True, "id": message_id}
+
+        _make_graph_request(access_token, f"/me/messages/{message_id}", method="PATCH", data=data)
+        return {"success": True, "id": message_id}
+    except Exception as e:
+        logger.error(f"Error updating Outlook message {message_id}: {e}")
+        return {"success": False, "message": str(e)}
 
 
 async def send_email(
@@ -618,6 +701,30 @@ class OutlookService:
     async def create_draft(self, access_token: str, to: str, subject: str, body: str) -> Dict:
         """Create draft."""
         return await create_draft(access_token, to, subject, body)
+
+    async def get_message(self, access_token: str, message_id: str) -> Optional[Dict]:
+        """Get a message (includes full body)."""
+        return await get_message(access_token, message_id)
+
+    async def send_draft(self, access_token: str, message_id: str) -> Dict:
+        """Send an existing draft by id."""
+        return await send_draft(access_token, message_id)
+
+    async def delete_message(self, access_token: str, message_id: str) -> Dict:
+        """Delete a message by id."""
+        return await delete_message(access_token, message_id)
+
+    async def update_message(
+        self,
+        access_token: str,
+        message_id: str,
+        to: Optional[str] = None,
+        subject: Optional[str] = None,
+        body: Optional[str] = None,
+        is_html: bool = False,
+    ) -> Dict:
+        """Update a message (draft) by id."""
+        return await update_message(access_token, message_id, to=to, subject=subject, body=body, is_html=is_html)
 
     async def trash(self, access_token: str, message_id: str) -> Dict:
         """Move to trash."""

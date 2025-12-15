@@ -1,11 +1,13 @@
 """
 Email Tools - Wrapper functions for email operations
-These functions use Gmail API directly for email operations.
+These functions support Gmail and Outlook operations for the AI agent.
+Legacy mode (no user_id) uses Gmail token.json.
 """
 
 from typing import List, Dict, Optional
 import logging
 from dotenv import load_dotenv
+from models import EmailOut
 from gmail_service import (
     fetch_messages,
     send_email as gmail_send_email,
@@ -21,12 +23,47 @@ from gmail_service import (
     move_mails as move_gmail_mails
 )
 from filters import EmailFilters
-from datetime import timedelta, date, datetime
+from datetime import timedelta, date, datetime, timezone
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ============ BASIC EMAIL OPERATIONS ============
+
+def list_email_accounts(user_id: str) -> List[Dict]:
+    """List all connected email accounts (Gmail + Outlook) for a user."""
+    try:
+        if not user_id:
+            return []
+
+        import asyncio
+        from email_account_service import email_account_service
+
+        return asyncio.run(email_account_service.get_all_accounts(user_id))
+    except Exception as e:
+        logger.error(f"Error listing email accounts: {str(e)}")
+        return []
+
+
+def _get_primary_email_account(user_id: str) -> Optional[Dict]:
+    """Return the user's primary email account record (Gmail or Outlook)."""
+    try:
+        if not user_id:
+            return None
+
+        import asyncio
+        from email_account_service import email_account_service
+
+        primary = asyncio.run(email_account_service.get_primary_account(user_id))
+        if primary:
+            return primary
+
+        accounts = asyncio.run(email_account_service.get_all_accounts(user_id))
+        return accounts[0] if accounts else None
+    except Exception as e:
+        logger.error(f"Error getting primary email account: {str(e)}")
+        return None
+
 
 def get_emails(folder: str = "inbox") -> List[Dict]:
     """Get all emails from a specific folder (inbox by default)"""
@@ -84,7 +121,7 @@ def get_emails_from_sender(sender: str) -> List[Dict]:
 
 def send_email(to: str, subject: str, body: str, user_id: str = None) -> Dict:
     """
-    Send an email via Gmail with multi-account support.
+    Send an email via the user's primary account (Gmail or Outlook).
 
     Args:
         to: Recipient email address
@@ -93,31 +130,66 @@ def send_email(to: str, subject: str, body: str, user_id: str = None) -> Dict:
         user_id: User ID for multi-account support (optional, uses legacy if None)
     """
     try:
-        import asyncio
-        from gmail_service import get_primary_account_service
-
-        # Get service based on user_id
         if user_id:
-            # Multi-account: primary account kullan
-            service = asyncio.run(get_primary_account_service(user_id))
+            primary = _get_primary_email_account(user_id)
+            if not primary:
+                return {"success": False, "message": "No email accounts connected"}
+
+            provider = primary.get("provider")
+            account_id = primary.get("id")
+
+            import asyncio
+            from email_account_service import email_account_service
+
+            if provider == "outlook":
+                access_token = asyncio.run(
+                    email_account_service.get_outlook_access_token(user_id, account_id)
+                )
+                if not access_token:
+                    return {"success": False, "message": "Invalid or expired Outlook token"}
+
+                from outlook_service import outlook_service
+
+                result = asyncio.run(outlook_service.send(access_token, to, subject, body))
+                result["provider"] = "outlook"
+                result["account_id"] = account_id
+                return result
+
+            from gmail_service import get_user_gmail_service
+
+            service = asyncio.run(get_user_gmail_service(user_id, account_id))
             profile = service.users().getProfile(userId="me").execute()
             current_user = profile.get("emailAddress", "me")
-        else:
-            # Legacy behavior
-            current_user = get_current_user_email()
-            service = None
 
+            result = gmail_send_email(
+                sender=current_user or "me",
+                to=to,
+                subject=subject,
+                body=body,
+                service=service,
+            )
+            return {
+                "success": True,
+                "message": "Email sent successfully",
+                "message_id": result.get("id"),
+                "provider": "gmail",
+                "account_id": account_id,
+            }
+
+        # Legacy behavior (token.json)
+        current_user = get_current_user_email()
         result = gmail_send_email(
             sender=current_user or "me",
             to=to,
             subject=subject,
             body=body,
-            service=service
+            service=None,
         )
         return {
             "success": True,
             "message": "Email sent successfully",
-            "message_id": result.get("id")
+            "message_id": result.get("id"),
+            "provider": "gmail",
         }
     except Exception as e:
         logger.error(f"Error sending email: {str(e)}")
@@ -129,7 +201,7 @@ def send_email(to: str, subject: str, body: str, user_id: str = None) -> Dict:
 
 def draft_email(to: str = "", subject: str = "", body: str = "", user_id: str = None) -> Dict:
     """
-    Create a draft email without sending it with multi-account support.
+    Create a draft email in the user's primary account (Gmail or Outlook).
     MANDATORY: Recipient email is required. Body content is optional (can be empty for draft editing later).
 
     Args:
@@ -160,27 +232,79 @@ def draft_email(to: str = "", subject: str = "", body: str = "", user_id: str = 
                 "hint": "Please provide a valid email address (e.g., john@example.com)"
             }
 
-        # Get service based on user_id
         if user_id:
+            primary = _get_primary_email_account(user_id)
+            if not primary:
+                return {"success": False, "message": "No email accounts connected"}
+
+            provider = primary.get("provider")
+            account_id = primary.get("id")
+
             import asyncio
-            from gmail_service import get_primary_account_service
-            service = asyncio.run(get_primary_account_service(user_id))
-        else:
-            service = None  # create_draft uses legacy
+            from email_account_service import email_account_service
 
-        # Body is optional - drafts can be created with empty body for later editing
-        draft = create_draft(to=to, subject=subject, body=body or "", service=service)
+            if provider == "outlook":
+                access_token = asyncio.run(
+                    email_account_service.get_outlook_access_token(user_id, account_id)
+                )
+                if not access_token:
+                    return {"success": False, "message": "Invalid or expired Outlook token"}
+
+                from outlook_service import outlook_service
+
+                result = asyncio.run(outlook_service.create_draft(access_token, to, subject, body or ""))
+                if not result.get("success"):
+                    return {
+                        "success": False,
+                        "message": result.get("message", "Failed to create Outlook draft"),
+                    }
+
+                draft_msg = result.get("draft") or {}
+                draft_id = draft_msg.get("message_id") or draft_msg.get("id")
+                return {
+                    "success": True,
+                    "message": "Draft created successfully",
+                    "draft_id": draft_id,
+                    "provider": "outlook",
+                    "account_id": account_id,
+                    "draft": {
+                        "to": to,
+                        "subject": subject,
+                        "body": (body or "")[:200] + "..." if len(body or "") > 200 else (body or ""),
+                    },
+                }
+
+            from gmail_service import get_user_gmail_service
+
+            service = asyncio.run(get_user_gmail_service(user_id, account_id))
+            draft = create_draft(to=to, subject=subject, body=body or "", service=service)
+            draft_id = draft.get("id")
+            return {
+                "success": True,
+                "message": "Draft created successfully",
+                "draft_id": draft_id,
+                "provider": "gmail",
+                "account_id": account_id,
+                "draft": {
+                    "to": to,
+                    "subject": subject,
+                    "body": (body or "")[:200] + "..." if len(body or "") > 200 else (body or ""),
+                },
+            }
+
+        # Legacy behavior (token.json)
+        draft = create_draft(to=to, subject=subject, body=body or "", service=None)
         draft_id = draft.get("id")
-
         return {
             "success": True,
             "message": "Draft created successfully",
             "draft_id": draft_id,
+            "provider": "gmail",
             "draft": {
-            "to": to,
-            "subject": subject,
-            "body": body[:200] + "..." if len(body) > 200 else body  # Preview
-    }
+                "to": to,
+                "subject": subject,
+                "body": (body or "")[:200] + "..." if len(body or "") > 200 else (body or ""),
+            },
         }
     except Exception as e:
         logger.error(f"Error creating draft: {str(e)}")
@@ -194,14 +318,10 @@ def get_drafts(user_id: str = None) -> List[Dict]:
     """Get all draft emails with multi-account support"""
     try:
         if user_id:
-            import asyncio
-            from gmail_service import fetch_drafts_multi
-            drafts = asyncio.run(fetch_drafts_multi(user_id, max_per_account=50))
-        else:
-            # Query for drafts label (legacy)
-            drafts = fetch_messages(query='label:DRAFT')
+            return fetch_mails(folder="drafts", max_results=50, user_id=user_id)
 
-        return [draft.model_dump(mode='json') for draft in drafts]
+        drafts = fetch_messages(query="label:DRAFT")
+        return [draft.model_dump(mode="json") for draft in drafts]
     except Exception as e:
         logger.error(f"Error fetching drafts: {str(e)}")
         return []
@@ -265,20 +385,124 @@ def list_draft_previews(user_id: str = None, max_results: int = 25) -> List[Dict
 
 
 def get_draft_by_id(draft_id: str, user_id: str = None) -> Optional[Dict]:
-    """Get a specific draft by ID from Gmail (supports multi-account)."""
+    """Get a specific draft by ID from the user's primary account (Gmail or Outlook)."""
     try:
-        service = None
         if user_id:
-            import asyncio
-            from gmail_service import get_primary_account_service
-            service = asyncio.run(get_primary_account_service(user_id))
+            primary = _get_primary_email_account(user_id)
+            if not primary:
+                return None
 
-        draft = get_gmail_draft_by_id(draft_id, service=service)
+            provider = primary.get("provider")
+            account_id = primary.get("id")
+
+            import asyncio
+            from email_account_service import email_account_service
+
+            if provider == "outlook":
+                access_token = asyncio.run(
+                    email_account_service.get_outlook_access_token(user_id, account_id)
+                )
+                if not access_token:
+                    return None
+
+                from outlook_service import outlook_service
+
+                msg = asyncio.run(outlook_service.get_message(access_token, draft_id))
+                return msg
+
+            from gmail_service import get_user_gmail_service
+
+            service = asyncio.run(get_user_gmail_service(user_id, account_id))
+            draft = get_gmail_draft_by_id(draft_id, service=service)
+            if draft:
+                return draft.model_dump(mode="json") if hasattr(draft, "model_dump") else draft
+            return None
+
+        draft = get_gmail_draft_by_id(draft_id, service=None)
         if draft:
-            return draft.model_dump(mode='json') if hasattr(draft, 'model_dump') else draft
+            return draft.model_dump(mode="json") if hasattr(draft, "model_dump") else draft
         return None
     except Exception as e:
         logger.error(f"Error getting draft: {str(e)}")
+        return None
+
+
+def get_draft_body(draft_id: str, user_id: str = None) -> Optional[str]:
+    """Get the full draft body text from the user's primary account (Gmail or Outlook)."""
+    try:
+        if user_id:
+            primary = _get_primary_email_account(user_id)
+            if not primary:
+                return None
+
+            provider = primary.get("provider")
+            account_id = primary.get("id")
+
+            import asyncio
+            from email_account_service import email_account_service
+
+            if provider == "outlook":
+                access_token = asyncio.run(
+                    email_account_service.get_outlook_access_token(user_id, account_id)
+                )
+                if not access_token:
+                    return None
+
+                from outlook_service import outlook_service
+
+                msg = asyncio.run(outlook_service.get_message(access_token, draft_id))
+                if isinstance(msg, dict):
+                    return (msg.get("body") or "").strip()
+                return None
+
+            from gmail_service import _decode_body, get_user_gmail_service
+
+            service = asyncio.run(get_user_gmail_service(user_id, account_id))
+            draft = get_gmail_draft_by_id(draft_id, service=service)
+            if not isinstance(draft, dict):
+                return None
+
+            msg = draft.get("message", {})
+            if not isinstance(msg, dict):
+                return None
+
+            msg_id = msg.get("id")
+            if not msg_id:
+                return None
+
+            full_msg = (
+                service.users()
+                .messages()
+                .get(userId="me", id=msg_id, format="full")
+                .execute()
+            )
+            return (_decode_body(full_msg.get("payload", {})) or "").strip()
+
+        # Legacy behavior (token.json)
+        draft = get_gmail_draft_by_id(draft_id, service=None)
+        if not isinstance(draft, dict):
+            return None
+
+        msg = draft.get("message", {})
+        if not isinstance(msg, dict):
+            return None
+
+        msg_id = msg.get("id")
+        if not msg_id:
+            return None
+
+        from gmail_service import _decode_body, get_gmail_service
+
+        service = get_gmail_service()
+        full_msg = (
+            service.users()
+            .messages()
+            .get(userId="me", id=msg_id, format="full")
+            .execute()
+        )
+        return (_decode_body(full_msg.get("payload", {})) or "").strip()
+    except Exception as e:
+        logger.error(f"Error getting draft body: {str(e)}")
         return None
 
 
@@ -295,9 +519,49 @@ def get_drafts_for_recipient(to_email: str, user_id: str = None) -> List[Dict]:
     """
     try:
         if user_id:
+            primary = _get_primary_email_account(user_id)
+            if not primary:
+                return []
+
+            provider = primary.get("provider")
+            account_id = primary.get("id")
+
             import asyncio
-            from gmail_service import get_primary_account_service
-            service = asyncio.run(get_primary_account_service(user_id))
+            from email_account_service import email_account_service
+
+            if provider == "outlook":
+                access_token = asyncio.run(
+                    email_account_service.get_outlook_access_token(user_id, account_id)
+                )
+                if not access_token:
+                    return []
+
+                from outlook_service import fetch_messages as fetch_outlook_messages
+
+                drafts_raw = asyncio.run(
+                    fetch_outlook_messages(access_token, folder="drafts", max_results=50)
+                )
+
+                results: List[Dict] = []
+                for d in drafts_raw:
+                    if to_email.lower() not in (d.get("recipient") or "").lower():
+                        continue
+                    dt_val = d.get("date")
+                    date_str = dt_val.isoformat() if isinstance(dt_val, datetime) else "Unknown"
+                    results.append(
+                        {
+                            "id": d.get("message_id", ""),
+                            "subject": d.get("subject", "(No subject)"),
+                            "date": date_str,
+                            "provider": "outlook",
+                            "account_id": account_id,
+                        }
+                    )
+                return results
+
+            from gmail_service import get_user_gmail_service
+
+            service = asyncio.run(get_user_gmail_service(user_id, account_id))
             drafts = get_gmail_drafts_by_recipient(to_email, service=service)
         else:
             drafts = get_gmail_drafts_by_recipient(to_email)
@@ -310,15 +574,52 @@ def get_drafts_for_recipient(to_email: str, user_id: str = None) -> List[Dict]:
 
 
 def delete_draft(draft_id: str, user_id: str = None) -> Dict:
-    """Delete a draft email from Gmail (supports multi-account)."""
+    """Delete a draft email from the user's primary account (Gmail or Outlook)."""
     try:
-        service = None
         if user_id:
-            import asyncio
-            from gmail_service import get_primary_account_service
-            service = asyncio.run(get_primary_account_service(user_id))
+            primary = _get_primary_email_account(user_id)
+            if not primary:
+                return {"success": False, "message": "No email accounts connected"}
 
-        success = delete_gmail_draft(draft_id, service=service)
+            provider = primary.get("provider")
+            account_id = primary.get("id")
+
+            import asyncio
+            from email_account_service import email_account_service
+
+            if provider == "outlook":
+                access_token = asyncio.run(
+                    email_account_service.get_outlook_access_token(user_id, account_id)
+                )
+                if not access_token:
+                    return {"success": False, "message": "Invalid or expired Outlook token"}
+
+                from outlook_service import outlook_service
+
+                result = asyncio.run(outlook_service.delete_message(access_token, draft_id))
+                return {
+                    "success": bool(result.get("success")),
+                    "message": (
+                        f"Draft {draft_id} deleted successfully"
+                        if result.get("success")
+                        else result.get("message", f"Failed to delete draft {draft_id}")
+                    ),
+                }
+
+            from gmail_service import get_user_gmail_service
+
+            service = asyncio.run(get_user_gmail_service(user_id, account_id))
+            success = delete_gmail_draft(draft_id, service=service)
+            return {
+                "success": bool(success),
+                "message": (
+                    f"Draft {draft_id} deleted successfully"
+                    if success
+                    else f"Failed to delete draft {draft_id}"
+                ),
+            }
+
+        success = delete_gmail_draft(draft_id, service=None)
         if success:
             return {
                 "success": True,
@@ -338,15 +639,59 @@ def delete_draft(draft_id: str, user_id: str = None) -> Dict:
 
 
 def send_draft(draft_id: str, user_id: str = None) -> Dict:
-    """Send a previously created draft from Gmail (supports multi-account)."""
+    """Send a previously created draft from the user's primary account (Gmail or Outlook)."""
     try:
-        service = None
         if user_id:
-            import asyncio
-            from gmail_service import get_primary_account_service
-            service = asyncio.run(get_primary_account_service(user_id))
+            primary = _get_primary_email_account(user_id)
+            if not primary:
+                return {"success": False, "message": "No email accounts connected"}
 
-        sent_msg = send_gmail_draft(draft_id, service=service)
+            provider = primary.get("provider")
+            account_id = primary.get("id")
+
+            import asyncio
+            from email_account_service import email_account_service
+
+            if provider == "outlook":
+                access_token = asyncio.run(
+                    email_account_service.get_outlook_access_token(user_id, account_id)
+                )
+                if not access_token:
+                    return {"success": False, "message": "Invalid or expired Outlook token"}
+
+                from outlook_service import outlook_service
+
+                result = asyncio.run(outlook_service.send_draft(access_token, draft_id))
+                if result.get("success"):
+                    return {
+                        "success": True,
+                        "message": f"Draft {draft_id} sent successfully",
+                        "message_id": draft_id,
+                        "provider": "outlook",
+                        "account_id": account_id,
+                    }
+                return {
+                    "success": False,
+                    "message": result.get("message", f"Failed to send draft {draft_id}"),
+                    "provider": "outlook",
+                    "account_id": account_id,
+                }
+
+            from gmail_service import get_user_gmail_service
+
+            service = asyncio.run(get_user_gmail_service(user_id, account_id))
+            sent_msg = send_gmail_draft(draft_id, service=service)
+            if sent_msg:
+                return {
+                    "success": True,
+                    "message": f"Draft {draft_id} sent successfully",
+                    "message_id": sent_msg.get("id"),
+                    "provider": "gmail",
+                    "account_id": account_id,
+                }
+            return {"success": False, "message": f"Failed to send draft {draft_id}"}
+
+        sent_msg = send_gmail_draft(draft_id, service=None)
         if sent_msg:
             return {
                 "success": True,
@@ -411,7 +756,7 @@ def update_draft(
     user_id: Optional[str] = None
 ) -> Dict:
     """
-    Update a draft email in Gmail.
+    Update a draft email in the user's primary account (Gmail or Outlook).
 
     Parameters:
     - draft_id: Required - The draft ID to update
@@ -426,11 +771,66 @@ def update_draft(
     All enhancement should be done in chat_service BEFORE calling this function.
     """
     try:
-        service = None
         if user_id:
+            primary = _get_primary_email_account(user_id)
+            if not primary:
+                return {"success": False, "message": "No email accounts connected"}
+
+            provider = primary.get("provider")
+            account_id = primary.get("id")
+
             import asyncio
-            from gmail_service import get_primary_account_service
-            service = asyncio.run(get_primary_account_service(user_id))
+            from email_account_service import email_account_service
+
+            # Handle instruction parameter - treat as body if body is not provided
+            if instruction is not None and body is None:
+                body = instruction
+
+            # Determine which body to use (None = keep existing, "" = clear, string = use it)
+            update_body = None
+            if append_to_body is not None:
+                update_body = append_to_body
+            elif body is not None:
+                update_body = body
+
+            if provider == "outlook":
+                access_token = asyncio.run(
+                    email_account_service.get_outlook_access_token(user_id, account_id)
+                )
+                if not access_token:
+                    return {"success": False, "message": "Invalid or expired Outlook token"}
+
+                from outlook_service import outlook_service
+
+                result = asyncio.run(
+                    outlook_service.update_message(
+                        access_token,
+                        draft_id,
+                        to=to,
+                        subject=subject,
+                        body=update_body,
+                    )
+                )
+                if result.get("success"):
+                    return {
+                        "success": True,
+                        "message": f"Draft {draft_id} updated successfully",
+                        "new_draft_id": draft_id,
+                        "provider": "outlook",
+                        "account_id": account_id,
+                    }
+                return {
+                    "success": False,
+                    "message": result.get("message", f"Failed to update draft {draft_id}"),
+                    "provider": "outlook",
+                    "account_id": account_id,
+                }
+
+            from gmail_service import get_user_gmail_service
+
+            service = asyncio.run(get_user_gmail_service(user_id, account_id))
+        else:
+            service = None
 
         # Handle instruction parameter - treat as body if body is not provided
         if instruction is not None and body is None:
@@ -546,6 +946,8 @@ def fetch_mails(
     subject_keyword: Optional[str] = None,
     folder: Optional[str] = None,
     max_results: int = 50,
+    provider: Optional[str] = None,
+    account_id: Optional[str] = None,
     user_id: str = None
 ) -> List[Dict]:
     """
@@ -565,6 +967,10 @@ def fetch_mails(
     All filters are optional and can be combined together.
     """
     try:
+        provider_normalized = provider.lower().strip() if isinstance(provider, str) and provider.strip() else None
+        if provider_normalized and provider_normalized not in {"gmail", "outlook"}:
+            return [{"error": f"Invalid provider '{provider}'. Use 'gmail' or 'outlook'."}]
+
         # Build date filter if time_period is specified
         calculated_since = None
         if time_period:
@@ -629,19 +1035,166 @@ def fetch_mails(
         if folder:
             query += f' in:{folder}'
 
-        # Pass max_results to fetch_messages so Gmail API respects the limit
+        def normalize_date(date_obj: Optional[datetime]) -> datetime:
+            """Convert any datetime to timezone-aware UTC for sorting."""
+            if date_obj is None:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            if date_obj.tzinfo is None:
+                return date_obj.replace(tzinfo=timezone.utc)
+            return date_obj.astimezone(timezone.utc)
+
+        def outlook_folder_to_graph(folder_name: Optional[str]) -> str:
+            if not folder_name:
+                return "inbox"
+            f = folder_name.strip().lower()
+            mapping = {
+                "inbox": "inbox",
+                "sent": "sentitems",
+                "sentitems": "sentitems",
+                "sent_items": "sentitems",
+                "drafts": "drafts",
+                "trash": "deleteditems",
+                "deleted": "deleteditems",
+                "deleteditems": "deleteditems",
+                "spam": "junkemail",
+                "junk": "junkemail",
+                "junkemail": "junkemail",
+            }
+            return mapping.get(f, "inbox")
+
+        def outlook_matches_filters(msg: Dict) -> bool:
+            try:
+                if sender:
+                    if sender.lower() not in (msg.get("sender") or "").lower():
+                        return False
+                if subject_keyword:
+                    if subject_keyword.lower() not in (msg.get("subject") or "").lower():
+                        return False
+                if importance is True and not msg.get("is_important", False):
+                    return False
+                if importance is False and msg.get("is_important", False):
+                    return False
+                if label:
+                    label_lower = label.lower()
+                    label_ids = [str(x).lower() for x in (msg.get("label_ids") or [])]
+                    if label_lower not in label_ids:
+                        return False
+
+                if parsed_since or parsed_until:
+                    dt_val = msg.get("date")
+                    if isinstance(dt_val, datetime):
+                        d_val = dt_val.date()
+                    else:
+                        d_val = None
+
+                    if parsed_since and (not d_val or d_val < parsed_since):
+                        return False
+                    if parsed_until and (not d_val or d_val > parsed_until):
+                        return False
+
+                return True
+            except Exception:
+                return False
+
+        # Multi-account unified (Gmail + Outlook)
         if user_id:
             import asyncio
-            from gmail_service import fetch_messages_multi_account
-            emails = asyncio.run(fetch_messages_multi_account(
-                user_id,
-                query=query or "in:inbox",
-                max_per_account=max_results
-            ))
-        else:
-            emails = fetch_messages(query=query or None, max_results=max_results)
+            from email_account_service import email_account_service
+            from gmail_service import fetch_messages_with_service, get_user_gmail_service
+            from outlook_service import fetch_messages as fetch_outlook_messages
 
-        return [email.model_dump(mode='json') for email in emails]
+            async def fetch_all() -> List[EmailOut]:
+                accounts = await email_account_service.get_all_accounts(user_id)
+                if not accounts:
+                    return []
+
+                if account_id:
+                    accounts = [acc for acc in accounts if acc.get("id") == account_id]
+                    if not accounts:
+                        raise ValueError("Account not found")
+
+                if provider_normalized:
+                    accounts = [acc for acc in accounts if acc.get("provider") == provider_normalized]
+
+                all_emails: List[EmailOut] = []
+                gmail_query = query or "in:inbox"
+                outlook_folder = outlook_folder_to_graph(folder)
+                outlook_fetch_limit = max(1, min(max_results * 3, 100))
+
+                for account in accounts:
+                    acc_provider = account.get("provider")
+                    if acc_provider == "gmail":
+                        service = await get_user_gmail_service(user_id, account["id"])
+                        emails = fetch_messages_with_service(
+                            service=service,
+                            query=gmail_query,
+                            max_results=max_results,
+                        )
+                        for email in emails:
+                            email.account_id = account["id"]
+                            email.account_email = account["email_address"]
+                            email.provider = "gmail"
+                        all_emails.extend(emails)
+                        continue
+
+                    if acc_provider == "outlook":
+                        access_token = await email_account_service.get_outlook_access_token(user_id, account["id"])
+                        if not access_token:
+                            logger.warning(
+                                f"Skipping Outlook account {account.get('id')}: missing/expired token"
+                            )
+                            continue
+
+                        outlook_msgs = await fetch_outlook_messages(
+                            access_token,
+                            folder=outlook_folder,
+                            max_results=outlook_fetch_limit,
+                        )
+                        for msg in outlook_msgs:
+                            if not outlook_matches_filters(msg):
+                                continue
+
+                            label_ids = list(msg.get("label_ids", []) or [])
+                            if not msg.get("is_read", True) and "UNREAD" not in label_ids:
+                                label_ids.append("UNREAD")
+
+                            all_emails.append(
+                                EmailOut(
+                                    message_id=msg.get("message_id", ""),
+                                    sender=msg.get("sender", ""),
+                                    recipient=msg.get("recipient", ""),
+                                    subject=msg.get("subject", ""),
+                                    body=msg.get("body", ""),
+                                    date=msg.get("date") or datetime.now(timezone.utc),
+                                    label_ids=label_ids,
+                                    account_id=account["id"],
+                                    account_email=account["email_address"],
+                                    provider="outlook",
+                                )
+                            )
+                        continue
+
+                    logger.warning(f"Skipping unknown provider '{acc_provider}' for account {account.get('id')}")
+
+                all_emails.sort(key=lambda x: normalize_date(x.date), reverse=True)
+                try:
+                    max_n = int(max_results) if max_results is not None else 0
+                except (TypeError, ValueError):
+                    max_n = 0
+                if max_n > 0:
+                    all_emails = all_emails[:max_n]
+                return all_emails
+
+            try:
+                emails = asyncio.run(fetch_all())
+            except ValueError:
+                return [{"error": "Account not found"}]
+
+            return [email.model_dump(mode="json") for email in emails]
+
+        # Legacy single-account Gmail (token.json)
+        emails = fetch_messages(query=query or None, max_results=max_results)
+        return [email.model_dump(mode="json") for email in emails]
     except Exception as e:
         logger.error(f"Error in fetch_mails: {str(e)}")
         return []
@@ -691,7 +1244,7 @@ def move_mails_by_sender(sender: str, target_folder: str, max_results: int = 50,
     """
     try:
         # Find all emails from this sender
-        emails = fetch_mails(sender=sender, max_results=max_results, user_id=user_id)
+        emails = fetch_mails(sender=sender, max_results=max_results, provider="gmail", user_id=user_id)
 
         if not emails:
             return {
@@ -701,7 +1254,11 @@ def move_mails_by_sender(sender: str, target_folder: str, max_results: int = 50,
             }
 
         # Extract email IDs from results
-        email_ids = [email.get("id") for email in emails if email.get("id")]
+        email_ids = [
+            email.get("message_id") or email.get("id")
+            for email in emails
+            if (email.get("message_id") or email.get("id"))
+        ]
 
         if not email_ids:
             return {
