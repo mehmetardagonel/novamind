@@ -1,11 +1,8 @@
 import axios from 'axios'
 import { supabase } from '@/database/supabaseClient'
-import { getApiUrl } from '@/utils/platformHelper'
 
-// Get API base URL - automatically detects platform (web/android/ios)
-const API_URL = getApiUrl()
-
-console.log('[API Client] Using API URL:', API_URL)
+// Get API base URL from environment variables or use default
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 // Create axios instance with default configuration
 const apiClient = axios.create({

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">novamind</string>
+    <string name="title_activity_main">novamind</string>
+    <string name="package_name">com.novamind</string>
+    <string name="custom_url_scheme">com.novamind</string>
+</resources>
