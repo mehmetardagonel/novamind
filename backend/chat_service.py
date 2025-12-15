@@ -366,8 +366,7 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
 
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", system_prompt),
-                ("system", "{context}"),
+                ("system", system_prompt + "\n\n{context}"),
                 MessagesPlaceholder(variable_name="chat_history"),
                 ("human", "{input}"),
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
@@ -429,7 +428,7 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
         return user_message.strip()
 
     def _maybe_handle_direct_inbox_fetch(self, raw_user_message: str) -> str | None:
-        """Handle common provider-specific inbox requests without the LLM.
+        """Handle common inbox requests without the LLM.
 
         This acts as a safety net for cases where the LLM returns an empty response
         (Gemini occasionally produces empty candidates), and it also avoids
@@ -447,7 +446,25 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
         elif "gmail" in msg_lower:
             provider = "gmail"
 
-        if not provider:
+        # For provider-agnostic requests we only auto-handle "important" time-bounded queries.
+        importance = None
+        if any(k in msg_lower for k in ["important", "priority", "high priority"]):
+            # Note: we intentionally do not implement "not important" here; keep it conservative.
+            importance = True
+
+        time_period = None
+        if any(k in msg_lower for k in ["this week", "last week", "past week", "recent week"]):
+            time_period = "last_week"
+        elif any(k in msg_lower for k in ["this month", "last month", "past month"]):
+            time_period = "last_month"
+        elif any(k in msg_lower for k in ["last 3 months", "past 3 months", "three months"]):
+            time_period = "last_3_months"
+        elif "yesterday" in msg_lower:
+            time_period = "yesterday"
+        elif "today" in msg_lower:
+            time_period = "today"
+
+        if not provider and not (importance and time_period):
             return None
 
         # Avoid hijacking non-inbox/connection troubleshooting.
@@ -494,7 +511,14 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
         ):
             return None
 
-        if not (any(k in msg_lower for k in email_keywords) or any(k in msg_lower for k in action_keywords)):
+        is_emailish = any(k in msg_lower for k in email_keywords) or any(
+            k in msg_lower for k in action_keywords
+        )
+        if not is_emailish and importance and time_period:
+            # Users often omit the word "email" in questions like:
+            # "Do I have anything important this week?"
+            is_emailish = True
+        if not is_emailish:
             return None
 
         latest_keywords = [
@@ -508,14 +532,28 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
         ]
         max_results = 1 if any(k in msg_lower for k in latest_keywords) else 25
 
-        payload = {"provider": provider, "folder": "inbox", "max_results": max_results}
+        payload = {"folder": "inbox", "max_results": max_results}
+        if provider:
+            payload["provider"] = provider
+        if importance is not None:
+            payload["importance"] = importance
+        if time_period:
+            payload["time_period"] = time_period
         try:
             emails_block = self._format_fetch_mails_response(json.dumps(payload))
         except Exception as e:
             logger.error(f"Direct inbox fetch failed: {e}")
             return None
 
-        if provider == "outlook" and max_results == 1:
+        if importance and time_period:
+            provider_label = "Outlook" if provider == "outlook" else "Gmail" if provider == "gmail" else ""
+            provider_prefix = f"{provider_label} " if provider_label else ""
+            period_label = time_period.replace("_", " ")
+            if time_period in {"today", "yesterday"}:
+                intro = f"Here are your important {provider_prefix}emails from {period_label}:"
+            else:
+                intro = f"Here are your important {provider_prefix}emails from the {period_label}:"
+        elif provider == "outlook" and max_results == 1:
             intro = "Here’s your latest Outlook email:"
         elif provider == "outlook":
             intro = "Here are your Outlook inbox emails:"
