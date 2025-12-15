@@ -1,9 +1,23 @@
 from pydantic import BaseModel, Field, EmailStr
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Literal
 
+
+class EmailAccountOut(BaseModel):
+    """Unified email account information returned to frontend (Gmail + Outlook)"""
+    id: str
+    email_address: str
+    display_name: str
+    provider: Literal["gmail", "outlook"]
+    is_primary: bool
+    is_active: bool = True
+    created_at: datetime
+    last_sync_at: Optional[datetime] = None
+
+
+# Backward compatibility alias
 class GmailAccountOut(BaseModel):
-    """Gmail account information returned to frontend"""
+    """Gmail account information returned to frontend (deprecated: use EmailAccountOut)"""
     id: str
     email_address: str
     display_name: str
@@ -23,6 +37,7 @@ class EmailOut(BaseModel):
     # Multi-account support
     account_id: Optional[str] = None
     account_email: Optional[str] = None
+    provider: Optional[Literal["gmail", "outlook"]] = None  # Email provider
 
 class EmailRequest(BaseModel):
     to: EmailStr

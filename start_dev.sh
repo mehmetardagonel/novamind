@@ -60,14 +60,25 @@ if [ -f "$PID_FILE" ]; then
     rm "$PID_FILE"
 fi
 
-# Find available ports
-print_info "Finding available ports..."
-BACKEND_PORT=$(find_free_port 8001)
+# Choose ports
+# Backend port must be stable because Google OAuth redirect URIs require an exact match (no wildcards).
+print_info "Selecting ports..."
+BACKEND_PORT="${BACKEND_PORT:-8001}"
 FRONTEND_PORT=$(find_free_port 5173)
 
 # Ensure they are different
 if [ "$BACKEND_PORT" -eq "$FRONTEND_PORT" ]; then
-    FRONTEND_PORT=$(find_free_port $((BACKEND_PORT + 1)))
+    FRONTEND_PORT=$(find_free_port $((FRONTEND_PORT + 1)))
+fi
+
+# Verify backend port is free (don't auto-shift; it breaks OAuth redirects)
+if ! python3 -c "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(('', int('$BACKEND_PORT'))); s.close()" 2>/dev/null; then
+    print_error "Backend port $BACKEND_PORT is already in use."
+    print_info "Free the port and try again, or run with a different port:"
+    print_info "  BACKEND_PORT=8002 ./start_dev.sh"
+    print_info "If you change BACKEND_PORT, update Google OAuth Authorized redirect URIs accordingly:"
+    print_info "  http://localhost:$BACKEND_PORT/auth/callback"
+    exit 1
 fi
 
 print_success "Selected ports: Backend=$BACKEND_PORT, Frontend=$FRONTEND_PORT"
@@ -113,12 +124,12 @@ fi
 # Check for .env file
 if [ ! -f "$BACKEND_DIR/.env" ]; then
     print_warning "Backend .env file not found!"
-    if [ -f "$BACKEND_DIR/env.example" ]; then
-        print_info "Creating .env from env.example..."
-        cp "$BACKEND_DIR/env.example" "$BACKEND_DIR/.env"
+    if [ -f "$BACKEND_DIR/.env.example" ]; then
+        print_info "Creating .env from .env.example..."
+        cp "$BACKEND_DIR/.env.example" "$BACKEND_DIR/.env"
         print_warning "⚠️  IMPORTANT: You need to edit $BACKEND_DIR/.env with your credentials."
     else
-        print_error "env.example file not found in backend directory!"
+        print_error ".env.example file not found in backend directory!"
         exit 1
     fi
 fi
@@ -127,8 +138,10 @@ fi
 print_info "Starting backend server on port $BACKEND_PORT..."
 cd "$BACKEND_DIR"
 
-# Export FRONTEND_URL so backend knows where requests come from (for CORS/Redirects)
+# Export URLs so backend knows where requests come from (CORS/Redirects) and OAuth callbacks match the running port
 export FRONTEND_URL="http://localhost:$FRONTEND_PORT"
+export GOOGLE_REDIRECT_URI="http://localhost:$BACKEND_PORT/auth/callback"
+export OUTLOOK_REDIRECT_URI="http://localhost:$BACKEND_PORT/auth/outlook/callback"
 # Set protobuf implementation
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 

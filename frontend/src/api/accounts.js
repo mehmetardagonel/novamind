@@ -13,20 +13,70 @@ async function resolveUserId(explicitUserId) {
     const { data, error } = await supabase.auth.getUser();
 
     if (error) {
-      console.warn("[accounts.js] Supabase getUser error:", error);
-      return "default-user";
+      throw error;
     }
 
     const userId = data?.user?.id;
-    return userId || "default-user";
+    if (!userId) throw new Error("No Supabase user id");
+    return userId;
   } catch (e) {
-    console.warn("[accounts.js] Supabase getUser threw:", e);
-    return "default-user";
+    console.warn("[accounts.js] Supabase getUser failed:", e);
+    throw e;
   }
 }
 
 /**
+ * ============================================================
+ *  UNIFIED EMAIL ACCOUNTS (Gmail + Outlook)
+ * ============================================================
+ */
+
+/**
+ * Fetch all email accounts (Gmail + Outlook) for the current user
+ */
+export const fetchEmailAccounts = async (userId) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const response = await apiClient.get("/email/accounts", {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return response.data;
+};
+
+/**
+ * Set an account as primary (works for both Gmail and Outlook)
+ */
+export const setPrimaryAccount = async (accountId, userId) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const response = await apiClient.post(
+    `/email/accounts/${accountId}/set-primary`,
+    {},
+    {
+      headers: { "X-User-Id": resolvedUserId },
+    }
+  );
+  return response.data;
+};
+
+/**
+ * Delete/disconnect an email account (works for both Gmail and Outlook)
+ */
+export const deleteEmailAccount = async (accountId, userId) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const response = await apiClient.delete(`/email/accounts/${accountId}`, {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return response.data;
+};
+
+/**
+ * ============================================================
+ *  GMAIL SPECIFIC
+ * ============================================================
+ */
+
+/**
  * Fetch all Gmail accounts for the current user
+ * @deprecated Use fetchEmailAccounts() instead
  */
 export const fetchGmailAccounts = async (userId) => {
   const resolvedUserId = await resolveUserId(userId);
@@ -49,22 +99,8 @@ export const connectGmailAccount = async (userId) => {
 };
 
 /**
- * Set an account as primary
- */
-export const setPrimaryAccount = async (accountId, userId) => {
-  const resolvedUserId = await resolveUserId(userId);
-  const response = await apiClient.post(
-    `/gmail/accounts/${accountId}/set-primary`,
-    {},
-    {
-      headers: { "X-User-Id": resolvedUserId },
-    }
-  );
-  return response.data;
-};
-
-/**
  * Delete/disconnect a Gmail account
+ * @deprecated Use deleteEmailAccount() instead
  */
 export const deleteGmailAccount = async (accountId, userId) => {
   const resolvedUserId = await resolveUserId(userId);
@@ -72,4 +108,22 @@ export const deleteGmailAccount = async (accountId, userId) => {
     headers: { "X-User-Id": resolvedUserId },
   });
   return response.data;
+};
+
+/**
+ * ============================================================
+ *  OUTLOOK SPECIFIC
+ * ============================================================
+ */
+
+/**
+ * Initiate OAuth flow to connect a new Outlook account
+ * Returns auth URL to redirect user to Microsoft login
+ */
+export const connectOutlookAccount = async (userId) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const response = await apiClient.get("/auth/outlook/connect", {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return response.data.auth_url;
 };

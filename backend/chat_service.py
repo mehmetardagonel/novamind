@@ -1,42 +1,43 @@
 # Set protobuf to use pure Python implementation for Python 3.14 compatibility
 # This MUST be done before any protobuf-using modules are imported
 import os
-os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
+
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 import json
 import logging
 from datetime import datetime
-from langchain_google_genai import ChatGoogleGenerativeAI
+
+from langchain.agents import AgentExecutor, create_react_agent
 from langchain.tools import Tool
-from langchain.agents import create_react_agent, AgentExecutor
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+from email_tools import (
+    delete_all_spam,
+    delete_draft,
+    draft_email,
+    fetch_mails,
+    get_draft_by_id,
+    get_drafts,
+    get_drafts_for_recipient,
+    move_mails_by_sender,
+    send_draft,
+    send_email,
+    update_draft,
+)
 from ml_service import get_classifier
 
 
-# Setup logging for error tracking
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# Custom JSON encoder for datetime objects
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime):
             return obj.isoformat()
         return super().default(obj)
 
-from email_tools import (
-    fetch_mails,
-    delete_all_spam,
-    move_mails_by_sender,
-    send_email,
-    draft_email,
-    get_drafts,
-    get_draft_by_id,
-    delete_draft,
-    send_draft,
-    update_draft,
-    get_drafts_for_recipient
-)
 
 class ChatService:
     def __init__(self, user_id: str = None):
@@ -47,16 +48,15 @@ class ChatService:
             user_id: User ID for multi-account support.
                      If None, falls back to legacy token.json.
         """
-        self.user_id = user_id  # Store user_id for use in methods
+        self.user_id = user_id
 
-        # Gemini API key'i al
         api_key = os.getenv("GEMINI_API_KEY")
-
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found! Check your .env file.")
+
         masked_key = f"{api_key[:10]}...{api_key[-4:]}" if len(api_key) > 14 else "***"
         logger.info(f"🔑 Using GEMINI_API_KEY: {masked_key}")
-        # Gemini modeli oluştur
+
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             google_api_key=api_key,
@@ -64,141 +64,119 @@ class ChatService:
         )
 
         # Draft selection state - track pending draft selections
-        self.pending_selection = None  # {"drafts": [...], "operation": "send", "to_email": "..."}
-        
-        # Tools tanımlama
+        # Example: {"drafts": [...], "operation": "send", "to_email": "..."}
+        self.pending_selection = None
+
         self.tools = [
             Tool(
                 name="fetch_mails",
                 func=self._format_fetch_mails_response,
-                description="""Advanced email fetching with multiple filter options. Provide filters as JSON.
-                Available filters: label, sender, importance (true/false), subject_keyword, folder
-
-                For dates, use ONE of:
-                1. time_period: 'today', 'yesterday', 'last_week', 'last_month', 'last_3_months'
-                2. since_date and/or until_date: ISO format (YYYY-MM-DD)
-
-                All filters are optional and can be combined.
-                IMPORTANT:
-- For a         SINGLE specific day, use BOTH since_date AND until_date with the SAME date
-- For a         date range, use different since_date and until_date
-- For "f        rom X onwards", use only since_date
-                Examples:
-                - {"sender": "boss", "time_period": "today"} for emails from boss today
-                - {"since_date": "2025-11-01"} for emails from November 1st onwards
-                - {"since_date": "2025-11-01", "until_date": "2025-11-30"} for November emails
-                - {"label": "Work", "importance": true} for important work emails
-                - {"sender": "team", "since_date": "2025-11-20"} for team emails since Nov 20
-                """
+                description=(
+                    "Advanced email fetching with multiple filter options. Provide filters as JSON.\n"
+                    "Available filters: label, sender, importance (true/false), subject_keyword, folder\n\n"
+                    "For dates, use ONE of:\n"
+                    "1. time_period: 'today', 'yesterday', 'last_week', 'last_month', 'last_3_months'\n"
+                    "2. since_date and/or until_date: ISO format (YYYY-MM-DD)\n\n"
+                    "All filters are optional and can be combined.\n"
+                    "IMPORTANT:\n"
+                    "- For a SINGLE specific day, use BOTH since_date AND until_date with the SAME date\n"
+                    "- For a date range, use different since_date and until_date\n"
+                    '- For "from X onwards", use only since_date\n'
+                    "Examples:\n"
+                    '- {"sender": "boss", "time_period": "today"}\n'
+                    '- {"since_date": "2025-11-01"}\n'
+                    '- {"since_date": "2025-11-01", "until_date": "2025-11-30"}\n'
+                    '- {"label": "Work", "importance": true}\n'
+                    '- {"sender": "team", "since_date": "2025-11-20"}\n'
+                ),
             ),
             Tool(
                 name="delete_all_spam",
                 func=lambda _: json.dumps(delete_all_spam(user_id=self.user_id), indent=2),
-                description="Delete all spam emails from the inbox. No input needed."
+                description="Delete all spam emails from the inbox. No input needed.",
             ),
             Tool(
                 name="move_mails_by_sender",
                 func=lambda x: json.dumps(self._parse_move_mails_by_sender(x), indent=2),
-                description="""Move multiple emails from a specific sender to a target folder.
-                Input format: "sender|target_folder"
-
-                - sender: Sender name or email (partial match, case-insensitive)
-                  Examples: 'playstation', 'amazon', 'john', 'team@company.com'
-                - target_folder: Target label/folder (will be created if it doesn't exist)
-                  Examples: 'game', 'shopping', 'work'
-
-                Examples:
-                - "playstation|game" - Move all PlayStation emails to game folder
-                - "amazon|shopping" - Move Amazon emails to shopping folder
-                - "john|personal" - Move emails from John to personal folder
-                """
+                description=(
+                    "Move multiple emails from a specific sender to a target folder.\n"
+                    'Input format: "sender|target_folder"\n\n'
+                    "- sender: Sender name or email (partial match, case-insensitive)\n"
+                    "- target_folder: Target label/folder (will be created if it doesn't exist)\n\n"
+                    "Examples:\n"
+                    '- "playstation|game"\n'
+                    '- "amazon|shopping"\n'
+                    '- "john|personal"\n'
+                ),
             ),
             Tool(
                 name="send_email",
                 func=lambda x: json.dumps(self._parse_send_email(x), indent=2),
-                description="""Send an email immediately. You should compose a professional email based on the user's request.
-                Input format: 'to_email|subject|body' where:
-                - to_email: recipient's email address
-                - subject: a clear, concise subject line
-                - body: a well-written, professional email body
-                Example: 'john@company.com|Tomorrow's Meeting|Hi John,\n\nLet's meet tomorrow at 10 AM to discuss the project.\n\nBest regards'
-                """
+                description=(
+                    "Send an email immediately.\n"
+                    "Input format: 'to_email|subject|body'\n"
+                    "Example: 'john@company.com|Tomorrow's Meeting|Hi John,...'\n"
+                ),
             ),
             Tool(
                 name="draft_email",
                 func=lambda x: json.dumps(self._parse_draft_email(x), indent=2),
-                description="""Create a draft email without sending it. You MUST ALWAYS provide the recipient email address.
-                Input format: 'to_email|subject|body' where:
-                - to_email: recipient's email address (REQUIRED - cannot be empty)
-                - subject: a clear, concise subject line (optional, can be empty)
-                - body: a well-written, professional email body that addresses the user's intent
-
-                CRITICAL RULES:
-                1. The recipient email address is MANDATORY - drafts cannot be created without it
-                2. If user provides only a name (e.g., "John"), ask for their full email address
-                3. If user does not provide a recipient, you MUST ASK for it before creating the draft
-                4. If the system returns "requires_recipient": true, prompt user for the email address
-
-                Examples:
-                - Full: 'berat@company.com|Project Meeting|Hi Berat, I hope this email finds you well...'
-                - User didn't provide email: Wait for their response and ask "What is the recipient's email address?"
-                - User provided name only: Ask "What is John's email address?"
-                """
+                description=(
+                    "Create a draft email without sending it. You MUST ALWAYS provide the recipient email address.\n"
+                    "Input format: 'to_email|subject|body' where:\n"
+                    "- to_email: recipient's email address (REQUIRED - cannot be empty)\n"
+                    "- subject: a clear, concise subject line (optional, can be empty)\n"
+                    "- body: a well-written, professional email body that addresses the user's intent\n\n"
+                    "CRITICAL RULES:\n"
+                    "1. The recipient email address is MANDATORY - drafts cannot be created without it\n"
+                    "2. If user provides only a name (e.g., \"John\"), ask for their full email address\n"
+                    "3. If user does not provide a recipient, you MUST ASK for it before creating the draft\n"
+                    "4. If the system returns \"requires_recipient\": true, prompt user for the email address\n"
+                ),
             ),
             Tool(
                 name="get_drafts",
                 func=lambda _: json.dumps(get_drafts(user_id=self.user_id), indent=2),
-                description="Get all draft emails. No input needed."
+                description="Get all draft emails. No input needed.",
             ),
             Tool(
                 name="delete_draft_for_recipient",
                 func=lambda x: self._delete_draft_for_recipient(x.strip()),
-                description="""Delete a draft email for a specific recipient.
-                Input: recipient email address (e.g., 'alice@example.com')
-                If multiple drafts exist for this recipient, you will be asked to choose which one to delete.
-                If only one draft exists, it will be deleted automatically."""
+                description=(
+                    "Delete a draft email for a specific recipient.\n"
+                    "Input: recipient email address (e.g., 'alice@example.com')\n"
+                    "If multiple drafts exist, you will be asked to choose which one."
+                ),
             ),
             Tool(
                 name="send_draft_for_recipient",
                 func=lambda x: self._send_draft_for_recipient(x.strip()),
-                description="""Send a draft email for a specific recipient.
-                Input: recipient email address (e.g., 'alice@example.com')
-                If multiple drafts exist for this recipient, you will be asked to choose which one to send.
-                If only one draft exists, it will be sent automatically."""
+                description=(
+                    "Send a draft email for a specific recipient.\n"
+                    "Input: recipient email address (e.g., 'alice@example.com')\n"
+                    "If multiple drafts exist, you will be asked to choose which one."
+                ),
             ),
             Tool(
                 name="get_drafts_for_recipient",
                 func=lambda x: self._get_drafts_for_recipient_display(x.strip()),
-                description="""Get all draft emails for a specific recipient.
-                Input: recipient email address (e.g., 'alice@example.com')
-                Returns a list of all drafts addressed to that recipient with subjects and dates."""
+                description=(
+                    "Get all draft emails for a specific recipient.\n"
+                    "Input: recipient email address (e.g., 'alice@example.com')"
+                ),
             ),
             Tool(
                 name="update_draft_for_recipient",
                 func=lambda x: json.dumps(self._parse_update_draft_for_recipient(x), indent=2),
-                description="""Update draft email body for a specific recipient with instructions.
-
-CRITICAL: Use this tool when user asks to update/edit a draft for someone.
-
-Input format: 'email@example.com|update_instruction'
-
-Examples of when to use:
-- User: "Update draft for alice@example.com to make it more formal"
-  → Input: 'alice@example.com|Make it more formal'
-- User: "Edit the draft to bob@smith.com, shorten it"
-  → Input: 'bob@smith.com|Shorten the content and add bullet points'
-
-Tool behavior:
-- If recipient has 1 draft: Updates automatically and returns success message
-- If recipient has 2+ drafts: Shows list (1️⃣ 2️⃣ 3️⃣...) with subjects and dates, asks user to choose (1, 2, 3...)
-- If recipient has 0 drafts: Returns error message
-
-IMPORTANT: Always show the selection list clearly to user if present. User will reply with a number."""
+                description=(
+                    "Update draft email body for a specific recipient with instructions.\n"
+                    "Input format: 'email@example.com|update_instruction'\n"
+                    "Example: 'alice@example.com|Make it more formal'\n"
+                    "If multiple drafts exist, you will be asked to choose which one."
+                ),
             ),
         ]
-        
-        # Agent oluştur - Langchain 0.2.16 API
-        # GÜNCELLENMİŞ PROMPT: JSON'u koruması için kesin kurallar eklendi
+
         react_prompt = """You are an AI email assistant. Your job is to help users manage their emails efficiently.
 
 When users ask you to draft, send, or reply to emails:
@@ -260,24 +238,22 @@ Question: {input}
 Thought:{agent_scratchpad}"""
 
         from langchain.prompts import PromptTemplate
+
         prompt = PromptTemplate(
             input_variables=["input", "agent_scratchpad", "tools", "tool_names"],
-            template=react_prompt
+            template=react_prompt,
         )
 
-        agent = create_react_agent(
-            llm=self.llm,
-            tools=self.tools,
-            prompt=prompt
-        )
+        agent = create_react_agent(llm=self.llm, tools=self.tools, prompt=prompt)
 
         self.agent_executor = AgentExecutor(
             agent=agent,
             tools=self.tools,
             verbose=False,
             handle_parsing_errors=True,
-            max_iterations=10
+            max_iterations=10,
         )
+
         try:
             self.ml_classifier = get_classifier()
             logger.info(" ML Classifier integrated into ChatService")
@@ -285,16 +261,14 @@ Thought:{agent_scratchpad}"""
             logger.error(f" Could not load ML classifier: {str(e)}")
             self.ml_classifier = None
 
-        # ML tool:email classification
         if self.ml_classifier:
             self.tools.append(
                 Tool(
                     name="classify_emails_ml",
                     func=self._classify_emails_with_ml,
-                    description="Classify emails using ML model (spam/ham/important). Input: JSON filters or empty string"
+                    description="Classify emails using ML model (spam/ham/important). Input: JSON filters or empty string",
                 )
             )
-        
 
     def _parse_fetch_mails(self, input_str: str) -> dict:
         try:
@@ -309,75 +283,32 @@ Thought:{agent_scratchpad}"""
                     until_date=filters.get("until_date"),
                     subject_keyword=filters.get("subject_keyword"),
                     folder=filters.get("folder"),
-                    user_id=self.user_id
+                    user_id=self.user_id,
                 )
-            else:
-                return fetch_mails(user_id=self.user_id)
+            return fetch_mails(user_id=self.user_id)
         except json.JSONDecodeError:
             return {"error": "Invalid JSON format for fetch_mails"}
         except Exception as e:
             return {"error": f"Fetch failed: {str(e)}"}
 
     def _format_fetch_mails_response(self, input_str: str) -> str:
-        """Format fetch_mails response as clean email blocks and LIGHTWEIGHT JSON"""
+        """Format fetch_mails response as clean email blocks and LIGHTWEIGHT JSON."""
         emails = self._parse_fetch_mails(input_str)
 
         if isinstance(emails, dict) and "error" in emails:
             return json.dumps(emails, indent=2, cls=DateTimeEncoder)
 
         if isinstance(emails, list):
-            count = len(emails)
-            if count == 0:
-                return "No emails found."
-            elif count == 1:
-                intro = "Here is 1 email:"
-            else:
-                intro = f"Here are {count} emails:"
-
-            email_blocks = []
-            
-            # --- KRİTİK DÜZELTME: JSON İÇİN HAFİFLETİLMİŞ LİSTE HAZIRLAMA ---
-            # PlayStation gibi uzun body'li maillerin JSON'u patlatmasını engeller
             emails_for_json = []
-            
-            for i, email in enumerate(emails, 1):
-                # 1. Metin bloğu oluşturma (AI okuması için)
-                sender = email.get('sender') or email.get('from') or 'Unknown Sender'
-                subject = email.get('subject') or '(No subject)'
-                date = email.get('date') or email.get('timestamp') or 'Unknown Date'
-
-                if isinstance(date, str):
-                    try:
-                        dt = datetime.fromisoformat(date.replace('Z', '+00:00'))
-                        date_str = dt.strftime('%Y-%m-%d %H:%M')
-                    except:
-                        date_str = date
-                else:
-                    date_str = str(date)
-
-                block = f"📧 Email {i}\nFrom: {sender}\nSubject: {subject}\nDate: {date_str}"
-                email_blocks.append(block)
-
-                # 2. JSON için kopya oluştur ve body'yi KISALT
-                # Bu kısım sayesinde "game" etiketli uzun mailler sorun çıkarmaz
+            for email in emails:
                 try:
                     e_copy = email.copy() if isinstance(email, dict) else email.model_dump()
-                    
-                    if 'body' in e_copy and e_copy['body']:
-                        # Body'yi 200 karakterle sınırla. Frontend kartlarında zaten
-                        # tam metne ihtiyaç yoktur, sadece önizleme yeterlidir.
-                        if len(e_copy['body']) > 200:
-                            e_copy['body'] = e_copy['body'][:200] + "..."
-                    
+                    if "body" in e_copy and e_copy["body"] and len(e_copy["body"]) > 200:
+                        e_copy["body"] = e_copy["body"][:200] + "..."
                     emails_for_json.append(e_copy)
                 except Exception:
-                    # Hata durumunda orijinali ekle ama riskli olabilir, genelde buraya düşmez
                     emails_for_json.append(email)
-            # -----------------------------------------------------------
 
-            formatted_response = f"{intro}\n\n" + "\n\n".join(email_blocks)
-            
-            # HAFİFLETİLMİŞ listeyi JSON'a çevir
             json_str = json.dumps(emails_for_json, indent=2, cls=DateTimeEncoder)
             return f"```json\n{json_str}\n```"
 
@@ -387,27 +318,17 @@ Thought:{agent_scratchpad}"""
         try:
             parts = input_str.split("|", 1)
             if len(parts) < 2:
-                return {
-                    "success": False,
-                    "message": "Invalid format. Use: 'sender|target_folder'"
-                }
+                return {"success": False, "message": "Invalid format. Use: 'sender|target_folder'"}
 
             sender = parts[0].strip()
             target_folder = parts[1].strip()
 
             if not sender or not target_folder:
-                return {
-                    "success": False,
-                    "message": "Both sender and target_folder are required"
-                }
+                return {"success": False, "message": "Both sender and target_folder are required"}
 
             return move_mails_by_sender(sender, target_folder, user_id=self.user_id)
-
         except Exception as e:
-            return {
-                "success": False,
-                "message": f"Failed to move emails: {str(e)}"
-            }
+            return {"success": False, "message": f"Failed to move emails: {str(e)}"}
 
     def _parse_send_email(self, input_str: str) -> dict:
         try:
@@ -418,7 +339,6 @@ Thought:{agent_scratchpad}"""
             to = parts[0].strip()
             subject = parts[1].strip()
             body = parts[2].strip()
-            # Pass user_id to send_email for multi-account support
             return send_email(to, subject, body, user_id=self.user_id)
         except (ValueError, IndexError, AttributeError) as e:
             logger.warning(f"Error parsing send_email input: {str(e)}")
@@ -440,41 +360,29 @@ Thought:{agent_scratchpad}"""
                 subject = ""
                 body = ""
             else:
-                body = ""
-                to = ""
-                subject = ""
+                to, subject, body = "", "", ""
 
-            # Call draft_email with parsed values, pass user_id for multi-account support
             result = draft_email(to, subject, body, user_id=self.user_id)
 
-            # Check if recipient is required (missing or invalid)
             if result.get("requires_recipient"):
-                # Save composed content for later when user provides email
                 self.pending_selection = {
                     "action": "draft_awaiting_recipient",
                     "composed_subject": subject,
-                    "composed_body": body
+                    "composed_body": body,
                 }
-
-                # Return a message structure that tells agent to ask user
                 return {
                     "success": False,
                     "action_required": "ask_recipient",
                     "message": result.get("message"),
                     "hint": result.get("hint", ""),
-                    "system_message": "Ask for the recipient email address. Wait for user response."
+                    "system_message": "Ask for the recipient email address. Wait for user response.",
                 }
 
-            # If successful or other error, return the result from draft_email
             return result
 
         except Exception as e:
             logger.error(f"Error parsing draft_email input: {str(e)}")
-            return {
-                "success": False,
-                "message": f"Draft oluşturmada hata: {str(e)}"
-            }
-
+            return {"success": False, "message": f"Draft oluşturmada hata: {str(e)}"}
 
     def _parse_update_draft_for_recipient(self, input_str: str) -> dict:
         try:
@@ -496,9 +404,9 @@ Thought:{agent_scratchpad}"""
             return {"error": f"Failed to update draft: {str(e)}"}
 
     def _smart_enhance_body_with_instruction(self, draft_id: str, instruction: str) -> str:
-        """Use Gemini to intelligently update draft body based on user instruction"""
+        """Use Gemini to intelligently update draft body based on user instruction."""
         try:
-            draft = get_draft_by_id(draft_id)
+            draft = get_draft_by_id(draft_id, user_id=self.user_id)
             if not draft:
                 logger.warning(f"Draft {draft_id} not found for body enhancement")
                 return instruction
@@ -509,22 +417,21 @@ Thought:{agent_scratchpad}"""
                 if isinstance(msg, dict):
                     msg_id = msg.get("id")
                     if msg_id:
-                        from gmail_service import get_gmail_service, get_primary_account_service, _decode_body
+                        from gmail_service import _decode_body, get_gmail_service, get_primary_account_service
                         import asyncio
 
                         try:
-                            # Use primary account service if user_id is available
                             if self.user_id:
                                 service = asyncio.run(get_primary_account_service(self.user_id))
                             else:
-                                # Fallback to legacy for backward compatibility
                                 service = get_gmail_service()
 
-                            full_msg = service.users().messages().get(
-                                userId="me",
-                                id=msg_id,
-                                format="full"
-                            ).execute()
+                            full_msg = (
+                                service.users()
+                                .messages()
+                                .get(userId="me", id=msg_id, format="full")
+                                .execute()
+                            )
                             current_body = _decode_body(full_msg.get("payload", {}))
                         except Exception as e:
                             logger.warning(f"Could not fetch full message {msg_id}: {e}")
@@ -533,8 +440,6 @@ Thought:{agent_scratchpad}"""
             if not current_body:
                 logger.warning(f"Draft {draft_id} has empty body")
                 return instruction
-
-            logger.info(f"Sending request to Gemini for body enhancement (Draft ID: {draft_id})...")
 
             enhancement_prompt = f"""You are helping to update an email draft body.
 
@@ -553,11 +458,7 @@ Your task:
 IMPORTANT: Return the FULL email body (greeting + content + closing), not just the modified part."""
 
             response = self.llm.invoke(enhancement_prompt)
-
-            if hasattr(response, 'content'):
-                enhanced_text = response.content.strip()
-            else:
-                enhanced_text = str(response).strip()
+            enhanced_text = response.content.strip() if hasattr(response, "content") else str(response).strip()
 
             if not enhanced_text:
                 logger.warning(f"Gemini returned empty response for draft {draft_id}")
@@ -572,38 +473,35 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
     def _extract_json_from_response(self, response_text: str) -> str:
         import re
 
-        code_block_match = re.search(r'```json\n([\s\S]*?)\n```', response_text)
+        code_block_match = re.search(r"```json\\n([\\s\\S]*?)\\n```", response_text)
 
         if code_block_match:
             json_str = code_block_match.group(1).strip()
             try:
                 json.loads(json_str)
-                intro_text = response_text[:code_block_match.start()].strip()
-                if '📧 Email' in intro_text:
+                intro_text = response_text[: code_block_match.start()].strip()
+                if "📧 Email" in intro_text:
                     return f"{intro_text}\n\n```json\n{json_str}\n```"
-                else:
-                    return f"{intro_text} {json_str}".strip()
+                return f"{intro_text} {json_str}".strip()
             except json.JSONDecodeError:
                 pass
 
-        json_match = re.search(r'\[[\s\S]*?\]', response_text)
-
+        json_match = re.search(r"\\[[\\s\\S]*?\\]", response_text)
         if json_match:
             json_str = json_match.group(0)
             try:
                 json.loads(json_str)
-                intro_text = response_text[:json_match.start()].strip()
-                if '📧 Email' in intro_text:
+                intro_text = response_text[: json_match.start()].strip()
+                if "📧 Email" in intro_text:
                     return f"{intro_text}\n\n```json\n{json_str}\n```"
-                else:
-                    return f"{intro_text} {json_str}".strip()
+                return f"{intro_text} {json_str}".strip()
             except json.JSONDecodeError:
                 return response_text
 
         return response_text
 
     def _handle_draft_selection(self, selection_idx: int) -> str:
-        """Handle draft selection when user picks a number"""
+        """Handle draft selection when user picks a number."""
         if not self.pending_selection:
             return "No draft selection pending. Please try your request again."
 
@@ -611,8 +509,7 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
         operation = self.pending_selection.get("operation", "")
 
         if selection_idx < 1 or selection_idx > len(drafts):
-            error_msg = f"❌ Invalid selection. Please choose 1-{len(drafts)}"
-            return error_msg
+            return f"❌ Invalid selection. Please choose 1-{len(drafts)}"
 
         selected_draft = drafts[selection_idx - 1]
         draft_id = selected_draft.get("id")
@@ -620,44 +517,34 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
         try:
             if operation == "send":
-                # ✨ Confirmation state SET ET
                 self.pending_selection = {
                     "action": "send_draft_after_selection",
                     "draft_id": draft_id,
-                    "subject": subject
+                    "subject": subject,
                 }
                 return f"Are you sure you want to send the draft '{subject}'?\n\nReply with 'Yes' or 'No'"
 
-            elif operation == "delete":
-                delete_draft(draft_id)
+            if operation == "delete":
+                delete_draft(draft_id, user_id=self.user_id)
                 self.pending_selection = None
                 return f"✅ Draft deleted: '{subject}'"
 
-            elif operation == "update":
-                # Update draft with saved instruction
+            if operation == "update":
                 update_instruction = self.pending_selection.get("update_instruction", "")
                 self.pending_selection = None
 
                 if not update_instruction:
                     return f"No update instruction found. Selected draft: '{subject}'"
 
-                # FIX: First process the body with AI
                 new_body = self._smart_enhance_body_with_instruction(draft_id, update_instruction)
+                result = update_draft(draft_id=draft_id, body=new_body, user_id=self.user_id)
 
-                # Then update the draft using the new body
-                result = update_draft(
-                    draft_id=draft_id,
-                    body=new_body  # Use the AI-enhanced body
-                )
-                
                 if result.get("success"):
                     return f"✅ Draft updated: '{subject} \n New body is: {new_body}'"
-                else:
-                    return f"❌ Failed to update draft: {result.get('message', 'Unknown error')}"
+                return f"❌ Failed to update draft: {result.get('message', 'Unknown error')}"
 
-            else:
-                self.pending_selection = None
-                return f"Unknown operation: {operation}"
+            self.pending_selection = None
+            return f"Unknown operation: {operation}"
 
         except Exception as e:
             logger.error(f"Error handling draft operation {operation} on {draft_id}: {str(e)}")
@@ -667,36 +554,31 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
     def _send_draft_for_recipient(self, to_email: str) -> str:
         try:
             drafts = get_drafts_for_recipient(to_email, user_id=self.user_id)
-
             if not drafts:
                 return f"❌ No drafts found for {to_email}"
 
-            elif len(drafts) == 1:
+            if len(drafts) == 1:
                 draft_id = drafts[0].get("id")
                 subject = drafts[0].get("subject", "(No subject)")
-    
-                # ✨ CONFIRMATION STATE SET ET (direkt gönderme yerine)
                 self.pending_selection = {
                     "action": "send_draft",
                     "draft_id": draft_id,
                     "to_email": to_email,
-                    "subject": subject
+                    "subject": subject,
                 }
-    
-                # Kullanıcıdan onay iste
                 return f"Are you sure you want to send the draft '{subject}' to {to_email}?\n\nReply with 'Yes' or 'No'"
 
-            else:
-                draft_list = "\n".join([
+            draft_list = "\n".join(
+                [
                     f"{i+1}️⃣ {d.get('subject', '(No subject)')[:40]}... ({d.get('date', 'Unknown')[:10]})"
                     for i, d in enumerate(drafts)
-                ])
-                self.pending_selection = {
-                    "drafts": drafts,
-                    "operation": "send",
-                    "to_email": to_email
-                }
-                return f"Found {len(drafts)} drafts for {to_email}:\n\n{draft_list}\n\nWhich one would you like to send? (Reply with a number: 1, 2, 3...)"
+                ]
+            )
+            self.pending_selection = {"drafts": drafts, "operation": "send", "to_email": to_email}
+            return (
+                f"Found {len(drafts)} drafts for {to_email}:\n\n{draft_list}\n\n"
+                "Which one would you like to send? (Reply with a number: 1, 2, 3...)"
+            )
 
         except Exception as e:
             logger.error(f"Error sending draft for {to_email}: {str(e)}")
@@ -705,27 +587,26 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
     def _delete_draft_for_recipient(self, to_email: str) -> str:
         try:
             drafts = get_drafts_for_recipient(to_email, user_id=self.user_id)
-
             if not drafts:
                 return f"❌ No drafts found for {to_email}"
 
-            elif len(drafts) == 1:
+            if len(drafts) == 1:
                 draft_id = drafts[0].get("id")
                 subject = drafts[0].get("subject", "(No subject)")
-                delete_draft(draft_id)
+                delete_draft(draft_id, user_id=self.user_id)
                 return f"✅ Draft deleted: '{subject}'"
 
-            else:
-                draft_list = "\n".join([
+            draft_list = "\n".join(
+                [
                     f"{i+1}️⃣ {d.get('subject', '(No subject)')[:40]}... ({d.get('date', 'Unknown')[:10]})"
                     for i, d in enumerate(drafts)
-                ])
-                self.pending_selection = {
-                    "drafts": drafts,
-                    "operation": "delete",
-                    "to_email": to_email
-                }
-                return f"Found {len(drafts)} drafts for {to_email}:\n\n{draft_list}\n\nWhich one would you like to delete? (Reply with a number: 1, 2, 3...)"
+                ]
+            )
+            self.pending_selection = {"drafts": drafts, "operation": "delete", "to_email": to_email}
+            return (
+                f"Found {len(drafts)} drafts for {to_email}:\n\n{draft_list}\n\n"
+                "Which one would you like to delete? (Reply with a number: 1, 2, 3...)"
+            )
 
         except Exception as e:
             logger.error(f"Error deleting draft for {to_email}: {str(e)}")
@@ -734,40 +615,34 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
     def _update_draft_for_recipient(self, to_email: str, update_instruction: str) -> str:
         try:
             drafts = get_drafts_for_recipient(to_email, user_id=self.user_id)
-
             if not drafts:
                 return f"❌ No drafts found for {to_email}"
 
-            elif len(drafts) == 1:
+            if len(drafts) == 1:
                 draft_id = drafts[0].get("id")
                 subject = drafts[0].get("subject", "(No subject)")
-
-                # FIX: First process the body with AI
                 new_body = self._smart_enhance_body_with_instruction(draft_id, update_instruction)
-
-                # Then update the draft using the new body
-                result = update_draft(
-                    draft_id=draft_id,
-                    body=new_body # Use the AI-enhanced body
-                )
-                
+                result = update_draft(draft_id=draft_id, body=new_body, user_id=self.user_id)
                 if result.get("success"):
                     return f"✅ Draft updated: '{subject} \n New body is: {new_body}'"
-                else:
-                    return f"❌ Failed to update draft: {result.get('message', 'Unknown error')}"
+                return f"❌ Failed to update draft: {result.get('message', 'Unknown error')}"
 
-            else:
-                draft_list = "\n".join([
+            draft_list = "\n".join(
+                [
                     f"{i+1}️⃣ {d.get('subject', '(No subject)')[:40]}... ({d.get('date', 'Unknown')[:10]})"
                     for i, d in enumerate(drafts)
-                ])
-                self.pending_selection = {
-                    "drafts": drafts,
-                    "operation": "update",
-                    "to_email": to_email,
-                    "update_instruction": update_instruction
-                }
-                return f"Found {len(drafts)} drafts for {to_email}:\n\n{draft_list}\n\nWhich one would you like to update? (Reply with a number: 1, 2, 3...)"
+                ]
+            )
+            self.pending_selection = {
+                "drafts": drafts,
+                "operation": "update",
+                "to_email": to_email,
+                "update_instruction": update_instruction,
+            }
+            return (
+                f"Found {len(drafts)} drafts for {to_email}:\n\n{draft_list}\n\n"
+                "Which one would you like to update? (Reply with a number: 1, 2, 3...)"
+            )
 
         except Exception as e:
             logger.error(f"Error updating draft for {to_email}: {str(e)}")
@@ -776,15 +651,15 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
     def _get_drafts_for_recipient_display(self, to_email: str) -> str:
         try:
             drafts = get_drafts_for_recipient(to_email, user_id=self.user_id)
-
             if not drafts:
                 return f"No drafts found for {to_email}"
 
-            draft_list = "\n".join([
-                f"📄 {i+1}. {d.get('subject', '(No subject)')} ({d.get('date', 'Unknown')[:10]})"
-                for i, d in enumerate(drafts)
-            ])
-
+            draft_list = "\n".join(
+                [
+                    f"📄 {i+1}. {d.get('subject', '(No subject)')} ({d.get('date', 'Unknown')[:10]})"
+                    for i, d in enumerate(drafts)
+                ]
+            )
             return f"Found {len(drafts)} draft(s) for {to_email}:\n\n{draft_list}"
 
         except Exception as e:
@@ -792,47 +667,32 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
             return f"❌ Error: {str(e)}"
 
     def _validate_email_format(self, email: str) -> bool:
-        """
-        Basic email format validation.
-        Returns True if email looks valid (minimal check).
-        Gmail API will do comprehensive validation.
-        """
         if not email or not isinstance(email, str):
             return False
-
         email = email.strip()
-        # Basic pattern: something@something.something
         if "@" not in email:
             return False
-
         parts = email.split("@")
         if len(parts) != 2:
             return False
-
         local, domain = parts
         if not local or not domain:
             return False
-
         if "." not in domain:
             return False
-
         return True
 
     def _handle_draft_recipient_input(self, user_input: str) -> str:
-        """
-        Handle user input when draft is awaiting recipient email.
-        Called when pending_selection["action"] == "draft_awaiting_recipient"
-        """
         if not self.pending_selection:
             return "Error: No pending draft. Please try again."
 
         email_input = user_input.strip()
-
-        # Validate email format
         if not self._validate_email_format(email_input):
-            return f"'{email_input}' doesn't look like a valid email address.\n\nPlease provide a valid email (e.g., john@example.com)"
+            return (
+                f"'{email_input}' doesn't look like a valid email address.\n\n"
+                "Please provide a valid email (e.g., john@example.com)"
+            )
 
-        # Email is valid - now create the draft with saved subject and body
         composed_subject = self.pending_selection.get("composed_subject", "")
         composed_body = self.pending_selection.get("composed_body", "")
 
@@ -840,17 +700,20 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
             result = draft_email(
                 to=email_input,
                 subject=composed_subject,
-                body=composed_body
+                body=composed_body,
+                user_id=self.user_id,
             )
-
-            # Clear pending state
             self.pending_selection = None
 
             if result.get("success"):
                 preview = result.get("draft", {})
-                return f"✅ Draft created successfully!\n\nRecipient: {email_input}\nSubject: {preview.get('subject', '(No subject)')}\nPreview: {preview.get('body', '')[:100]}..."
-            else:
-                return f"❌ Error creating draft: {result.get('message', 'Unknown error')}"
+                return (
+                    "✅ Draft created successfully!\n\n"
+                    f"Recipient: {email_input}\n"
+                    f"Subject: {preview.get('subject', '(No subject)')}\n"
+                    f"Preview: {preview.get('body', '')[:100]}..."
+                )
+            return f"❌ Error creating draft: {result.get('message', 'Unknown error')}"
 
         except Exception as e:
             logger.error(f"Error creating draft with recipient: {str(e)}")
@@ -864,81 +727,82 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
             message_stripped = user_message.strip()
 
-            # Handle pending selections and actions
             if self.pending_selection and "action" in self.pending_selection:
                 action = self.pending_selection.get("action")
 
-                # NEW: Handle draft awaiting recipient email
                 if action == "draft_awaiting_recipient":
                     return self._handle_draft_recipient_input(message_stripped)
 
-                # Existing: Handle confirmation for actions (Yes/No)
-                if message_stripped.lower() in ['yes', 'y']:
-                    # ✅ ONAY VERİLDİ - İŞLEMİ YAP
+                if message_stripped.lower() in ["yes", "y"]:
                     if action == "send_draft":
                         draft_id = self.pending_selection["draft_id"]
                         to_email = self.pending_selection["to_email"]
-                        subject = self.pending_selection["subject"]
-                        result = send_draft(draft_id)
-                        self.pending_selection = None  # Reset
-                        return f"✅ Draft sent to {to_email}!"
-                    
-                    elif action == "send_draft_after_selection":  # ← YENİ
+                        result = send_draft(draft_id, user_id=self.user_id)
+                        self.pending_selection = None
+                        if result.get("success"):
+                            return f"✅ Draft sent to {to_email}!"
+                        return f"❌ Failed to send draft to {to_email}: {result.get('message', 'Unknown error')}"
+
+                    if action == "send_draft_after_selection":
                         draft_id = self.pending_selection["draft_id"]
                         subject = self.pending_selection["subject"]
-                        result = send_draft(draft_id)
+                        result = send_draft(draft_id, user_id=self.user_id)
                         self.pending_selection = None
-            
                         if result.get("success"):
                             return f"✅ Draft sent: '{subject}'"
-    
-                elif message_stripped.lower() in ['no', 'n']:
-                    # ❌ ONAY VERİLMEDİ
-                    self.pending_selection = None  # Reset
+                        return f"❌ Failed to send draft '{subject}': {result.get('message', 'Unknown error')}"
+
+                if message_stripped.lower() in ["no", "n"]:
+                    self.pending_selection = None
                     return "❌ Draft not sent. Operation cancelled."
-    
-                else:
-                    # Geçersiz yanıt
-                    return "Please reply with 'Yes' or 'No'"
+
+                return "Please reply with 'Yes' or 'No'"
 
             if self.pending_selection and message_stripped.isdigit():
                 return self._handle_draft_selection(int(message_stripped))
 
-            # Detect draft-related keywords for potential fallback
-            draft_keywords = ['update draft', 'edit draft', 'modify draft', 'change draft',
-                            'send draft', 'delete draft']
-            is_draft_related = any(kw.lower() in message_stripped.lower() for kw in draft_keywords)
+            draft_keywords = [
+                "update draft",
+                "edit draft",
+                "modify draft",
+                "change draft",
+                "send draft",
+                "delete draft",
+            ]
+            is_draft_related = any(kw in message_stripped.lower() for kw in draft_keywords)
 
             logger.info("Sending request to Gemini Agent...")
 
             response = self.agent_executor.invoke({"input": user_message})
             output = response.get("output", "No response generated")
 
-            # FALLBACK: If draft-related but agent didn't use tool, try direct invocation
             if is_draft_related and not self.pending_selection:
                 import re
-                # Extract email address from message
-                email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', message_stripped)
+
+                email_match = re.search(r"[\\w\\.-]+@[\\w\\.-]+\\.\\w+", message_stripped)
                 if email_match:
                     email = email_match.group()
-                    # Extract instruction (everything after email)
                     instruction = message_stripped.split(email, 1)[1].strip()
                     if instruction:
-                        # Determine operation type from message
-                        if 'update' in message_stripped.lower() or 'edit' in message_stripped.lower() or 'modify' in message_stripped.lower():
-                            logger.info(f"[FALLBACK] Using direct invocation for update_draft_for_recipient: {email}")
+                        if any(k in message_stripped.lower() for k in ["update", "edit", "modify"]):
+                            logger.info(
+                                f"[FALLBACK] Using direct invocation for update_draft_for_recipient: {email}"
+                            )
                             fallback_result = self._parse_update_draft_for_recipient(f"{email}|{instruction}")
                             return json.dumps(fallback_result, indent=2, cls=DateTimeEncoder)
-                        elif 'send' in message_stripped.lower():
-                            logger.info(f"[FALLBACK] Using direct invocation for send_draft_for_recipient: {email}")
-                            fallback_result = self._send_draft_for_recipient(email)
-                            return fallback_result
-                        elif 'delete' in message_stripped.lower():
-                            logger.info(f"[FALLBACK] Using direct invocation for delete_draft_for_recipient: {email}")
-                            fallback_result = self._delete_draft_for_recipient(email)
-                            return fallback_result
+                        if "send" in message_stripped.lower():
+                            logger.info(
+                                f"[FALLBACK] Using direct invocation for send_draft_for_recipient: {email}"
+                            )
+                            return self._send_draft_for_recipient(email)
+                        if "delete" in message_stripped.lower():
+                            logger.info(
+                                f"[FALLBACK] Using direct invocation for delete_draft_for_recipient: {email}"
+                            )
+                            return self._delete_draft_for_recipient(email)
 
             return self._extract_json_from_response(output)
+
         except ValueError as e:
             logger.warning(f"Input validation error: {str(e)}")
             return f"Invalid input: {str(e)}. Please try again with a valid message."
@@ -951,35 +815,34 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
         except Exception as e:
             logger.error(f"Chat processing error: {str(e)}", exc_info=True)
             return "Sorry, I encountered an error processing your request. Please try again later."
-    
+
     def _classify_emails_with_ml(self, input_str: str) -> str:
-        
         if not self.ml_classifier:
             return " ML classifier not available"
-        
+
         try:
             filters = json.loads(input_str) if input_str.strip().startswith("{") else {}
             emails = fetch_mails(**filters, max_results=50, user_id=self.user_id)
-            
+
             if not emails:
                 return "No emails found to classify."
-            
+
             classified_emails = self.ml_classifier.classify_batch(emails)
             summary = self.ml_classifier.get_classification_summary(classified_emails)
-            
-            response = f"📊 ML Classification Results\n\n"
+
+            response = "📊 ML Classification Results\n\n"
             response += f"Total Emails: {summary['total']}\n\n"
-            
-            for pred, count in summary['by_prediction'].items():
+
+            for pred, count in summary["by_prediction"].items():
                 emoji = "🚫" if pred == "spam" else "⭐" if pred == "important" else "📧"
                 response += f"{emoji} {pred.upper()}: {count} emails\n"
-            
+
             return response
-            
+
         except Exception as e:
             logger.error(f"ML classification error: {str(e)}")
             return f" Classification failed: {str(e)}"
-    
-    
+
     def clear_history(self):
         pass
+

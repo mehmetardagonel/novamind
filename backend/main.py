@@ -5,11 +5,13 @@ os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 
 from typing import List, Dict, Optional
 import uuid
+import asyncio
 
 from fastapi import FastAPI, Depends, HTTPException, Request, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from dotenv import load_dotenv
+from urllib.parse import urlsplit
 from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel
 
@@ -20,6 +22,7 @@ from models import (
     LabelCreate,
     LabelUpdateRequest,
     GmailAccountOut,
+    EmailAccountOut,
 )
 from filters import EmailFilters
 # Import our refactored service and its config
@@ -61,11 +64,40 @@ from ml_service import get_classifier
 # Import Gmail Account Service
 from gmail_account_service import gmail_account_service
 
+# Import new unified services
+from email_account_service import email_account_service
+from outlook_service import outlook_service
+from rag_service import rag_service
+
 import logging
 
 # Fix: Enable nested event loop for asyncio.run() calls in sync context
 import nest_asyncio
 nest_asyncio.apply()
+
+
+# Email indexing removed - using direct Gmail API for email queries
+# Only chat memory RAG is used for conversation history
+
+
+async def _store_chat_embedding_background(user_id: str, session_id: str, role: str, content: str, message_id: str) -> None:
+    try:
+        await rag_service.index_chat_message(
+            user_id=user_id,
+            session_id=session_id,
+            role=role,
+            content=content,
+            message_id=message_id,
+        )
+    except Exception as e:
+        logger.error(f"Background chat embedding failed for user {user_id}: {e}")
+
+
+def _schedule_store_chat_embedding(user_id: str, session_id: str, role: str, content: str, message_id: str) -> None:
+    try:
+        asyncio.create_task(_store_chat_embedding_background(user_id, session_id, role, content, message_id))
+    except Exception as e:
+        logger.error(f"Failed to schedule chat embedding for user {user_id}: {e}")
 
 
 def apply_ml_classification(emails: List[EmailOut]) -> List[EmailOut]:
@@ -100,7 +132,17 @@ app = FastAPI()
 # Get redirect URI and frontend URL from config/env
 # This ensures it matches your .env file
 REDIRECT_URI = CLIENT_CONFIG["installed"]["redirect_uris"][0]
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173/app") # Set this in your .env!
+
+# FRONTEND_URL can be provided as either an origin (recommended) or an origin+path.
+# We normalize to an origin for CORS and compute the /app base for redirects.
+_frontend_url_raw = os.getenv("FRONTEND_URL", "http://localhost:5173")
+_frontend_split = urlsplit(_frontend_url_raw)
+FRONTEND_ORIGIN = (
+    f"{_frontend_split.scheme}://{_frontend_split.netloc}"
+    if _frontend_split.scheme and _frontend_split.netloc
+    else _frontend_url_raw.rstrip("/")
+)
+FRONTEND_APP_URL = f"{FRONTEND_ORIGIN}/app"
 
 origins = [
     "http://localhost:5173",  # Vite dev server default
@@ -111,8 +153,8 @@ origins = [
     "http://127.0.0.1:3000"
 ]
 
-if FRONTEND_URL not in origins:
-    origins.append(FRONTEND_URL)
+if FRONTEND_ORIGIN not in origins:
+    origins.append(FRONTEND_ORIGIN)
 
 app.add_middleware(
     CORSMiddleware,
@@ -130,21 +172,35 @@ chat_sessions: Dict[str, ChatService] = {}
 @app.on_event("startup")
 async def startup_event():
     """
-    Preload ML models on server startup.
+    Preload ML models and initialize services on server startup.
     """
     logger.info("=" * 60)
-    logger.info("🚀 Starting Novamind Backend Server...")
+    logger.info("Starting Novamind Backend Server...")
     logger.info("=" * 60)
 
     try:
-        logger.info("📦 Loading ML classification models...")
+        logger.info("Loading ML classification models...")
         classifier = get_classifier()
-        logger.info("✅ ML Classifier initialized successfully!")
-        logger.info("=" * 60)
+        logger.info("ML Classifier initialized successfully!")
     except Exception as e:
-        logger.error(f"❌ Failed to initialize ML classifier: {str(e)}")
-        logger.warning("⚠️  Server will use rule-based classification as fallback")
-        logger.info("=" * 60)
+        logger.error(f"Failed to initialize ML classifier: {str(e)}")
+        logger.warning("Server will use rule-based classification as fallback")
+
+    try:
+        logger.info("Loading RAG embedding model...")
+        rag_service.initialize()
+        logger.info("RAG Service initialized successfully!")
+    except Exception as e:
+        logger.error(f"Failed to initialize RAG service: {str(e)}")
+        logger.warning("AI search will be unavailable")
+
+    # Check Outlook configuration
+    if outlook_service.is_configured:
+        logger.info("Outlook integration: ENABLED")
+    else:
+        logger.info("Outlook integration: DISABLED (missing credentials)")
+
+    logger.info("=" * 60)
 
 # Chat Request/Response Models
 class ChatRequest(BaseModel):
@@ -261,25 +317,25 @@ async def auth_callback(code: str, state: Optional[str] = None):
             profile = service.users().getProfile(userId="me").execute()
             email_address = profile.get("emailAddress")
 
-            await gmail_account_service.save_account(
+            saved = await gmail_account_service.save_account(
                 user_id=user_id,
                 email_address=email_address,
                 credentials=creds
             )
 
             logger.info(f"Connected Gmail account {email_address} for user {user_id}")
-            return RedirectResponse(url=f"{FRONTEND_URL}/inbox?connected={email_address}")
+            return RedirectResponse(url=f"{FRONTEND_APP_URL}/accounts?connected={email_address}&provider=gmail")
         else:
             # Legacy flow: save to token.json (backward compatibility)
             with open("token.json", "w") as token:
                 token.write(creds.to_json())
 
             logger.info("Successfully exchanged code for token and saved to token.json")
-            return RedirectResponse(url=FRONTEND_URL)
+            return RedirectResponse(url=FRONTEND_APP_URL)
 
     except Exception as e:
         logger.error(f"Authentication failed: {str(e)}")
-        return RedirectResponse(url=f"{FRONTEND_URL}/inbox?error=connection_failed")
+        return RedirectResponse(url=f"{FRONTEND_APP_URL}/accounts?error=connection_failed&provider=gmail")
 
 
 @app.post("/send-email")
@@ -387,19 +443,68 @@ async def chat(
         if not request.message or not request.message.strip():
             raise ValueError("Message cannot be empty")
 
-        # Get or create session ID
+        # Get or create session ID (client-scoped identifier)
         session_id = request.session_id if request.session_id else str(uuid.uuid4())
+        # Prevent cross-user collisions by namespacing in-memory sessions
+        session_key = f"{user_id}:{session_id}"
 
         # Get or create ChatService instance for this session
-        if session_id not in chat_sessions:
+        if session_key not in chat_sessions:
             logger.info(f"Creating new ChatService for session_id: {session_id}, user_id: {user_id}")
-            chat_sessions[session_id] = ChatService(user_id=user_id)
+            chat_sessions[session_key] = ChatService(user_id=user_id)
 
-        chat_service = chat_sessions[session_id]
+        chat_service = chat_sessions[session_key]
+
+        # RAG: pull relevant context from previous chats + emails and prepend it.
+        context = ""
+        try:
+            context = await rag_service.get_combined_context(
+                user_id=user_id,
+                query=request.message,
+                session_id=session_id,
+            )
+        except Exception as e:
+            logger.error(f"Failed to build RAG context for chat: {e}")
+
+        augmented_message = request.message
+        if context:
+            augmented_message = (
+                f"{context}\n\n"
+                f"Use the context above if it is relevant. "
+                f"Do not mention it explicitly unless asked.\n\n"
+                f"User message: {request.message}"
+            )
 
         # Get AI response
-        ai_response = chat_service.chat(request.message)
+        ai_response = chat_service.chat(augmented_message)
         logger.info("Successfully generated AI response")
+
+        # RAG memory: store this exchange for future retrieval (best-effort).
+        try:
+            import re
+            user_msg_id = str(uuid.uuid4())
+            assistant_msg_id = str(uuid.uuid4())
+
+            _schedule_store_chat_embedding(
+                user_id=user_id,
+                session_id=session_id,
+                role="user",
+                content=request.message,
+                message_id=user_msg_id,
+            )
+
+            # Strip fenced code blocks from assistant text to avoid embedding huge JSON payloads.
+            assistant_clean = re.sub(r"```[\\s\\S]*?```", "", ai_response).strip()
+            _schedule_store_chat_embedding(
+                user_id=user_id,
+                session_id=session_id,
+                role="assistant",
+                content=assistant_clean[:2000],
+                message_id=assistant_msg_id,
+            )
+        except Exception as e:
+            logger.error(f"Failed to schedule chat memory embeddings: {e}")
+
         return ChatResponse(response=ai_response, session_id=session_id)
     except ValueError as e:
         logger.warning(f"Invalid chat input: {str(e)}")
@@ -687,7 +792,7 @@ async def get_unified_emails(
     filters: EmailFilters = Depends()
 ):
     """
-    Fetch emails from connected Gmail accounts.
+    Fetch emails from connected email accounts (Gmail + Outlook).
     If account_id is provided, fetch only from that account.
     Otherwise, fetch from all accounts (unified view).
     Sorted by date (newest first).
@@ -695,12 +800,12 @@ async def get_unified_emails(
     logger.info(f"Unified inbox request for user {user_id}")
 
     try:
-        # Get all connected accounts
-        accounts = await gmail_account_service.get_all_accounts(user_id)
+        # Get all connected accounts (Gmail + Outlook)
+        accounts = await email_account_service.get_all_accounts(user_id)
 
         if not accounts:
             # Return empty array instead of 401 to avoid triggering logout
-            logger.info(f"No Gmail accounts found for user {user_id}")
+            logger.info(f"No email accounts found for user {user_id}")
             return []
 
         # Filter to specific account if requested
@@ -711,30 +816,68 @@ async def get_unified_emails(
             logger.info(f"Filtering emails for account: {account_id}")
 
         all_emails = []
-        query = filters.to_gmail_query()
-        if query:
-            query = f"in:inbox {query}"
+        gmail_query = filters.to_gmail_query()
+        if gmail_query:
+            gmail_query = f"in:inbox {gmail_query}"
         else:
-            query = "in:inbox"
+            gmail_query = "in:inbox"
 
         # Fetch emails from each account
         for account in accounts:
             try:
-                service = await get_user_gmail_service(user_id, account["id"])
+                provider = account.get("provider")
 
-                # Use existing fetch logic but with specific service
-                emails = fetch_messages_with_service(
-                    service=service,
-                    query=query,
-                    max_results=max_per_account
-                )
+                if provider == "gmail":
+                    service = await get_user_gmail_service(user_id, account["id"])
 
-                # Add account information to each email
-                for email in emails:
-                    email.account_id = account["id"]
-                    email.account_email = account["email_address"]
+                    # Use existing fetch logic but with specific service
+                    emails = fetch_messages_with_service(
+                        service=service,
+                        query=gmail_query,
+                        max_results=max_per_account
+                    )
 
-                all_emails.extend(emails)
+                    # Add account information to each email
+                    for email in emails:
+                        email.account_id = account["id"]
+                        email.account_email = account["email_address"]
+                        email.provider = "gmail"
+
+                    all_emails.extend(emails)
+
+                elif provider == "outlook":
+                    access_token = await email_account_service.get_outlook_access_token(
+                        user_id, account["id"]
+                    )
+                    if not access_token:
+                        logger.warning(f"Skipping Outlook account {account['id']}: missing/expired token")
+                        continue
+
+                    # Graph API approach (docs): GET /me/mailFolders/{folder-id}/messages
+                    outlook_emails = await outlook_service.fetch_inbox(access_token, max_per_account)
+
+                    for e in outlook_emails:
+                        label_ids = list(e.get("label_ids", []) or [])
+                        if not e.get("is_read", True) and "UNREAD" not in label_ids:
+                            label_ids.append("UNREAD")
+                        all_emails.append(
+                            EmailOut(
+                                message_id=e.get("message_id", ""),
+                                sender=e.get("sender", ""),
+                                recipient=e.get("recipient", ""),
+                                subject=e.get("subject", ""),
+                                body=e.get("body", ""),
+                                date=e.get("date"),
+                                label_ids=label_ids,
+                                account_id=account["id"],
+                                account_email=account["email_address"],
+                                provider="outlook",
+                            )
+                        )
+
+                else:
+                    logger.warning(f"Skipping unknown provider '{provider}' for account {account.get('id')}")
+                    continue
 
             except Exception as e:
                 logger.error(f"Failed to fetch from account {account['id']}: {e}")
@@ -765,4 +908,264 @@ async def get_unified_emails(
 
     except Exception as e:
         logger.error(f"Error fetching unified emails: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== Unified Email Account Management (Gmail + Outlook) =====
+
+@app.get("/email/accounts", response_model=List[EmailAccountOut])
+async def list_email_accounts(user_id: str = Header(..., alias="X-User-Id")):
+    """
+    List all connected email accounts (Gmail and Outlook) for the user.
+    """
+    try:
+        accounts = await email_account_service.get_all_accounts(user_id)
+        return accounts
+    except Exception as e:
+        logger.error(f"Error listing email accounts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/email/accounts/{account_id}/set-primary")
+async def set_primary_email_account(
+    account_id: str,
+    user_id: str = Header(..., alias="X-User-Id")
+):
+    """Set an email account as primary."""
+    try:
+        success = await email_account_service.set_primary(user_id, account_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error setting primary account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/email/accounts/{account_id}")
+async def disconnect_email_account(
+    account_id: str,
+    user_id: str = Header(..., alias="X-User-Id")
+):
+    """Disconnect an email account."""
+    try:
+        success = await email_account_service.delete_account(user_id, account_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error disconnecting account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== Outlook OAuth Endpoints =====
+
+@app.get("/auth/outlook/connect")
+async def initiate_outlook_connect(user_id: str = Header(..., alias="X-User-Id")):
+    """
+    Initiate Outlook OAuth flow for connecting an account.
+    Returns auth URL that includes user_id in state parameter.
+    """
+    try:
+        if not outlook_service.is_configured:
+            raise HTTPException(
+                status_code=503,
+                detail="Outlook integration is not configured. Add OUTLOOK_CLIENT_ID and OUTLOOK_CLIENT_SECRET to .env"
+            )
+
+        import json
+        state = json.dumps({"user_id": user_id})
+        auth_url = outlook_service.get_auth_url(state=state)
+
+        return {"auth_url": auth_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error initiating Outlook connection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/auth/outlook/callback")
+async def outlook_auth_callback(code: str, state: Optional[str] = None):
+    """
+    OAuth callback for Outlook authentication.
+    Saves token to database and redirects to frontend.
+    """
+    logger.info("Endpoint called: /auth/outlook/callback")
+
+    try:
+        import json
+
+        # Parse user_id from state
+        user_id = None
+        if state:
+            try:
+                state_data = json.loads(state)
+                user_id = state_data.get("user_id")
+            except:
+                pass
+
+        if not user_id:
+            logger.error("Missing user_id in Outlook OAuth state")
+            return RedirectResponse(url=f"{FRONTEND_APP_URL}/accounts?error=missing_user_id&provider=outlook")
+
+        # Exchange code for tokens
+        token_response = outlook_service.exchange_code(code)
+
+        # Get user's email address
+        access_token = token_response.get("access_token")
+        email_address = outlook_service.get_user_email(access_token)
+
+        # Save account to database
+        saved = await email_account_service.save_outlook_account(
+            user_id=user_id,
+            email_address=email_address,
+            token_response=token_response,
+            display_name=email_address
+        )
+
+        logger.info(f"Connected Outlook account {email_address} for user {user_id}")
+        return RedirectResponse(url=f"{FRONTEND_APP_URL}/accounts?connected={email_address}&provider=outlook")
+
+    except Exception as e:
+        logger.error(f"Outlook authentication failed: {str(e)}")
+        return RedirectResponse(url=f"{FRONTEND_APP_URL}/accounts?error=outlook_connection_failed&provider=outlook")
+
+
+# ===== RAG / AI Search Endpoints =====
+
+class SearchRequest(BaseModel):
+    query: str
+    limit: int = 5
+
+
+class SearchResult(BaseModel):
+    id: str
+    content: str
+    metadata: dict
+    similarity: float
+
+
+# Email search endpoints removed - using direct Gmail API instead of RAG for email queries
+# Chat memory RAG is still active for conversation history
+
+
+# ===== Outlook Email Operations =====
+
+@app.get("/outlook/inbox", response_model=List[EmailOut])
+async def get_outlook_inbox(
+    user_id: str = Header(..., alias="X-User-Id"),
+    account_id: str = Header(..., alias="X-Account-Id"),
+    max_results: int = 25
+):
+    """Fetch inbox emails from a specific Outlook account."""
+    try:
+        access_token = await email_account_service.get_outlook_access_token(user_id, account_id)
+        if not access_token:
+            raise HTTPException(status_code=401, detail="Invalid or expired Outlook token")
+
+        emails = await outlook_service.fetch_inbox(access_token, max_results)
+
+        # Convert to EmailOut format
+        return [
+            EmailOut(
+                message_id=e["message_id"],
+                sender=e["sender"],
+                recipient=e["recipient"],
+                subject=e["subject"],
+                body=e["body"],
+                date=e["date"],
+                label_ids=e.get("label_ids", []),
+                account_id=account_id,
+                provider="outlook"
+            )
+            for e in emails
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching Outlook inbox: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/outlook/send")
+async def send_outlook_email(
+    req: EmailRequest,
+    user_id: str = Header(..., alias="X-User-Id"),
+    account_id: str = Header(..., alias="X-Account-Id")
+):
+    """Send email via Outlook."""
+    try:
+        access_token = await email_account_service.get_outlook_access_token(user_id, account_id)
+        if not access_token:
+            raise HTTPException(status_code=401, detail="Invalid or expired Outlook token")
+
+        result = await outlook_service.send(access_token, req.to, req.subject, req.body)
+
+        if result.get("success"):
+            return {"status": "sent", "provider": "outlook"}
+        else:
+            raise HTTPException(status_code=500, detail=result.get("message", "Send failed"))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending Outlook email: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/outlook/emails/{message_id}")
+async def delete_outlook_email(
+    message_id: str,
+    user_id: str = Header(..., alias="X-User-Id"),
+    account_id: str = Header(..., alias="X-Account-Id")
+):
+    """Move Outlook email to trash."""
+    try:
+        access_token = await email_account_service.get_outlook_access_token(user_id, account_id)
+        if not access_token:
+            raise HTTPException(status_code=401, detail="Invalid or expired Outlook token")
+
+        result = await outlook_service.trash(access_token, message_id)
+
+        if result.get("success"):
+            return {"status": "trashed", "message_id": message_id}
+        else:
+            raise HTTPException(status_code=500, detail=result.get("message", "Delete failed"))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting Outlook email: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/outlook/emails/{message_id}/star")
+async def star_outlook_email(
+    message_id: str,
+    starred: bool = Body(True),
+    user_id: str = Header(..., alias="X-User-Id"),
+    account_id: str = Header(..., alias="X-Account-Id")
+):
+    """Star/flag or unstar/unflag an Outlook email."""
+    try:
+        access_token = await email_account_service.get_outlook_access_token(user_id, account_id)
+        if not access_token:
+            raise HTTPException(status_code=401, detail="Invalid or expired Outlook token")
+
+        result = await outlook_service.star(access_token, message_id, starred)
+
+        if result.get("success"):
+            return {"status": "starred" if starred else "unstarred", "message_id": message_id}
+        else:
+            raise HTTPException(status_code=500, detail=result.get("message", "Star operation failed"))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starring Outlook email: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -716,12 +716,12 @@ def update_draft(draft_id: str, to: Optional[str] = None,
         current_body = body or _decode_body(full_msg.get("payload", {}))
 
         # Create new draft with updated content FIRST (to avoid data loss if creation fails)
-        new_draft = create_draft(current_to, current_subject, current_body)
+        new_draft = create_draft(current_to, current_subject, current_body, service=service)
 
         # Only delete old draft if new one was created successfully
         if new_draft and new_draft.get("id"):
             try:
-                delete_draft(draft_id)
+                delete_draft(draft_id, service=service)
             except Exception as e:
                 # Log but don't fail - new draft exists, old one can be manually deleted
                 import logging

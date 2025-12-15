@@ -207,10 +207,73 @@ def get_drafts(user_id: str = None) -> List[Dict]:
         return []
 
 
-def get_draft_by_id(draft_id: str) -> Optional[Dict]:
-    """Get a specific draft by ID from Gmail"""
+def list_draft_previews(user_id: str = None, max_results: int = 25) -> List[Dict]:
+    """
+    List drafts with their *draft IDs* (required for send/delete/update).
+    Uses the Gmail Drafts API.
+    """
     try:
-        draft = get_gmail_draft_by_id(draft_id)
+        service = None
+        if user_id:
+            import asyncio
+            from gmail_service import get_primary_account_service
+            service = asyncio.run(get_primary_account_service(user_id))
+
+        if service is None:
+            draft_refs = get_gmail_drafts(max_results=max_results)
+        else:
+            draft_refs = (
+                service.users()
+                .drafts()
+                .list(userId="me", maxResults=max_results)
+                .execute()
+                .get("drafts", [])
+            )
+
+        results: List[Dict] = []
+        for ref in draft_refs:
+            draft_id = ref.get("id")
+            if not draft_id:
+                continue
+
+            d = get_gmail_draft_by_id(draft_id, service=service)
+            if not isinstance(d, dict):
+                continue
+
+            msg = d.get("message", {}) if isinstance(d.get("message"), dict) else {}
+            headers = (msg.get("payload", {}) or {}).get("headers", []) if isinstance(msg, dict) else []
+
+            def _h(name: str) -> str:
+                for h in headers:
+                    if (h.get("name") or "").lower() == name.lower():
+                        return h.get("value") or ""
+                return ""
+
+            results.append(
+                {
+                    "id": draft_id,
+                    "to": _h("To"),
+                    "subject": _h("Subject") or "(No subject)",
+                    "date": _h("Date") or "Unknown",
+                }
+            )
+
+        return results
+    except Exception as e:
+        logger.error(f"Error listing draft previews: {str(e)}")
+        return []
+
+
+def get_draft_by_id(draft_id: str, user_id: str = None) -> Optional[Dict]:
+    """Get a specific draft by ID from Gmail (supports multi-account)."""
+    try:
+        service = None
+        if user_id:
+            import asyncio
+            from gmail_service import get_primary_account_service
+            service = asyncio.run(get_primary_account_service(user_id))
+
+        draft = get_gmail_draft_by_id(draft_id, service=service)
         if draft:
             return draft.model_dump(mode='json') if hasattr(draft, 'model_dump') else draft
         return None
@@ -246,10 +309,16 @@ def get_drafts_for_recipient(to_email: str, user_id: str = None) -> List[Dict]:
         return []
 
 
-def delete_draft(draft_id: str) -> Dict:
-    """Delete a draft email from Gmail"""
+def delete_draft(draft_id: str, user_id: str = None) -> Dict:
+    """Delete a draft email from Gmail (supports multi-account)."""
     try:
-        success = delete_gmail_draft(draft_id)
+        service = None
+        if user_id:
+            import asyncio
+            from gmail_service import get_primary_account_service
+            service = asyncio.run(get_primary_account_service(user_id))
+
+        success = delete_gmail_draft(draft_id, service=service)
         if success:
             return {
                 "success": True,
@@ -268,10 +337,16 @@ def delete_draft(draft_id: str) -> Dict:
         }
 
 
-def send_draft(draft_id: str) -> Dict:
-    """Send a previously created draft from Gmail"""
+def send_draft(draft_id: str, user_id: str = None) -> Dict:
+    """Send a previously created draft from Gmail (supports multi-account)."""
     try:
-        sent_msg = send_gmail_draft(draft_id)
+        service = None
+        if user_id:
+            import asyncio
+            from gmail_service import get_primary_account_service
+            service = asyncio.run(get_primary_account_service(user_id))
+
+        sent_msg = send_gmail_draft(draft_id, service=service)
         if sent_msg:
             return {
                 "success": True,
@@ -332,7 +407,8 @@ def update_draft(
     body: Optional[str] = None,
     append_to_body: Optional[str] = None,
     remove_from_body: Optional[str] = None,
-    instruction: Optional[str] = None
+    instruction: Optional[str] = None,
+    user_id: Optional[str] = None
 ) -> Dict:
     """
     Update a draft email in Gmail.
@@ -350,12 +426,18 @@ def update_draft(
     All enhancement should be done in chat_service BEFORE calling this function.
     """
     try:
+        service = None
+        if user_id:
+            import asyncio
+            from gmail_service import get_primary_account_service
+            service = asyncio.run(get_primary_account_service(user_id))
+
         # Handle instruction parameter - treat as body if body is not provided
         if instruction is not None and body is None:
             body = instruction
 
         # Get the draft to access old body
-        draft = get_gmail_draft_by_id(draft_id)
+        draft = get_gmail_draft_by_id(draft_id, service=service)
         if not draft:
             return {
                 "success": False,
@@ -382,7 +464,8 @@ def update_draft(
             draft_id=draft_id,
             to=to,  # None = keep existing
             subject=subject,  # None = keep existing
-            body=update_body  # None = keep existing, or enhanced body string
+            body=update_body,  # None = keep existing, or enhanced body string
+            service=service
         )
 
         if updated_draft:

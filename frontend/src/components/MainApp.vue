@@ -78,7 +78,7 @@ import { useAuthStore } from "../stores/auth";
 import { onMounted, computed, ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import SidebarNav from "../components/SidebarNav.vue";
-import { fetchGmailAccounts } from "../api/accounts";
+import { fetchEmailAccounts } from "../api/accounts";
 
 export default {
   name: "MainApp",
@@ -115,11 +115,11 @@ export default {
         return;
       }
 
-      // Load Gmail accounts for account selector
+      // Load email accounts for account selector
       try {
-        accounts.value = await fetchGmailAccounts();
+        accounts.value = await fetchEmailAccounts();
       } catch (error) {
-        console.error("Failed to load Gmail accounts:", error);
+        console.error("Failed to load email accounts:", error);
       }
 
       // Check if user just completed OAuth
@@ -144,6 +144,7 @@ export default {
 
         sessionStorage.removeItem("chat_history");
         sessionStorage.removeItem("chat_session_id");
+        sessionStorage.removeItem("novamind_chat_v1");
         // Redirect to home page
         router.push("/home");
 

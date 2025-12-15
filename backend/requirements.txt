@@ -66,3 +66,6 @@ sentence-transformers>=2.7.0
 
 # Async Event Loop Support
 nest-asyncio==1.6.0
+
+# Microsoft Outlook (Graph API)
+msal>=1.24.0

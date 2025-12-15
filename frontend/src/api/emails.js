@@ -15,15 +15,15 @@ async function resolveUserId(explicitUserId) {
     const { data, error } = await supabase.auth.getUser();
 
     if (error) {
-      console.warn("[emails.js] Supabase getUser error:", error);
-      return "default-user";
+      throw error;
     }
 
     const userId = data?.user?.id;
-    return userId || "default-user";
+    if (!userId) throw new Error("No Supabase user id");
+    return userId;
   } catch (e) {
-    console.warn("[emails.js] Supabase getUser threw:", e);
-    return "default-user";
+    console.warn("[emails.js] Supabase getUser failed:", e);
+    throw e;
   }
 }
 
