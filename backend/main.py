@@ -769,7 +769,7 @@ async def delete_gmail_account(
 ):
     """Disconnect a Gmail account"""
     try:
-        success = await gmail_account_service.delete_account(user_id, account_id)
+        success = await email_account_service.hard_delete_account(user_id, account_id)
         if not success:
             raise HTTPException(status_code=404, detail="Account not found")
         return {"success": True}
@@ -968,7 +968,7 @@ async def disconnect_email_account(
 ):
     """Disconnect an email account."""
     try:
-        success = await email_account_service.delete_account(user_id, account_id)
+        success = await email_account_service.hard_delete_account(user_id, account_id)
         if not success:
             raise HTTPException(status_code=404, detail="Account not found")
         return {"success": True}
