@@ -1,7 +1,19 @@
 <template>
   <div class="email-list-view">
-    <div v-if="loading" class="loading">
-      <p>Loading emails...</p>
+    <div v-if="loading" class="email-list-skeleton">
+      <div v-for="n in 10" :key="n" class="skeleton-email-row">
+        <!-- top row: middle line + right-aligned date -->
+        <div class="skeleton-top">
+          <div class="skeleton-line middle shimmer"></div>
+          <div class="skeleton-date shimmer"></div>
+        </div>
+
+        <!-- short line -->
+        <div class="skeleton-line short shimmer"></div>
+
+        <!-- long line (close to border) -->
+        <div class="skeleton-line long shimmer"></div>
+      </div>
     </div>
 
     <div v-else-if="authUrl" class="auth-prompt">
@@ -110,9 +122,14 @@
               <div v-if="showLabelMenu" class="label-menu-popover">
                 <h3 class="label-menu-title">Labels</h3>
 
-                <p v-if="labelMenuLoading" class="label-menu-status">
-                  Loading labels...
-                </p>
+                <div v-if="labelMenuLoading" class="label-menu-skeleton">
+                  <div v-for="n in 4" :key="n" class="skeleton-label-row">
+                    <div class="skeleton-left">
+                      <div class="skeleton-checkbox shimmer"></div>
+                      <div class="skeleton-line shimmer"></div>
+                    </div>
+                  </div>
+                </div>
 
                 <p v-if="labelMenuError" class="label-menu-error">
                   {{ labelMenuError }}
@@ -766,6 +783,14 @@ export default {
   border-right: none;
 }
 
+.email-detail-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--content-bg, #ffffff);
+}
+
 /* IMPORTANT: This ensures the list scrolls if there are too many items */
 .email-list {
   flex: 1;
@@ -774,12 +799,13 @@ export default {
   flex-direction: column;
 }
 
-.email-detail-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background-color: var(--content-bg, #ffffff);
+.email-container.has-detail .email-list-panel {
+  display: none;
+}
+
+.email-container.has-detail .email-detail-panel {
+  flex: 1 1 100%;
+  width: 100%;
 }
 
 /* Email Item Styles */
@@ -1074,15 +1100,20 @@ export default {
 }
 
 /* Small dropdown under the label button */
+/* Small dropdown under the label button */
 .label-menu-popover {
   position: absolute;
   top: 110%;
   right: 0;
-  background: #ffffff;
+
+  background: var(--content-bg); /* was #ffffff */
+  color: var(--text-primary);
   border-radius: 10px;
   width: 260px;
+
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
-  border: 1px solid rgba(148, 163, 184, 0.4);
+  border: 1px solid var(--border-color); /* was rgba(...) */
+
   padding: 0.75rem 0.9rem 0.8rem;
   z-index: 20;
   font-size: 0.9rem;
@@ -1130,12 +1161,13 @@ export default {
 }
 
 .label-checkbox-row:hover {
-  background-color: rgba(148, 163, 184, 0.15);
+  background-color: var(--hover-bg);
 }
 
 .label-checkbox-row input[type="checkbox"] {
   width: 14px;
   height: 14px;
+  accent-color: var(--primary-color);
 }
 
 .label-name {
@@ -1190,6 +1222,152 @@ export default {
 .label-btn-apply:hover:not(:disabled) {
   background-color: #1d4ed8;
   border-color: #1d4ed8;
+}
+
+/* Skeleton container */
+.email-list-skeleton {
+  padding: 0 1.25rem;
+}
+
+.skeleton-email-row {
+  padding: 1.25rem 0; /* more breathing room */
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem; /* spacing between lines */
+}
+
+.skeleton-line.middle {
+  width: 60%;
+}
+
+.skeleton-line.short {
+  width: 40%;
+}
+
+.skeleton-line.long {
+  width: 85%;
+  margin-bottom: 0.15rem;
+}
+
+.skeleton-date {
+  width: 32px;
+  height: 12px;
+  border-radius: 4px;
+  background-color: #e3e3e3;
+}
+
+.skeleton-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Shimmer */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -150%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(
+    120deg,
+    transparent,
+    rgba(255, 255, 255, 0.55),
+    transparent
+  );
+  animation: shimmer 1.2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    left: -150%;
+  }
+  100% {
+    left: 150%;
+  }
+}
+
+/* Container */
+.label-menu-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.25rem 0;
+}
+
+/* Each skeleton row */
+.skeleton-label-row {
+  display: flex;
+  align-items: center;
+  padding: 0.35rem 0;
+}
+
+/* Left side: checkbox + name bar */
+.skeleton-left {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* Checkbox placeholder */
+.skeleton-checkbox {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background-color: #e3e3e3;
+}
+
+/* Label text line */
+.skeleton-line {
+  width: 120px;
+  height: 12px;
+  border-radius: 4px;
+  background-color: #e3e3e3;
+}
+
+.skeleton-btn {
+  width: 60px;
+  height: 26px;
+  border-radius: 6px;
+  background-color: #e3e3e3;
+}
+
+/* Shimmer */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -150%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(
+    120deg,
+    transparent,
+    rgba(255, 255, 255, 0.5),
+    transparent
+  );
+  animation: shimmer 1.2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    left: -150%;
+  }
+  100% {
+    left: 150%;
+  }
 }
 
 /* Mobile Responsive */

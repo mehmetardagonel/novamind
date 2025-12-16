@@ -41,8 +41,21 @@
                 'user-message': message.role === 'user',
               }"
             >
-              <p v-if="message.text" class="message-text" v-html="formatMessageText(message.text)"></p>
-              <p v-else-if="message.role === 'bot' && message.emails && message.emails.length > 0" class="message-text">Here are the emails I found:</p>
+              <p
+                v-if="message.text"
+                class="message-text"
+                v-html="formatMessageText(message.text)"
+              ></p>
+              <p
+                v-else-if="
+                  message.role === 'bot' &&
+                  message.emails &&
+                  message.emails.length > 0
+                "
+                class="message-text"
+              >
+                Here are the emails I found:
+              </p>
 
               <div
                 v-if="message.emails && message.emails.length > 0"
@@ -61,7 +74,8 @@
                   </div>
 
                   <div class="email-field">
-                    <strong>Subject:</strong> {{ email.subject || "(No subject)" }}
+                    <strong>Subject:</strong>
+                    {{ email.subject || "(No subject)" }}
                   </div>
 
                   <div v-if="email.date || email.timestamp" class="email-field">
@@ -120,7 +134,9 @@
               <button
                 class="inner-send"
                 @click="sendMessage"
-                :disabled="!userPrompt.trim() || isLoading || isListening || !activeChat"
+                :disabled="
+                  !userPrompt.trim() || isLoading || isListening || !activeChat
+                "
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -166,8 +182,11 @@ export default {
     const isListening = ref(false); // New state for listening box
     const listeningDots = ref(""); // New state for dot animation
     let dotInterval = null; // For managing the dot animation timer
-    const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8001";
-    const normalizedBase = API_BASE_URL.endsWith("/") ? API_BASE_URL.slice(0, -1) : API_BASE_URL;
+    const API_BASE_URL =
+      import.meta.env.VITE_API_URL || "http://localhost:8001";
+    const normalizedBase = API_BASE_URL.endsWith("/")
+      ? API_BASE_URL.slice(0, -1)
+      : API_BASE_URL;
     const API_URL = `${normalizedBase}/chat`;
 
     const chats = computed(() => chatStore.chats);
