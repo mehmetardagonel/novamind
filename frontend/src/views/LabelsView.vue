@@ -1,7 +1,7 @@
 <template>
   <div class="labels-view">
     <div v-if="loading" class="labels-skeleton">
-      <div v-for="n in 4" :key="n" class="labels-skeleton-row">
+      <div v-for="n in 15" :key="n" class="labels-skeleton-row">
         <div class="labels-skel-left">
           <div class="labels-skel-icon shimmer"></div>
           <div class="labels-skel-line shimmer"></div>
