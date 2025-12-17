@@ -247,16 +247,20 @@ class ChatService:
                 name="draft_email",
                 func=lambda x: json.dumps(self._parse_draft_email(x), indent=2),
                 description=(
-                    "Create a draft email without sending it. You MUST ALWAYS provide the recipient email address.\n"
-                    "Input format: 'to_email|subject|body' where:\n"
-                    "- to_email: recipient's email address (REQUIRED - cannot be empty)\n"
-                    "- subject: a clear, concise subject line (optional, can be empty)\n"
-                    "- body: a well-written, professional email body that addresses the user's intent\n\n"
+                    "Create a draft email. Input must be a SINGLE STRING with pipe separators.\n\n"
+                    "REQUIRED FORMAT: 'recipient@email.com|Subject Line|Email body text'\n\n"
+                    "EXAMPLES:\n"
+                    "- 'john@company.com|Meeting Tomorrow|Hi John, Let's discuss the project tomorrow at 2pm. Best regards'\n"
+                    "- 'alice@example.com|Grocery List|Hi Alice, Here's the grocery list: milk, eggs, bread. Thanks!'\n"
+                    "- 'bob@test.com|Quick Question|Hi Bob, Do you have time for a quick call? Let me know. Thanks'\n\n"
                     "CRITICAL RULES:\n"
-                    "1. The recipient email address is MANDATORY - drafts cannot be created without it\n"
-                    "2. If user provides only a name (e.g., \"John\"), ask for their full email address\n"
-                    "3. If user does not provide a recipient, you MUST ASK for it before creating the draft\n"
-                    "4. If the system returns \"requires_recipient\": true, prompt user for the email address\n"
+                    "1. ALWAYS use pipe | character to separate the three parts: email|subject|body\n"
+                    "2. Generate intelligent subject and body from user's context (e.g., 'about the grocery list' -> create subject: 'Grocery List' and body with grocery list content)\n"
+                    "3. NEVER ask user for subject/body after they provide context - generate them automatically\n"
+                    "4. If user doesn't provide recipient email, the tool will ask for it\n"
+                    "5. If user says 'about X', create subject and body related to X\n\n"
+                    "WRONG: calling this tool with 3 separate arguments\n"
+                    "RIGHT: calling this tool with ONE string argument like 'email@test.com|Subject|Body'\n"
                 ),
             ),
             Tool(
@@ -310,7 +314,16 @@ class ChatService:
                     Tool(
                         name="classify_emails_ml",
                         func=self._classify_emails_with_ml,
-                        description="Classify emails using ML model (spam/ham/important). Input: JSON filters or empty string",
+                        description=(
+                            "Classify emails using ML model to identify spam, ham, and important emails. "
+                            "Also provides a summary of email classifications.\n"
+                            "Use this tool when the user asks for:\n"
+                            "- Email classification or categorization\n"
+                            "- Summary of emails (e.g., 'summarize my emails', 'give me a summary')\n"
+                            "- Important emails (e.g., 'show important emails', 'what important things do I have')\n"
+                            "- Email statistics or overview\n"
+                            "Input: JSON filters (e.g., {\"since_date\": \"2025-01-10\"}) or empty string for all recent emails"
+                        ),
                     )
                 )
         except Exception as e:
@@ -343,17 +356,26 @@ MANDATORY REQUIREMENT FOR DRAFTS:
 - If user provides only a name (e.g., "John"), politely ask for the full email address
 - Never create "body-only" drafts
 
+CRITICAL RULE FOR AFTER CREATING DRAFTS:
+- After successfully creating a draft, simply confirm it was created with the recipient and subject
+- DO NOT ask if the user wants to send it immediately
+- DO NOT suggest actions like "send this draft?" or "would you like to send it?"
+- Let the user explicitly request to send the draft if they want to
+- Example good response: "✅ Draft created to [email] with subject '[subject]'"
+- Example bad response: "Draft created. Would you like to send it now?" (DO NOT DO THIS)
+
 CRITICAL RULE FOR DRAFT OPERATIONS (UPDATE, SEND, DELETE):
 When user asks about draft operations (update draft, send draft, delete draft), you MUST:
 1. Identify the recipient email address
 2. Identify the operation type (update/send/delete)
-3. CALL the appropriate tool IMMEDIATELY - do NOT explain first or try to answer yourself
-4. Wait for the tool result (which may ask user to select from multiple drafts)
-5. Report the tool's result to user exactly as returned
+3. CALL the appropriate tool ONCE - do NOT call it multiple times
+4. Return the tool's output DIRECTLY to the user WITHOUT any additional text or explanation
+5. If the tool asks for confirmation or selection, pass that message to the user EXACTLY as it appears
 
-IMPORTANT: Do NOT try to answer draft-related questions yourself.
-ALWAYS use the draft_related tools first (update_draft_for_recipient, send_draft_for_recipient, delete_draft_for_recipient).
-User may need to select a draft (1, 2, 3...) - show that selection list clearly.
+CRITICAL: When the tool returns a confirmation request like "Are you sure you want to send...", you MUST return that exact message to the user.
+DO NOT add your own commentary like "Okay, I'm ready to send..." or "I'll send the draft now...".
+DO NOT call the same tool multiple times for the same request.
+The tool's output IS your response - return it verbatim.
 
 CRITICAL RULE FOR FETCHING EMAILS:
 When using the 'fetch_mails' tool, the tool will return a JSON block fenced in ```json ...```.
