@@ -180,8 +180,15 @@ def _make_graph_request(
             return {"success": True}
 
     except requests.exceptions.HTTPError as e:
-        logger.error(f"Graph API error: {e.response.status_code} - {e.response.text}")
-        raise Exception(f"Microsoft Graph API error: {e.response.status_code}")
+        error_detail = ""
+        try:
+            error_json = e.response.json()
+            error_detail = error_json.get("error", {}).get("message", e.response.text)
+        except:
+            error_detail = e.response.text
+
+        logger.error(f"Graph API error {e.response.status_code}: {error_detail}")
+        raise Exception(f"Microsoft Graph API error: {e.response.status_code} - {error_detail}")
 
 
 def get_user_profile(access_token: str) -> Dict:
@@ -234,12 +241,14 @@ def _parse_outlook_message(msg: Dict) -> Dict:
     sender_email = sender_obj.get("address", "")
     sender = f"{sender_name} <{sender_email}>" if sender_name else sender_email
 
-    # Get recipient info
+    # Get recipient info (capture all recipients, not just first)
     to_recipients = msg.get("toRecipients", [])
-    recipient = ""
-    if to_recipients:
-        recip_obj = to_recipients[0].get("emailAddress", {})
-        recipient = recip_obj.get("address", "")
+    recipient_list = []
+    for recip_obj in to_recipients:
+        email_addr = recip_obj.get("emailAddress", {}).get("address", "")
+        if email_addr:
+            recipient_list.append(email_addr)
+    recipient = ", ".join(recipient_list)
 
     # Get body (prefer text, fallback to html)
     body_obj = msg.get("body", {})

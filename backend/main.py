@@ -49,6 +49,7 @@ from gmail_service import (
     fetch_messages_multi_account,
     fetch_messages_by_label_multi,
     fetch_drafts_multi,
+    fetch_drafts_multi_provider,
     trash_message_multi,
     untrash_message_multi,
     set_star_multi,
@@ -535,7 +536,8 @@ async def chat(
 @app.get("/emails/drafts", response_model=List[EmailOut])
 async def list_drafts(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        emails = await fetch_drafts_multi(user_id, max_per_account=50)
+        # Use unified multi-provider draft fetching (Gmail + Outlook)
+        emails = await fetch_drafts_multi_provider(user_id, max_per_account=50)
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1154,10 +1154,88 @@ async def fetch_messages_by_label_multi(
 
 async def fetch_drafts_multi(user_id: str, max_per_account: int = 25) -> List[EmailOut]:
     """
-    Fetch draft emails from all connected accounts.
+    Fetch draft emails from all connected accounts (Gmail only - legacy).
+
+    DEPRECATED: Use fetch_drafts_multi_provider() instead for Gmail + Outlook drafts.
     """
     query = "label:DRAFT"
     return await fetch_messages_multi_account(user_id, query, max_per_account)
+
+
+async def fetch_drafts_multi_provider(user_id: str, max_per_account: int = 25) -> List[EmailOut]:
+    """
+    Fetch draft emails from ALL connected accounts (Gmail + Outlook).
+
+    This unified function retrieves drafts from both Gmail and Outlook providers
+    and combines them into a single sorted list.
+
+    Args:
+        user_id: User ID from Supabase auth
+        max_per_account: Max results per account
+
+    Returns:
+        List of EmailOut objects sorted by date (newest first)
+    """
+    from email_account_service import email_account_service
+    from outlook_service import fetch_drafts as fetch_outlook_drafts
+
+    all_drafts = []
+
+    # Get all active accounts for user
+    accounts = await email_account_service.get_all_accounts(user_id)
+
+    if not accounts:
+        logger.warning(f"No email accounts found for user {user_id}")
+        return []
+
+    # Fetch from each account based on provider
+    for account in accounts:
+        try:
+            provider = account.get("provider", "gmail")
+            account_id = account.get("id")
+
+            if provider == "gmail":
+                # Fetch Gmail drafts
+                logger.info(f"Fetching Gmail drafts from account {account.get('email_address')}")
+                query = "label:DRAFT"
+                gmail_drafts = await fetch_messages_multi_account(user_id, query, max_per_account)
+                all_drafts.extend(gmail_drafts)
+
+            elif provider == "outlook":
+                # Fetch Outlook drafts
+                logger.info(f"Fetching Outlook drafts from account {account.get('email_address')}")
+                try:
+                    access_token = await email_account_service.get_outlook_access_token(user_id, account_id)
+                    outlook_drafts_raw = await fetch_outlook_drafts(access_token, max_results=max_per_account)
+
+                    # Convert to EmailOut format
+                    for draft in outlook_drafts_raw:
+                        email_out = EmailOut(
+                            id=draft.get("message_id", ""),
+                            from_addr=draft.get("sender", ""),
+                            to=draft.get("recipient", ""),
+                            subject=draft.get("subject", "(No Subject)"),
+                            snippet=draft.get("snippet", ""),
+                            date=draft.get("date", datetime.now()),
+                            is_read=draft.get("is_read", False),
+                            labels=[],
+                            classifications={"type": "draft", "provider": "outlook"},
+                        )
+                        all_drafts.append(email_out)
+
+                except Exception as e:
+                    logger.error(f"Error fetching Outlook drafts for {account.get('email_address')}: {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Error fetching drafts from account {account.get('email_address')}: {e}")
+            continue
+
+    # Sort all drafts by date (newest first)
+    all_drafts.sort(key=lambda x: x.date, reverse=True)
+
+    logger.info(f"Fetched {len(all_drafts)} total drafts from {len(accounts)} accounts for user {user_id}")
+    return all_drafts
 
 
 async def modify_message_multi_account(
