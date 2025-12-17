@@ -280,29 +280,48 @@ def fetch_messages(query: Optional[str] = None, max_results: int = 25) -> List[E
 def fetch_messages_with_service(
     service,
     query: Optional[str] = None,
-    max_results: int = 25
+    max_results: int = 25,
+    label_ids: Optional[List[str]] = None
 ) -> List[EmailOut]:
     """
     Fetch messages using a provided Gmail service instance.
     Used for multi-account support where service is already authenticated.
+
+    Args:
+        service: Authenticated Gmail service instance
+        query: Text search query (optional)
+        max_results: Maximum number of messages to fetch
+        label_ids: List of label IDs to filter by (optional, takes precedence over query)
     """
     all_message_refs = []
     page_token = None
     emails: List[EmailOut] = []
 
     try:
-        logger.info(f"Requesting messages with custom service, query: '{query or 'ALL'}'")
+        if label_ids:
+            logger.info(f"Requesting messages with custom service, labelIds: {label_ids}")
+        else:
+            logger.info(f"Requesting messages with custom service, query: '{query or 'ALL'}'")
+
         # Fetch message references with pagination
         while len(all_message_refs) < max_results:
             remaining = max_results - len(all_message_refs)
             page_size = min(500, remaining)
 
-            list_resp = service.users().messages().list(
-                userId="me",
-                q=query or "",
-                maxResults=page_size,
-                pageToken=page_token
-            ).execute()
+            # Build API call parameters
+            list_params = {
+                "userId": "me",
+                "maxResults": page_size,
+                "pageToken": page_token
+            }
+
+            # Use labelIds if provided, otherwise use query
+            if label_ids:
+                list_params["labelIds"] = label_ids
+            else:
+                list_params["q"] = query or ""
+
+            list_resp = service.users().messages().list(**list_params).execute()
 
             message_refs = list_resp.get("messages", [])
             all_message_refs.extend(message_refs)
@@ -1076,10 +1095,61 @@ async def fetch_messages_by_label_multi(
     include_spam_trash: bool = False
 ) -> List[EmailOut]:
     """
-    Fetch messages by label from all connected accounts.
+    Fetch messages by label from all connected Gmail accounts.
+
+    Args:
+        user_id: User ID
+        label_id: Gmail label ID (e.g., 'Label_20')
+        max_per_account: Maximum messages per account
+        include_spam_trash: Whether to include spam/trash
+
+    Returns:
+        List of emails from all Gmail accounts with the specified label
     """
-    query = f"label:{label_id}"
-    return await fetch_messages_multi_account(user_id, query, max_per_account)
+    from gmail_account_service import gmail_account_service
+
+    accounts = await gmail_account_service.get_all_accounts(user_id)
+    if not accounts:
+        return []
+
+    all_emails = []
+    for account in accounts:
+        try:
+            service = await get_user_gmail_service(user_id, account["id"])
+            # Use labelIds parameter instead of text query
+            emails = fetch_messages_with_service(
+                service,
+                query=None,
+                max_results=max_per_account,
+                label_ids=[label_id]
+            )
+
+            # Add account metadata to each email
+            for email in emails:
+                email.account_id = account["id"]
+                email.account_email = account["email_address"]
+
+            all_emails.extend(emails)
+        except Exception as e:
+            logger.error(f"Failed to fetch from Gmail account {account['id']}: {e}")
+            # Continue with other accounts even if one fails
+            continue
+
+    # Sort by date (newest first) with timezone normalization
+    from datetime import datetime as dt_class, timezone
+
+    def normalize_date(date_obj):
+        """Convert any datetime to timezone-aware UTC for comparison."""
+        if date_obj is None:
+            return dt_class.min.replace(tzinfo=timezone.utc)
+        if date_obj.tzinfo is None:
+            # Assume UTC if no timezone info
+            return date_obj.replace(tzinfo=timezone.utc)
+        # Convert to UTC
+        return date_obj.astimezone(timezone.utc)
+
+    all_emails.sort(key=lambda x: normalize_date(x.date), reverse=True)
+    return all_emails
 
 
 async def fetch_drafts_multi(user_id: str, max_per_account: int = 25) -> List[EmailOut]:

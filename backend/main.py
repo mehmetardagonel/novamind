@@ -633,15 +633,74 @@ async def star_email(message_id: str, starred: bool = Body(True), user_id: str =
 async def list_by_label(
     label_id: str,
     user_id: str = Header(..., alias="X-User-Id"),
+    labelName: Optional[str] = None,
 ):
     """
-    Retrieve emails for a specific Gmail label (by label ID, e.g. 'Label_20').
-    This returns all messages having that label, like Gmail's label view.
+    Retrieve emails for a specific label/category from all connected accounts.
+    - For Gmail: uses label_id (e.g., 'Label_20')
+    - For Outlook: uses labelName (category name, e.g., 'kingo')
     """
     try:
-        emails = await fetch_messages_by_label_multi(user_id, label_id, max_per_account=50)
-        return emails
+        all_emails = []
+
+        # Fetch from Gmail accounts using label_id
+        gmail_emails = await fetch_messages_by_label_multi(user_id, label_id, max_per_account=50)
+        all_emails.extend(gmail_emails)
+
+        # Fetch from Outlook accounts using labelName (category)
+        if labelName:
+            outlook_accounts = await email_account_service.get_accounts_by_provider(user_id, "outlook")
+
+            for account in outlook_accounts:
+                try:
+                    access_token = await email_account_service.get_outlook_access_token(user_id, account["id"])
+                    if not access_token:
+                        logger.warning(f"Skipping Outlook account {account['id']}: missing/expired token")
+                        continue
+
+                    outlook_emails = await outlook_service.fetch_messages_by_category(
+                        access_token,
+                        labelName,
+                        max_results=50
+                    )
+
+                    # Convert to EmailOut and add account metadata
+                    for email_dict in outlook_emails:
+                        all_emails.append(
+                            EmailOut(
+                                message_id=email_dict["message_id"],
+                                sender=email_dict["sender"],
+                                recipient=email_dict["recipient"],
+                                subject=email_dict["subject"],
+                                body=email_dict["body"],
+                                date=email_dict["date"],
+                                label_ids=email_dict.get("label_ids", []),
+                                account_id=account["id"],
+                                account_email=account["email_address"],
+                                provider="outlook"
+                            )
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to fetch from Outlook account {account['id']}: {e}")
+                    continue
+
+        # Sort by date (newest first)
+        from datetime import timezone as tz
+
+        def normalize_date(email):
+            """Convert any datetime to timezone-aware UTC for comparison."""
+            date_obj = email.date
+            if date_obj is None:
+                return datetime.min.replace(tzinfo=tz.utc)
+            if date_obj.tzinfo is None:
+                return date_obj.replace(tzinfo=tz.utc)
+            return date_obj.astimezone(tz.utc)
+
+        all_emails.sort(key=normalize_date, reverse=True)
+
+        return all_emails
     except Exception as e:
+        logger.error(f"Error fetching emails by label: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/labels", response_model=List[LabelOut])
