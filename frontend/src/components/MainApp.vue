@@ -1,6 +1,9 @@
 <template>
   <div class="main-app" :class="themeClass">
-    <div class="sidebar">
+    <!-- Mobile overlay -->
+    <div class="sidebar-overlay" :class="{ active: isSidebarOpen }" @click="toggleSidebar"></div>
+
+    <div class="sidebar" :class="{ open: isSidebarOpen }">
       <div class="sidebar-header">
         <div class="logo-icon-container">
           <div class="logo-svg novamind-logo">
@@ -35,6 +38,11 @@
 
     <div class="main-content">
       <div class="main-header">
+        <!-- Mobile hamburger menu -->
+        <button class="hamburger-menu" @click="toggleSidebar">
+          <span class="material-symbols-outlined">menu</span>
+        </button>
+
         <h1>{{ currentPageTitle }}</h1>
 
         <!-- Account Selector (only show on inbox) -->
@@ -92,10 +100,15 @@ export default {
     const isDarkTheme = ref(false);
     const accounts = ref([]);
     const selectedAccountId = ref(null);
+    const isSidebarOpen = ref(false);
 
     // Removed searchQuery and performSearch, as the search bar is deleted
     const toggleTheme = () => {
       isDarkTheme.value = !isDarkTheme.value;
+    };
+
+    const toggleSidebar = () => {
+      isSidebarOpen.value = !isSidebarOpen.value;
     };
 
     const themeClass = computed(() => {
@@ -214,6 +227,8 @@ export default {
       accounts,
       selectedAccountId,
       isInboxView,
+      isSidebarOpen,
+      toggleSidebar,
     };
   },
 };
@@ -487,5 +502,150 @@ export default {
   flex: 1;
   overflow-y: auto;
   /* Removed the conditional padding logic as the header is now always present */
+}
+
+/* * HAMBURGER MENU BUTTON */
+.hamburger-menu {
+  display: none; /* Hidden by default on desktop */
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.hamburger-menu:hover {
+  background-color: var(--hover-bg);
+}
+
+.hamburger-menu .material-symbols-outlined {
+  font-size: 24px;
+}
+
+/* * SIDEBAR OVERLAY (for mobile) */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 998;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.sidebar-overlay.active {
+  display: block;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ========== RESPONSIVE DESIGN - MOBILE & TABLET ========== */
+
+/* Tablet and below (≤1024px) */
+@media (max-width: 1024px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: -250px; /* Hidden by default */
+    height: 100vh;
+    z-index: 999;
+    transition: left 0.3s ease;
+    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+  }
+
+  .sidebar.open {
+    left: 0; /* Slide in when open */
+  }
+
+  .hamburger-menu {
+    display: flex; /* Show hamburger on tablet/mobile */
+    align-items: center;
+    justify-content: center;
+  }
+
+  .main-header h1 {
+    font-size: 1.4rem;
+  }
+
+  .account-selector {
+    margin-right: 0.5rem;
+  }
+
+  .account-dropdown {
+    min-width: 150px;
+    font-size: 0.85rem;
+  }
+}
+
+/* Mobile (≤768px) */
+@media (max-width: 768px) {
+  .main-header {
+    padding: 1rem;
+    gap: 0.5rem;
+  }
+
+  .main-header h1 {
+    font-size: 1.2rem;
+    flex-shrink: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Hide account selector on small mobile */
+  .account-selector {
+    display: none;
+  }
+
+  .theme-toggle-btn {
+    padding: 6px;
+  }
+
+  /* Adjust sidebar width for mobile */
+  .sidebar {
+    width: 280px;
+    left: -280px;
+  }
+
+  .sidebar-header h2 {
+    font-size: 1.3rem;
+  }
+
+  .compose-button {
+    padding: 10px;
+    font-size: 14px;
+  }
+
+  .nav-buttons button {
+    padding: 12px 16px;
+    font-size: 15px;
+  }
+}
+
+/* Small Mobile (≤480px) */
+@media (max-width: 480px) {
+  .sidebar {
+    width: 85%; /* Use percentage for very small screens */
+    max-width: 280px;
+    left: -100%;
+  }
+
+  .main-header h1 {
+    font-size: 1.1rem;
+  }
+
+  .hamburger-menu .material-symbols-outlined {
+    font-size: 22px;
+  }
+
+  .theme-toggle-btn .material-symbols-outlined {
+    font-size: 20px;
+  }
 }
 </style>

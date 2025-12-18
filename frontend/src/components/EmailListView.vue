@@ -1225,6 +1225,69 @@ export default {
     z-index: 100;
   }
 
+  /* Touch-friendly buttons - larger tap targets (min 44x44px) */
+  .icon-action-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .material-symbols-outlined {
+    font-size: 22px;
+  }
+
+  /* Email items - more padding for touch */
+  .email-item {
+    padding: 1.25rem 1rem;
+    padding-right: 5rem;
+  }
+
+  /* Larger font for mobile readability */
+  .email-sender {
+    font-size: 1rem;
+  }
+
+  .email-subject {
+    font-size: 0.95rem;
+  }
+
+  .email-preview {
+    font-size: 0.85rem;
+  }
+
+  .email-date {
+    font-size: 0.75rem;
+  }
+
+  /* Detail view adjustments */
+  .email-detail-subject {
+    font-size: 1.3rem;
+  }
+
+  .email-detail-content {
+    padding: 1.5rem 1rem;
+  }
+
+  .email-body {
+    font-size: 1rem;
+    line-height: 1.7;
+  }
+
+  /* Label menu adjustments for mobile */
+  .label-menu-popover {
+    width: calc(100vw - 2rem);
+    max-width: 320px;
+    right: auto;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  /* Auth buttons */
+  .btn-primary {
+    padding: 14px 28px;
+    font-size: 1.05rem;
+    min-height: 44px;
+  }
+
   /* 🔹 On mobile: keep restore button visible and inline (no absolute) */
   .restore-btn {
     position: static;
@@ -1232,6 +1295,34 @@ export default {
     pointer-events: auto;
     margin-top: 0.5rem;
     align-self: flex-start;
+    width: 44px;
+    height: 44px;
+  }
+}
+
+/* Additional mobile optimizations for small screens */
+@media (max-width: 480px) {
+  .email-item {
+    padding: 1rem 0.75rem;
+  }
+
+  .email-detail-header {
+    padding: 0.75rem 1rem;
+  }
+
+  .email-actions {
+    gap: 0.25rem;
+  }
+
+  .account-badge {
+    font-size: 0.6rem;
+    padding: 0.1rem 0.4rem;
+    max-width: 100px;
+  }
+
+  .ml-label {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
   }
 }
 </style>

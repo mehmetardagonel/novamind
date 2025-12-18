@@ -656,4 +656,92 @@ input[placeholder="Confirm Password"] {
   width: 100%;
   margin-top: 10px;
 }
+
+/* ========== MOBILE RESPONSIVE ========== */
+
+/* Tablet (≤1024px) */
+@media (max-width: 1024px) {
+  .signup-container {
+    padding: 2rem;
+  }
+
+  .logo-text {
+    font-size: 1.6rem;
+  }
+}
+
+/* Mobile (≤768px) */
+@media (max-width: 768px) {
+  .content-wrapper {
+    padding: 0.5rem;
+  }
+
+  .signup-container {
+    padding: 1.5rem;
+    min-height: auto;
+  }
+
+  .logo-text {
+    font-size: 1.5rem;
+  }
+
+  .header-subtitle {
+    font-size: 0.9rem;
+    padding-bottom: 1.5rem;
+  }
+
+  /* Touch-friendly input fields */
+  .form-input {
+    height: 3.5rem; /* 56px for better touch target */
+    font-size: 1rem;
+  }
+
+  /* Touch-friendly buttons */
+  .primary-button {
+    height: 3.5rem;
+    min-height: 44px;
+    font-size: 1.05rem;
+  }
+
+  .password-toggle {
+    padding: 0.5rem;
+  }
+
+  .password-toggle .icon-adjust {
+    font-size: 1.6rem;
+  }
+}
+
+/* Small Mobile (≤480px) */
+@media (max-width: 480px) {
+  .signup-container {
+    padding: 1.25rem;
+    border-radius: 0.5rem;
+  }
+
+  .logo-icon-container {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+
+  .logo-text {
+    font-size: 1.35rem;
+  }
+
+  .header-subtitle {
+    font-size: 0.85rem;
+  }
+
+  .signup-form {
+    gap: 1rem;
+  }
+
+  input[placeholder="Email"] {
+    padding-right: 7rem;
+  }
+
+  .email-suffix {
+    font-size: 0.9rem;
+  }
+}
 </style>
