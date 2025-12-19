@@ -152,8 +152,8 @@
               <!-- Voice button (always visible, disabled while loading) -->
               <button
                 class="inner-voice"
-                @click="toggleVoiceInput"
-                :disabled="isLoading || !activeChat"
+                @click="handleVoiceInput"
+                :disabled="isLoading || isRecording || !activeChat"
                 :class="{ 'listening-active': isListening }"
               >
                 <span class="material-symbols-outlined mic-icon">mic</span>
@@ -170,6 +170,8 @@
 import { computed, ref, nextTick, onUnmounted, onMounted, watch } from "vue";
 import { useAuthStore } from "../stores/auth";
 import { useChatStore } from "../stores/chat";
+import { sendVoicePrompt } from "@/api/voice";
+import { recordUntilSilence } from "@/utils/voiceRecorder";
 
 export default {
   name: "ComposeView",
@@ -182,6 +184,10 @@ export default {
     const isListening = ref(false); // New state for listening box
     const listeningDots = ref(""); // New state for dot animation
     let dotInterval = null; // For managing the dot animation timer
+    const isRecording = ref(false);
+    const voiceSessionId = ref(localStorage.getItem("voice_session_id"));
+    const audioPlayer = new Audio();
+    let currentAudioUrl = null;
     const API_BASE_URL =
       import.meta.env.VITE_API_URL || "http://localhost:8001";
     const normalizedBase = API_BASE_URL.endsWith("/")
@@ -376,25 +382,66 @@ export default {
     };
 
     // New function to toggle the voice input state
-    const toggleVoiceInput = () => {
-      if (isLoading.value) return; // Prevent toggling if a message is being processed
+    const playReplyAudio = async (blob) => {
+      if (currentAudioUrl) {
+        URL.revokeObjectURL(currentAudioUrl);
+      }
+      currentAudioUrl = URL.createObjectURL(blob);
+      audioPlayer.src = currentAudioUrl;
+      try {
+        await audioPlayer.play();
+      } catch (error) {
+        console.error("Failed to play voice response:", error);
+      }
+    };
 
-      isListening.value = !isListening.value;
+    audioPlayer.addEventListener("ended", () => {
+      if (currentAudioUrl) {
+        URL.revokeObjectURL(currentAudioUrl);
+        currentAudioUrl = null;
+      }
+    });
 
-      if (isListening.value) {
-        startDotAnimation();
-        // Here you would typically start the Web Speech API recognition
-        // console.log("Starting voice recognition...");
-      } else {
+    // New function to handle voice input
+    const handleVoiceInput = async () => {
+      if (isLoading.value || isRecording.value || !activeChat.value) return;
+
+      isRecording.value = true;
+      isListening.value = true;
+      startDotAnimation();
+
+      try {
+        const audioBlob = await recordUntilSilence();
+        const { audioBlob: replyAudio, sessionId } = await sendVoicePrompt(
+          audioBlob,
+          voiceSessionId.value
+        );
+
+        if (sessionId) {
+          voiceSessionId.value = sessionId;
+          localStorage.setItem("voice_session_id", sessionId);
+        }
+
+        await playReplyAudio(replyAudio);
+      } catch (error) {
+        console.error("Voice request failed:", error);
+        window.alert("Voice request failed");
+      } finally {
+        isRecording.value = false;
+        isListening.value = false;
         stopDotAnimation();
-        // Here you would typically stop the Web Speech API recognition
-        // console.log("Stopping voice recognition...");
       }
     };
 
     // Clear interval when component is destroyed
     onUnmounted(() => {
       stopDotAnimation();
+      if (currentAudioUrl) {
+        URL.revokeObjectURL(currentAudioUrl);
+        currentAudioUrl = null;
+      }
+      audioPlayer.pause();
+      audioPlayer.src = "";
     });
 
     // Initialize chat store on mount
@@ -434,6 +481,7 @@ export default {
       isLoading,
       isListening,
       listeningDots,
+      isRecording,
       chats,
       activeChatId,
       activeChat,
@@ -442,7 +490,7 @@ export default {
       formatBody,
       formatMessageText,
       historyContainer,
-      toggleVoiceInput,
+      handleVoiceInput,
       clearChat,
       createChat,
       deleteChat,

@@ -17,6 +17,8 @@ from urllib.parse import urlsplit
 from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel
 
+from session_store import chat_sessions, chat_session_locks
+
 from models import (
     EmailOut,
     EmailRequest,
@@ -137,6 +139,9 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 
+from voice_router import router as voice_router
+app.include_router(voice_router)
+
 # Get redirect URI and frontend URL from config/env
 # This ensures it matches your .env file
 REDIRECT_URI = CLIENT_CONFIG["installed"]["redirect_uris"][0]
@@ -174,8 +179,8 @@ app.add_middleware(
 
 # Session management for ChatService instances
 # Each user/session gets its own ChatService instance to maintain pending_selection state
-chat_sessions: Dict[str, ChatService] = {}
-chat_session_locks: Dict[str, asyncio.Lock] = {}
+# chat_sessions: Dict[str, ChatService] = {}
+# chat_session_locks: Dict[str, asyncio.Lock] = {}
 
 # Startup event to preload ML models
 @app.on_event("startup")
@@ -405,7 +410,7 @@ async def logout_endpoint():
         cleanup_status["gmail_token_revoked"] = token_revoked
 
         # Step 2: Clear all chat sessions from memory
-        global chat_sessions, chat_session_locks
+        # global chat_sessions, chat_session_locks
         sessions_count = len(chat_sessions)
         chat_sessions.clear()
         chat_session_locks.clear()
