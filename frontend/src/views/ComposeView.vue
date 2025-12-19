@@ -114,6 +114,7 @@
                 <span class="dot">.</span>
               </p>
             </div>
+
           </div>
 
           <div v-if="isListening" class="listening-box">
@@ -412,15 +413,34 @@ export default {
 
       try {
         const audioBlob = await recordUntilSilence();
-        const { audioBlob: replyAudio, sessionId } = await sendVoicePrompt(
-          audioBlob,
-          voiceSessionId.value
-        );
+        const {
+          audioBlob: replyAudio,
+          sessionId,
+          userTranscript,
+          assistantReply,
+        } = await sendVoicePrompt(audioBlob, voiceSessionId.value);
 
         if (sessionId) {
           voiceSessionId.value = sessionId;
           localStorage.setItem("voice_session_id", sessionId);
         }
+
+        const chatId = activeChat.value.id;
+        if (userTranscript) {
+          chatStore.appendMessage(chatId, {
+            role: "user",
+            text: userTranscript.trim(),
+            emails: null,
+          });
+        }
+        if (assistantReply) {
+          chatStore.appendMessage(chatId, {
+            role: "bot",
+            text: assistantReply.trim(),
+            emails: null,
+          });
+        }
+        scrollToBottom();
 
         await playReplyAudio(replyAudio);
       } catch (error) {

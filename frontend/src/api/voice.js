@@ -29,14 +29,20 @@ export const sendVoicePrompt = async (audioBlob, sessionId = null) => {
     responseType: 'arraybuffer',
   })
 
-  const contentType = response.headers['content-type'] || 'audio/wav'
-  const responseSessionId = response.headers['x-session-id'] || null
-  const transcript = response.headers['x-transcript'] || null
+  const headers = response.headers || {}
+  const contentType = headers['content-type'] || headers['Content-Type'] || 'audio/wav'
+  const responseSessionId =
+    headers['x-session-id'] || headers['X-Session-Id'] || sessionId || null
+  const userTranscript =
+    headers['x-user-transcript'] || headers['X-User-Transcript'] || null
+  const assistantReply =
+    headers['x-assistant-reply'] || headers['X-Assistant-Reply'] || null
   const replyAudioBlob = new Blob([response.data], { type: contentType })
 
   return {
     audioBlob: replyAudioBlob,
     sessionId: responseSessionId,
-    transcript,
+    userTranscript,
+    assistantReply,
   }
 }

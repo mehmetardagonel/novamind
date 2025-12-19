@@ -118,5 +118,7 @@ async def voice_chat(
         headers={
             "X-Session-Id": sid,
             "X-Transcript": transcript[:200],
+            "X-User-Transcript": transcript or "",
+            "X-Assistant-Reply": str(response_text or ""),
         },
     )

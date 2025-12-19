@@ -175,6 +175,12 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "X-Session-Id",
+        "X-Transcript",
+        "X-User-Transcript",
+        "X-Assistant-Reply",
+    ],
 )
 
 # Session management for ChatService instances
