@@ -1,6 +1,6 @@
 <template>
   <div class="email-list-view">
-    <div v-if="loading" class="email-list-skeleton">
+    <div v-if="isInitialLoading" class="email-list-skeleton">
       <div v-for="n in 10" :key="n" class="skeleton-email-row">
         <!-- top row: middle line + right-aligned date -->
         <div class="skeleton-top">
@@ -55,6 +55,19 @@
           'full-width': !selectedEmail || isTrash,
         }"
       >
+        <div class="email-list-toolbar">
+          <button
+            class="icon-action-btn refresh-btn"
+            title="Refresh"
+            @click="refreshEmails"
+            :disabled="loading"
+          >
+            <span class="material-symbols-outlined">refresh</span>
+          </button>
+          <span v-if="isBackgroundLoading" class="email-list-loading-text">
+            Loading...
+          </span>
+        </div>
         <div class="email-list">
           <div
             v-for="(email, index) in emails"
@@ -94,6 +107,16 @@
               </button>
             </div>
           </div>
+        </div>
+        <div v-if="canLoadMore" class="email-list-footer">
+          <button
+            class="load-more-btn"
+            @click="loadMoreEmails"
+            :disabled="isLoadingMore"
+          >
+            <span v-if="isLoadingMore">Loading...</span>
+            <span v-else>Load more</span>
+          </button>
         </div>
       </div>
 
@@ -261,8 +284,8 @@ import {
   restoreEmail,
   fetchLabels,
   updateEmailLabels,
-  getEmailsByLabel,
 } from "../api/emails";
+import { useEmailCacheStore } from "../stores/emails";
 
 export default {
   name: "EmailListView",
@@ -279,15 +302,39 @@ export default {
     // Removed emailsPerPage prop
   },
   setup(props) {
-    const emails = ref([]);
-    const loading = ref(false);
-    const errorMessage = ref("");
+    const emailCache = useEmailCacheStore();
     const selectedEmail = ref(null);
     const authUrl = ref("");
     const isTrash = computed(() => props.folder === "trash");
 
     const route = useRoute();
     const activeLabelId = computed(() => route.query.label || null);
+    const loadMoreInFlight = ref(false);
+
+    const folderKey = computed(() => {
+      const labelId = route.query.label;
+      if (labelId) return `label:${labelId}`;
+      if (props.folder === "inbox" && props.selectedAccountId) {
+        return `inbox:account:${props.selectedAccountId}`;
+      }
+      return props.folder;
+    });
+
+    const folderState = computed(() => emailCache.getFolder(folderKey.value));
+    const emails = computed(() => folderState.value.items);
+    const loading = computed(() => folderState.value.is_loading);
+    const errorMessage = computed(() => folderState.value.error || "");
+    const nextCursor = computed(() => folderState.value.next_cursor);
+    const canLoadMore = computed(() => !!nextCursor.value);
+    const isInitialLoading = computed(
+      () => loading.value && emails.value.length === 0
+    );
+    const isLoadingMore = computed(
+      () => loading.value && loadMoreInFlight.value
+    );
+    const isBackgroundLoading = computed(
+      () => loading.value && emails.value.length > 0 && !loadMoreInFlight.value
+    );
 
     // 🔹 label popup state
     const showLabelMenu = ref(false);
@@ -311,53 +358,111 @@ export default {
       });
     };
 
-    const loadEmails = async () => {
-      loading.value = true;
-      errorMessage.value = "";
-      emails.value = [];
+    const loadEmails = async ({ force = false } = {}) => {
+      loadMoreInFlight.value = false;
+      const key = folderKey.value;
+      const folder = emailCache.getFolder(key);
+      const shouldFetch =
+        force || folder.items.length === 0 || !emailCache.isFresh(key);
+
+      if (!shouldFetch || folder.is_loading) return;
+
       selectedEmail.value = null;
       authUrl.value = "";
 
-      try {
-        let data;
-        const labelId = route.query.label; // e.g. "Label_20"
-
+      const fetcher = async (cursor) => {
+        const labelId = route.query.label;
         if (labelId) {
-          // We are in a label view: /app/email/inbox?label=Label_20&labelName=Work
-          // → use dedicated label endpoint (by label ID)
-          data = await getEmailsByLabel(labelId);
-        } else if (props.folder === "inbox") {
-          // Unified inbox - fetch emails from all connected Gmail accounts
-          // Pass selectedAccountId to filter by specific account if selected
-          data = await fetchUnifiedEmails(null, props.selectedAccountId);
-        } else {
-          // Sent / Favorites / Important / Spam / Drafts / Trash
-          data = await fetchEmails(props.folder);
+          return fetchEmails(`label:${labelId}`);
         }
-
-        emails.value = decorateEmails(data);
-      } catch (error) {
-        console.error(`Error fetching ${props.folder} emails:`, error);
-        const hasResponse = !!error.response;
-
-        if (!hasResponse) {
-          errorMessage.value =
-            "Cannot reach the backend API. Make sure the FastAPI server is running.";
-        } else if (
-          error.response.status === 401 &&
-          error.response.data.auth_url
-        ) {
-          authUrl.value = error.response.data.auth_url;
-          errorMessage.value = "";
-        } else {
-          errorMessage.value =
-            error.response?.data?.detail ||
-            error.message ||
-            "Failed to load emails.";
+        if (props.folder === "inbox") {
+          const filters = cursor ? { cursor } : {};
+          return fetchUnifiedEmails(null, props.selectedAccountId, filters);
         }
-      } finally {
-        loading.value = false;
-      }
+        return fetchEmails(props.folder);
+      };
+
+      await emailCache.fetchFolder(key, fetcher, {
+        force,
+        append: false,
+        onError: (error) => {
+          console.error(`Error fetching ${props.folder} emails:`, error);
+          const hasResponse = !!error.response;
+
+          if (!hasResponse) {
+            return {
+              message:
+                "Cannot reach the backend API. Make sure the FastAPI server is running.",
+            };
+          }
+          if (error.response.status === 401 && error.response.data.auth_url) {
+            authUrl.value = error.response.data.auth_url;
+            return { skipStoreError: true };
+          }
+          return {
+            message:
+              error.response?.data?.detail ||
+              error.message ||
+              "Failed to load emails.",
+          };
+        },
+        transformItems: decorateEmails,
+      });
+    };
+
+    const refreshEmails = async () => {
+      await loadEmails({ force: true });
+    };
+
+    const loadMoreEmails = async () => {
+      const key = folderKey.value;
+      const folder = emailCache.getFolder(key);
+      if (!folder.next_cursor || folder.is_loading) return;
+
+      loadMoreInFlight.value = true;
+      authUrl.value = "";
+
+      const fetcher = async (cursor) => {
+        const labelId = route.query.label;
+        if (labelId) {
+          const filters = cursor ? { cursor } : {};
+          return fetchEmails(`label:${labelId}`, null, filters);
+        }
+        if (props.folder === "inbox") {
+          const filters = cursor ? { cursor } : {};
+          return fetchUnifiedEmails(null, props.selectedAccountId, filters);
+        }
+        return fetchEmails(props.folder);
+      };
+
+      await emailCache.fetchFolder(key, fetcher, {
+        append: true,
+        cursor: folder.next_cursor,
+        onError: (error) => {
+          console.error(`Error fetching ${props.folder} emails:`, error);
+          const hasResponse = !!error.response;
+
+          if (!hasResponse) {
+            return {
+              message:
+                "Cannot reach the backend API. Make sure the FastAPI server is running.",
+            };
+          }
+          if (error.response.status === 401 && error.response.data.auth_url) {
+            authUrl.value = error.response.data.auth_url;
+            return { skipStoreError: true };
+          }
+          return {
+            message:
+              error.response?.data?.detail ||
+              error.message ||
+              "Failed to load emails.",
+          };
+        },
+        transformItems: decorateEmails,
+      });
+
+      loadMoreInFlight.value = false;
     };
 
     const authenticate = () => {
@@ -365,8 +470,10 @@ export default {
         sessionStorage.setItem("oauth_redirect_path", window.location.pathname);
         window.location.href = authUrl.value;
       } else {
-        errorMessage.value =
-          "Authentication URL is missing. Please try reloading the page.";
+        emailCache.setError(
+          folderKey.value,
+          "Authentication URL is missing. Please try reloading the page."
+        );
       }
     };
 
@@ -389,7 +496,8 @@ export default {
           props.folder === "favorites" || props.folder === "starred";
 
         if (!newValue && isFavoritesFolder) {
-          emails.value = emails.value.filter(
+          const folder = emailCache.getFolder(folderKey.value);
+          folder.items = folder.items.filter(
             (e) => e.message_id !== email.message_id
           );
 
@@ -402,10 +510,12 @@ export default {
         }
       } catch (error) {
         console.error("Failed to update favorite:", error);
-        errorMessage.value =
+        emailCache.setError(
+          folderKey.value,
           error.response?.data?.detail ||
-          error.message ||
-          "Failed to update favorite.";
+            error.message ||
+            "Failed to update favorite."
+        );
       }
     };
 
@@ -417,17 +527,20 @@ export default {
 
         await deleteEmail(messageId);
 
-        emails.value = emails.value.filter(
+        const folder = emailCache.getFolder(folderKey.value);
+        folder.items = folder.items.filter(
           (email) => email.message_id !== messageId
         );
 
         selectedEmail.value = null;
       } catch (error) {
         console.error("Failed to delete email:", error);
-        errorMessage.value =
+        emailCache.setError(
+          folderKey.value,
           error.response?.data?.detail ||
-          error.message ||
-          "Failed to delete email.";
+            error.message ||
+            "Failed to delete email."
+        );
       }
     };
 
@@ -436,7 +549,8 @@ export default {
         const messageId = email.message_id;
         await restoreEmail(messageId);
 
-        emails.value = emails.value.filter((e) => e.message_id !== messageId);
+        const folder = emailCache.getFolder(folderKey.value);
+        folder.items = folder.items.filter((e) => e.message_id !== messageId);
 
         if (
           selectedEmail.value &&
@@ -446,10 +560,12 @@ export default {
         }
       } catch (error) {
         console.error("Failed to restore email:", error);
-        errorMessage.value =
+        emailCache.setError(
+          folderKey.value,
           error.response?.data?.detail ||
-          error.message ||
-          "Failed to restore email.";
+            error.message ||
+            "Failed to restore email."
+        );
       }
     };
 
@@ -458,27 +574,24 @@ export default {
     });
 
     watch(
-      () => props.folder,
+      () => folderKey.value,
       () => {
+        selectedEmail.value = null;
+        authUrl.value = "";
         loadEmails();
       }
     );
 
     watch(
-      () => route.query.label,
-      () => {
-        if (props.folder === "inbox") {
-          loadEmails();
-        }
-      }
-    );
-
-    // Watch for account selection changes
-    watch(
-      () => props.selectedAccountId,
-      () => {
-        if (props.folder === "inbox") {
-          loadEmails();
+      () => emails.value,
+      (nextEmails) => {
+        if (
+          selectedEmail.value &&
+          !nextEmails.some(
+            (email) => email.message_id === selectedEmail.value.message_id
+          )
+        ) {
+          selectedEmail.value = null;
         }
       }
     );
@@ -631,7 +744,8 @@ export default {
         };
 
         // 🔹 Update email in the list
-        emails.value = emails.value.map((e) =>
+        const folder = emailCache.getFolder(folderKey.value);
+        folder.items = folder.items.map((e) =>
           e.message_id === selectedEmail.value.message_id
             ? { ...e, label_ids: newLabelIds }
             : e
@@ -641,7 +755,7 @@ export default {
         //     remove it from the current list (Gmail behavior)
         const currentLabelId = activeLabelId.value;
         if (currentLabelId && !newLabelIds.includes(currentLabelId)) {
-          emails.value = emails.value.filter(
+          folder.items = folder.items.filter(
             (e) => e.message_id !== selectedEmail.value.message_id
           );
           selectedEmail.value = null;
@@ -675,6 +789,12 @@ export default {
       getLabelText,
       sanitizeHtml,
       loadEmails,
+      refreshEmails,
+      loadMoreEmails,
+      canLoadMore,
+      isInitialLoading,
+      isLoadingMore,
+      isBackgroundLoading,
       authenticate,
       // Label menu
       showLabelMenu,
@@ -783,6 +903,25 @@ export default {
   border-right: none;
 }
 
+.email-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  background-color: var(--content-bg, #ffffff);
+}
+
+.refresh-btn {
+  width: 32px;
+  height: 32px;
+}
+
+.email-list-loading-text {
+  font-size: 0.8rem;
+  color: var(--text-secondary, #666);
+}
+
 .email-detail-panel {
   flex: 1;
   display: flex;
@@ -797,6 +936,36 @@ export default {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+}
+
+.email-list-footer {
+  padding: 0.75rem;
+  border-top: 1px solid var(--border-color, #e0e0e0);
+  display: flex;
+  justify-content: center;
+  background-color: var(--content-bg, #ffffff);
+}
+
+.load-more-btn {
+  border: 1px solid var(--border-color, #e0e0e0);
+  background-color: var(--content-bg, #ffffff);
+  border-radius: 999px;
+  padding: 0.45rem 1.1rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-secondary, #666);
+  transition: all 0.2s ease;
+}
+
+.load-more-btn:hover:not(:disabled) {
+  background-color: var(--hover-bg, #f0f4f8);
+  color: var(--text-primary, #333);
+  border-color: #d0d0d0;
+}
+
+.load-more-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .email-container.has-detail .email-list-panel {

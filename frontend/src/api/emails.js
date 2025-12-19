@@ -113,6 +113,7 @@ export const fetchEmails = async (folder = "inbox", userId, filters = {}) => {
     // Allow both true and false for unread
     if (filters.unread !== undefined)
       params.append("unread", String(filters.unread));
+    if (filters.cursor) params.append("cursor", filters.cursor);
 
     if (filters.labels && filters.labels.length > 0) {
       filters.labels.forEach((label) => params.append("labels", label));
@@ -209,6 +210,7 @@ export const fetchUnifiedEmails = async (userId, accountId = null, filters = {},
   if (filters.labels && filters.labels.length > 0) {
     filters.labels.forEach((label) => params.append("labels", label));
   }
+  if (filters.cursor) params.append("cursor", filters.cursor);
   if (filters.newer_than_days != null) {
     params.append("newer_than_days", String(filters.newer_than_days));
   }
