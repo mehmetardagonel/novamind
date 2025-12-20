@@ -120,6 +120,7 @@
 <script>
 import { ref, nextTick, onUnmounted } from "vue";
 import { useAuthStore } from "../stores/auth";
+import { getApiUrl } from "../utils/platformHelper";
 
 export default {
   name: "ComposeView",
@@ -131,7 +132,7 @@ export default {
     const isListening = ref(false); // New state for listening box
     const listeningDots = ref(""); // New state for dot animation
     let dotInterval = null; // For managing the dot animation timer
-    const API_URL = "http://localhost:8001/chat";
+    const API_URL = getApiUrl() + "/chat";
 
     const STORAGE_KEY_HISTORY = "chat_history";
     const STORAGE_KEY_SESSION = "chat_session_id";

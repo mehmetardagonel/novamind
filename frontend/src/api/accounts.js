@@ -1,5 +1,6 @@
 import apiClient from "./client";
 import { supabase } from "@/database/supabaseClient";
+import { Capacitor } from '@capacitor/core';
 
 /**
  * ============================================================
@@ -26,6 +27,34 @@ async function resolveUserId(explicitUserId) {
 }
 
 /**
+ * ============================================================
+ *  UNIFIED EMAIL ACCOUNTS (Gmail + Outlook)
+ * ============================================================
+ */
+
+/**
+ * Fetch all email accounts (Gmail + Outlook) for the current user
+ */
+export const fetchEmailAccounts = async (userId) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const response = await apiClient.get("/email/accounts", {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return response.data;
+};
+
+/**
+ * Delete/disconnect an email account (works for both Gmail and Outlook)
+ */
+export const deleteEmailAccount = async (accountId, userId) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const response = await apiClient.delete(`/email/accounts/${accountId}`, {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+  return response.data;
+};
+
+/**
  * Fetch all Gmail accounts for the current user
  */
 export const fetchGmailAccounts = async (userId) => {
@@ -42,8 +71,15 @@ export const fetchGmailAccounts = async (userId) => {
  */
 export const connectGmailAccount = async (userId) => {
   const resolvedUserId = await resolveUserId(userId);
+
+  // Detect platform
+  const platform = Capacitor.isNativePlatform() ? 'mobile' : 'web';
+
   const response = await apiClient.get("/gmail/auth/connect", {
-    headers: { "X-User-Id": resolvedUserId },
+    headers: {
+      "X-User-Id": resolvedUserId,
+      "X-App-Platform": platform
+    },
   });
   return response.data.auth_url;
 };
@@ -65,6 +101,7 @@ export const setPrimaryAccount = async (accountId, userId) => {
 
 /**
  * Delete/disconnect a Gmail account
+ * @deprecated Use deleteEmailAccount() instead
  */
 export const deleteGmailAccount = async (accountId, userId) => {
   const resolvedUserId = await resolveUserId(userId);
@@ -72,4 +109,29 @@ export const deleteGmailAccount = async (accountId, userId) => {
     headers: { "X-User-Id": resolvedUserId },
   });
   return response.data;
+};
+
+/**
+ * ============================================================
+ *  OUTLOOK SPECIFIC
+ * ============================================================
+ */
+
+/**
+ * Initiate OAuth flow to connect a new Outlook account
+ * Returns auth URL to redirect user to Microsoft login
+ */
+export const connectOutlookAccount = async (userId) => {
+  const resolvedUserId = await resolveUserId(userId);
+
+  // Detect platform
+  const platform = Capacitor.isNativePlatform() ? 'mobile' : 'web';
+
+  const response = await apiClient.get("/auth/outlook/connect", {
+    headers: {
+      "X-User-Id": resolvedUserId,
+      "X-App-Platform": platform
+    },
+  });
+  return response.data.auth_url;
 };
