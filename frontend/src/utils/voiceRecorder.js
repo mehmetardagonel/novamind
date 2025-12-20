@@ -7,7 +7,7 @@ const waitForRecorderStop = (recorder) =>
     recorder.addEventListener('stop', resolve, { once: true })
   })
 
-export const recordUntilSilence = async (options = {}) => {
+export const recordUntilSilence = (options = {}) => {
   const {
     mimeType = 'audio/webm;codecs=opus',
     silenceThreshold = 0.02,
@@ -16,35 +16,37 @@ export const recordUntilSilence = async (options = {}) => {
     maxRecordingMs = 15000,
   } = options
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  const audioContext = new (window.AudioContext || window.webkitAudioContext)()
-  const source = audioContext.createMediaStreamSource(stream)
-  const analyser = audioContext.createAnalyser()
-
-  analyser.fftSize = 2048
-  source.connect(analyser)
-
-  const recorder = new MediaRecorder(stream, { mimeType })
-  const chunks = []
+  let stream = null
+  let audioContext = null
+  let source = null
+  let analyser = null
+  let recorder = null
   let animationFrame = null
   let silenceStart = null
-  const startTime = performance.now()
-
-  const dataArray = new Uint8Array(analyser.fftSize)
+  let startTime = 0
+  let dataArray = null
+  let stopRequested = false
+  let isFinalizing = false
+  let ready = false
+  const chunks = []
+  let resolvePromise
+  let rejectPromise
 
   const cleanup = async () => {
     if (animationFrame) {
       cancelAnimationFrame(animationFrame)
       animationFrame = null
     }
-    source.disconnect()
-    analyser.disconnect()
-    stream.getTracks().forEach((track) => track.stop())
-    await audioContext.close()
+    if (source) source.disconnect()
+    if (analyser) analyser.disconnect()
+    if (stream) stream.getTracks().forEach((track) => track.stop())
+    if (audioContext) await audioContext.close()
   }
 
   const finalize = async () => {
-    if (recorder.state !== 'inactive') {
+    if (isFinalizing) return
+    isFinalizing = true
+    if (recorder && recorder.state !== 'inactive') {
       recorder.stop()
       await waitForRecorderStop(recorder)
     }
@@ -61,55 +63,99 @@ export const recordUntilSilence = async (options = {}) => {
     return Math.sqrt(sum / dataArray.length)
   }
 
-  return new Promise((resolve, reject) => {
-    recorder.addEventListener('dataavailable', (event) => {
-      if (event.data && event.data.size > 0) {
-        chunks.push(event.data)
+  const promise = new Promise((resolve, reject) => {
+    resolvePromise = resolve
+    rejectPromise = reject
+  })
+
+  const monitor = () => {
+    if (stopRequested) {
+      finalize()
+      return
+    }
+    const now = performance.now()
+    const elapsed = now - startTime
+
+    if (elapsed >= maxRecordingMs) {
+      finalize()
+      return
+    }
+
+    if (elapsed >= minRecordingMs) {
+      const rms = calculateRms()
+      if (rms < silenceThreshold) {
+        if (!silenceStart) {
+          silenceStart = now
+        } else if (now - silenceStart >= silenceMs) {
+          finalize()
+          return
+        }
+      } else {
+        silenceStart = null
       }
-    })
+    }
 
-    recorder.addEventListener(
-      'stop',
-      () => {
-        const blobType = recorder.mimeType || 'audio/webm'
-        resolve(new Blob(chunks, { type: blobType }))
-      },
-      { once: true }
-    )
+    animationFrame = requestAnimationFrame(monitor)
+  }
 
-    recorder.addEventListener('error', async (event) => {
-      await cleanup()
-      reject(event.error || new Error('Recorder error'))
-    })
+  const stop = () => {
+    stopRequested = true
+    if (ready) {
+      finalize()
+    }
+  }
 
-    const monitor = () => {
-      const now = performance.now()
-      const elapsed = now - startTime
+  const setup = async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      audioContext = new (window.AudioContext || window.webkitAudioContext)()
+      source = audioContext.createMediaStreamSource(stream)
+      analyser = audioContext.createAnalyser()
+      analyser.fftSize = 2048
+      source.connect(analyser)
+      recorder = new MediaRecorder(stream, { mimeType })
+      dataArray = new Uint8Array(analyser.fftSize)
+      startTime = performance.now()
+      ready = true
 
-      if (elapsed >= maxRecordingMs) {
+      recorder.addEventListener('dataavailable', (event) => {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data)
+        }
+      })
+
+      recorder.addEventListener(
+        'stop',
+        () => {
+          const blobType = recorder.mimeType || 'audio/webm'
+          resolvePromise(new Blob(chunks, { type: blobType }))
+        },
+        { once: true }
+      )
+
+      recorder.addEventListener(
+        'error',
+        async (event) => {
+          await cleanup()
+          rejectPromise(event.error || new Error('Recorder error'))
+        },
+        { once: true }
+      )
+
+      recorder.start()
+      audioContext.resume().catch(() => {})
+
+      if (stopRequested) {
         finalize()
         return
       }
-
-      if (elapsed >= minRecordingMs) {
-        const rms = calculateRms()
-        if (rms < silenceThreshold) {
-          if (!silenceStart) {
-            silenceStart = now
-          } else if (now - silenceStart >= silenceMs) {
-            finalize()
-            return
-          }
-        } else {
-          silenceStart = null
-        }
-      }
-
-      animationFrame = requestAnimationFrame(monitor)
+      monitor()
+    } catch (error) {
+      rejectPromise(error)
     }
+  }
 
-    recorder.start()
-    audioContext.resume().catch(() => {})
-    monitor()
-  })
+  setup()
+
+  return { promise, stop }
 }

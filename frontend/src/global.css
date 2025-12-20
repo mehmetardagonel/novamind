@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
 :root {
   --primary-color: #3713ec;
   --background-light: #f6f6f8;
@@ -13,7 +15,7 @@
 
 /* 👇 this is the important part */
 body {
-  font-family: "Inter", sans-serif; /* or whatever you want */
+  font-family: "IBM Plex Sans", "Söhne", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   margin: 0;

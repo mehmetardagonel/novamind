@@ -115,10 +115,21 @@
               </p>
             </div>
 
-          </div>
-
-          <div v-if="isListening" class="listening-box">
-            Listening<span class="dot-animation">{{ listeningDots }}</span>
+            <div v-if="isVoiceActive" class="message ai-message voice-inline">
+              <div class="voice-inline-row">
+                <span class="voice-inline-dot"></span>
+                <span class="voice-inline-label">
+                  {{ voiceStatusLabel }}{{ voiceDots }}
+                </span>
+              </div>
+              <div class="voice-inline-wave">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
           </div>
 
           <div class="chat-input-area">
@@ -154,15 +165,32 @@
               <button
                 class="inner-voice"
                 @click="handleVoiceInput"
-                :disabled="isLoading || isRecording || !activeChat"
+                :disabled="isLoading || !activeChat"
                 :class="{ 'listening-active': isListening }"
               >
-                <span class="material-symbols-outlined mic-icon">mic</span>
+                <span class="material-symbols-outlined mic-icon">
+                  {{ isRecording ? "stop" : "mic" }}
+                </span>
               </button>
             </div>
           </div>
         </div>
       </div>
+    </div>
+
+    <div v-if="isVoiceActive" class="voice-overlay" aria-live="polite">
+      <div class="voice-orb">
+        <span class="voice-orb-core"></span>
+        <span class="voice-orb-ring ring-1"></span>
+        <span class="voice-orb-ring ring-2"></span>
+        <span class="voice-orb-ring ring-3"></span>
+      </div>
+      <div class="voice-overlay-label">
+        {{ voiceStatusLabel }}{{ voiceDots }}
+      </div>
+      <button class="voice-overlay-stop" @click="handleVoiceInput">
+        Stop
+      </button>
     </div>
   </div>
 </template>
@@ -184,9 +212,10 @@ export default {
     const historyContainer = ref(null);
     const isListening = ref(false); // New state for listening box
     const listeningDots = ref(""); // New state for dot animation
+    const activeRecorder = ref(null);
     let dotInterval = null; // For managing the dot animation timer
     const isRecording = ref(false);
-    const voiceSessionId = ref(localStorage.getItem("voice_session_id"));
+    const isSpeaking = ref(false);
     const audioPlayer = new Audio();
     let currentAudioUrl = null;
     const API_BASE_URL =
@@ -200,6 +229,20 @@ export default {
     const activeChatId = computed(() => chatStore.activeChatId);
     const activeChat = computed(() => chatStore.activeChat);
     const activeMessages = computed(() => activeChat.value?.messages || []);
+
+    const isVoiceActive = computed(
+      () => isListening.value || isSpeaking.value
+    );
+
+    const voiceStatusLabel = computed(() => {
+      if (isListening.value) return "Listening";
+      if (isSpeaking.value) return "Speaking";
+      return "Voice";
+    });
+
+    const voiceDots = computed(() =>
+      isListening.value ? listeningDots.value : ""
+    );
 
     const formatBody = (text) => {
       if (!text) return "";
@@ -390,13 +433,16 @@ export default {
       currentAudioUrl = URL.createObjectURL(blob);
       audioPlayer.src = currentAudioUrl;
       try {
+        isSpeaking.value = true;
         await audioPlayer.play();
       } catch (error) {
+        isSpeaking.value = false;
         console.error("Failed to play voice response:", error);
       }
     };
 
     audioPlayer.addEventListener("ended", () => {
+      isSpeaking.value = false;
       if (currentAudioUrl) {
         URL.revokeObjectURL(currentAudioUrl);
         currentAudioUrl = null;
@@ -405,27 +451,38 @@ export default {
 
     // New function to handle voice input
     const handleVoiceInput = async () => {
-      if (isLoading.value || isRecording.value || !activeChat.value) return;
+      if (isLoading.value || !activeChat.value) return;
+
+      if (isRecording.value) {
+        if (activeRecorder.value?.stop) {
+          activeRecorder.value.stop();
+        }
+        return;
+      }
 
       isRecording.value = true;
       isListening.value = true;
       startDotAnimation();
 
       try {
-        const audioBlob = await recordUntilSilence();
+        const recorder = recordUntilSilence();
+        activeRecorder.value = recorder;
+        const audioBlob = await recorder.promise;
+        activeRecorder.value = null;
+        if (!audioBlob || audioBlob.size === 0) {
+          return;
+        }
         const {
           audioBlob: replyAudio,
           sessionId,
           userTranscript,
           assistantReply,
-        } = await sendVoicePrompt(audioBlob, voiceSessionId.value);
-
-        if (sessionId) {
-          voiceSessionId.value = sessionId;
-          localStorage.setItem("voice_session_id", sessionId);
-        }
+        } = await sendVoicePrompt(audioBlob, activeChat.value?.sessionId || null);
 
         const chatId = activeChat.value.id;
+        if (sessionId) {
+          await chatStore.setSessionId(chatId, sessionId);
+        }
         if (userTranscript) {
           chatStore.appendMessage(chatId, {
             role: "user",
@@ -434,15 +491,25 @@ export default {
           });
         }
         if (assistantReply) {
+          const extracted = extractJsonFromText(assistantReply);
+          let displayText = extracted.textBefore;
+          if (!displayText && extracted.json && extracted.json.length > 0) {
+            displayText = `Found ${extracted.json.length} email(s):`;
+          } else if (!displayText && !extracted.json) {
+            displayText = assistantReply.trim();
+          }
+
           chatStore.appendMessage(chatId, {
             role: "bot",
-            text: assistantReply.trim(),
-            emails: null,
+            text: displayText,
+            emails: extracted.json,
           });
+
+          if (!extracted.json && replyAudio) {
+            await playReplyAudio(replyAudio);
+          }
         }
         scrollToBottom();
-
-        await playReplyAudio(replyAudio);
       } catch (error) {
         console.error("Voice request failed:", error);
         window.alert("Voice request failed");
@@ -450,6 +517,10 @@ export default {
         isRecording.value = false;
         isListening.value = false;
         stopDotAnimation();
+        activeRecorder.value = null;
+        if (!isListening.value) {
+          isSpeaking.value = false;
+        }
       }
     };
 
@@ -502,6 +573,10 @@ export default {
       isListening,
       listeningDots,
       isRecording,
+      isSpeaking,
+      isVoiceActive,
+      voiceStatusLabel,
+      voiceDots,
       chats,
       activeChatId,
       activeChat,
@@ -522,10 +597,30 @@ export default {
 
 <style scoped>
 .compose-view {
+  --primary-color: #10a37f;
+  --primary-color-light: rgba(16, 163, 127, 0.16);
+  --border-color: rgba(17, 24, 39, 0.12);
+  --light-border-color: rgba(17, 24, 39, 0.08);
+  --hover-bg: rgba(17, 24, 39, 0.05);
+  --content-bg: rgba(255, 255, 255, 0.9);
+  --text-primary: #1f2328;
+  --text-secondary: #667085;
   display: flex;
   flex-direction: column;
   height: 100%;
   padding: 0 1.5rem 1.5rem 0;
+  font-family: "IBM Plex Sans", "Söhne", sans-serif;
+  background: radial-gradient(
+      circle at top right,
+      rgba(16, 163, 127, 0.14),
+      transparent 55%
+    ),
+    radial-gradient(
+      circle at bottom left,
+      rgba(17, 24, 39, 0.08),
+      transparent 45%
+    ),
+    #f6f7f4;
 }
 
 .chat-split {
@@ -643,15 +738,16 @@ export default {
   flex-direction: column;
   flex-grow: 1;
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: 18px;
   overflow: hidden;
-  background-color: var(--content-bg);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(12px);
 }
 
 /* Scrollable messages */
 .chat-history {
   flex-grow: 1;
-  padding: 1rem 1rem 0.75rem;
+  padding: 1.75rem 1.5rem 1rem;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -660,12 +756,13 @@ export default {
 
 /* Message bubbles */
 .message {
-  max-width: 70%;
-  padding: 10px 14px;
-  border-radius: 18px;
-  line-height: 1.5;
-  font-size: 0.95rem;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  max-width: 760px;
+  width: fit-content;
+  padding: 0;
+  border-radius: 16px;
+  line-height: 1.55;
+  font-size: 0.96rem;
+  box-shadow: none;
   word-wrap: break-word;
 }
 
@@ -673,19 +770,32 @@ export default {
   align-self: flex-end;
   background-color: var(--primary-color);
   color: #fff;
-  border-bottom-right-radius: 4px;
+  padding: 10px 14px;
+  border-bottom-right-radius: 6px;
 }
 
 .ai-message {
   align-self: flex-start;
-  background-color: var(--hover-bg);
+  background-color: transparent;
   color: var(--text-primary);
-  border: 1px solid var(--light-border-color);
-  border-bottom-left-radius: 4px;
+  border: none;
+  border-bottom-left-radius: 6px;
 }
 
 .message-text {
   margin: 0;
+  display: inline-block;
+  padding: 10px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--light-border-color);
+  background: rgba(17, 24, 39, 0.04);
+}
+
+.user-message .message-text {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
 }
 
 /* Email cards inside AI messages */
@@ -808,7 +918,7 @@ export default {
 
 .input-wrapper input:focus {
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.15);
+  box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.18);
 }
 
 /* Send & voice buttons */
@@ -826,33 +936,184 @@ export default {
   justify-content: center;
 }
 
-.listening-box {
-  background-color: var(--primary-color);
-  color: #fff;
-  padding: 10px 15px;
-  margin: 0.75rem 1rem 0; /* Align above input area */
-  border-radius: 8px;
-  font-weight: 500;
-  font-size: 1rem;
-  text-align: center;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  display: flex;
-  justify-content: center;
-  align-items: center;
+.voice-inline {
+  align-self: flex-start;
+  background: rgba(17, 24, 39, 0.06);
+  border: 1px solid rgba(17, 24, 39, 0.1);
+  padding: 10px 14px;
+  border-radius: 14px;
+  max-width: 320px;
 }
 
-.dot-animation {
-  display: inline-block;
-  min-width: 15px; /* Ensure space for three dots */
-  margin-left: 5px;
-  font-family: monospace; /* Monospace for consistent dot spacing */
-  overflow: hidden;
+.voice-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.voice-inline-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  box-shadow: 0 0 0 6px rgba(16, 163, 127, 0.12);
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+.voice-inline-wave {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+  height: 18px;
+}
+
+.voice-inline-wave span {
+  width: 4px;
+  height: 100%;
+  background: rgba(16, 163, 127, 0.8);
+  border-radius: 999px;
+  animation: voice-wave 1s ease-in-out infinite;
+}
+
+.voice-inline-wave span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.voice-inline-wave span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+.voice-inline-wave span:nth-child(4) {
+  animation-delay: 0.45s;
+}
+.voice-inline-wave span:nth-child(5) {
+  animation-delay: 0.6s;
+}
+
+.voice-overlay {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(
+      circle at top,
+      rgba(16, 163, 127, 0.25),
+      transparent 60%
+    ),
+    rgba(9, 11, 13, 0.9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  z-index: 50;
+}
+
+.voice-orb {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  display: grid;
+  place-items: center;
+}
+
+.voice-orb-core {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(16, 163, 127, 1),
+    rgba(16, 163, 127, 0.65)
+  );
+  box-shadow: 0 0 24px rgba(16, 163, 127, 0.55);
+  animation: orb-core 1.6s ease-in-out infinite;
+}
+
+.voice-orb-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid rgba(16, 163, 127, 0.35);
+  animation: orb-ring 2.4s ease-out infinite;
+}
+
+.voice-orb-ring.ring-2 {
+  animation-delay: 0.5s;
+}
+
+.voice-orb-ring.ring-3 {
+  animation-delay: 1s;
+}
+
+.voice-overlay-label {
+  color: #f3f4f6;
+  font-size: 1rem;
+  letter-spacing: 0.3px;
+}
+
+.voice-overlay-stop {
+  background: transparent;
+  color: #f3f4f6;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 8px 18px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.voice-overlay-stop:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+}
+
+@keyframes voice-wave {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes orb-core {
+  0%,
+  100% {
+    transform: scale(0.9);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+@keyframes orb-ring {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.15);
+    opacity: 0;
+  }
 }
 
 /* Style for voice button when active */
 .inner-voice.listening-active {
-  background-color: #fdd835; /* A noticeable color when active (e.g., yellow) */
-  color: #333;
+  background-color: #10a37f;
+  color: #fff;
+  box-shadow: 0 0 0 4px rgba(16, 163, 127, 0.2);
 }
 
 .inner-send {

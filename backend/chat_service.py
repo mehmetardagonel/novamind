@@ -558,6 +558,72 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
 
         return summary
 
+    def _get_provider_accounts(self, provider: str) -> list:
+        try:
+            accounts = list_email_accounts(user_id=self.user_id) or []
+        except Exception:
+            return []
+        return [acc for acc in accounts if acc.get("provider") == provider]
+
+    def _resolve_account_from_message(self, accounts: list, message: str) -> str | None:
+        if not accounts:
+            return None
+
+        import re
+
+        email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", message or "")
+        if email_match:
+            email = email_match.group(0).lower()
+            for acc in accounts:
+                if (acc.get("email_address") or "").lower() == email:
+                    return acc.get("id")
+
+        return None
+
+    def _prompt_for_account_choice(self, provider: str, accounts: list, payload: dict, mode: str) -> str:
+        provider_label = "Gmail" if provider == "gmail" else "Outlook"
+        lines = []
+        for idx, acc in enumerate(accounts, start=1):
+            email = acc.get("email_address", "Unknown")
+            display = acc.get("display_name") or email
+            lines.append(f"{idx}. {display} ({email})")
+
+        self.pending_selection = {
+            "action": "account_choice",
+            "provider": provider,
+            "accounts": accounts,
+            "payload": payload,
+            "mode": mode,
+        }
+
+        return (
+            f"I see multiple {provider_label} accounts. Which one should I use?\n\n"
+            + "\n".join(lines)
+            + "\n\nReply with a number or the email address."
+        )
+
+    def _build_fetch_intro(self, payload: dict) -> str:
+        provider = payload.get("provider")
+        time_period = payload.get("time_period")
+        importance = payload.get("importance")
+        max_results = payload.get("max_results", 25)
+
+        provider_label = "Outlook" if provider == "outlook" else "Gmail" if provider == "gmail" else ""
+        provider_prefix = f"{provider_label} " if provider_label else ""
+
+        if importance and time_period:
+            period_label = str(time_period).replace("_", " ")
+            return f"Here are your important {provider_prefix}emails from {period_label}:"
+        if provider == "outlook" and int(max_results) == 1:
+            return "Here’s your latest Outlook email:"
+        if provider == "gmail" and int(max_results) == 1:
+            return "Here’s your latest Gmail email:"
+        if provider == "outlook":
+            return "Here are your Outlook inbox emails:"
+        if provider == "gmail":
+            return "Here are your Gmail inbox emails:"
+        return "Here are your inbox emails:"
+
     def _maybe_handle_summary_request(self, raw_user_message: str) -> str | None:
         """Handle summary-style inbox requests deterministically."""
         msg = (raw_user_message or "").strip()
@@ -606,6 +672,10 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
         if not is_emailish and not time_period and not wants_summary:
             return None
 
+        list_keywords = ["show", "list", "display", "get", "fetch", "see"]
+        if wants_significant and not wants_summary and any(k in msg_lower for k in list_keywords):
+            return None
+
         provider = None
         if "outlook" in msg_lower:
             provider = "outlook"
@@ -620,6 +690,20 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
             payload["provider"] = provider
         if importance is not None:
             payload["importance"] = importance
+
+        if provider:
+            accounts = self._get_provider_accounts(provider)
+            if len(accounts) > 1:
+                matched_id = self._resolve_account_from_message(accounts, msg)
+                if matched_id:
+                    payload["account_id"] = matched_id
+                else:
+                    return self._prompt_for_account_choice(
+                        provider=provider,
+                        accounts=accounts,
+                        payload=payload,
+                        mode="summary",
+                    )
 
         emails = self._parse_fetch_mails(json.dumps(payload))
         if isinstance(emails, dict) and "error" in emails:
@@ -778,6 +862,20 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
             payload["importance"] = importance
         if time_period:
             payload["time_period"] = time_period
+
+        if provider:
+            accounts = self._get_provider_accounts(provider)
+            if len(accounts) > 1:
+                matched_id = self._resolve_account_from_message(accounts, msg)
+                if matched_id:
+                    payload["account_id"] = matched_id
+                else:
+                    return self._prompt_for_account_choice(
+                        provider=provider,
+                        accounts=accounts,
+                        payload=payload,
+                        mode="fetch",
+                    )
         try:
             emails_block = self._format_fetch_mails_response(json.dumps(payload))
         except Exception as e:
@@ -1477,6 +1575,61 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                     except Exception as e:
                         logger.error(f"Provider choice fetch failed: {e}")
                         return "I couldn't fetch emails for that account. Please try again."
+
+                if action == "account_choice":
+                    accounts = self.pending_selection.get("accounts") or []
+                    payload = self.pending_selection.get("payload") or {}
+                    mode = self.pending_selection.get("mode") or "fetch"
+                    selection = message_stripped.strip()
+
+                    selected = None
+                    if selection.isdigit():
+                        idx = int(selection)
+                        if 1 <= idx <= len(accounts):
+                            selected = accounts[idx - 1]
+                    else:
+                        for acc in accounts:
+                            email = (acc.get("email_address") or "").lower()
+                            if email and email in selection.lower():
+                                selected = acc
+                                break
+
+                    if not selected:
+                        return "Please reply with a number or the email address of the account."
+
+                    payload["account_id"] = selected.get("id")
+                    self.pending_selection = None
+
+                    if mode == "summary":
+                        emails = self._parse_fetch_mails(json.dumps(payload))
+                        if isinstance(emails, dict) and "error" in emails:
+                            return json.dumps(emails, indent=2, cls=DateTimeEncoder)
+                        if not isinstance(emails, list):
+                            return "I couldn't fetch your emails right now. Please try again."
+
+                        summary = self._summarize_emails_with_llm(
+                            emails=emails,
+                            time_period=payload.get("time_period"),
+                            importance=payload.get("importance"),
+                            provider=payload.get("provider"),
+                        )
+                        if summary:
+                            self._append_to_history(message_stripped, summary)
+                            return summary
+                        fallback_summary = self._build_summary_from_emails(
+                            emails=emails,
+                            time_period=payload.get("time_period"),
+                            importance=payload.get("importance"),
+                            provider=payload.get("provider"),
+                        )
+                        self._append_to_history(message_stripped, fallback_summary)
+                        return fallback_summary
+
+                    emails_block = self._format_fetch_mails_response(json.dumps(payload))
+                    intro = self._build_fetch_intro(payload)
+                    response_text = f"{intro}\n\n{emails_block}"
+                    self._append_to_history(message_stripped, response_text)
+                    return response_text
 
                 if action == "draft_awaiting_recipient":
                     return self._handle_draft_recipient_input(message_stripped)
