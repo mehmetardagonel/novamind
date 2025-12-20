@@ -449,6 +449,200 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
             return user_message.split(marker, 1)[1].strip()
         return user_message.strip()
 
+    def _build_summary_from_emails(
+        self,
+        emails: list,
+        time_period: str | None = None,
+        importance: bool | None = None,
+        provider: str | None = None,
+        max_items: int = 5,
+    ) -> str:
+        if not emails:
+            period_label = (time_period or "recent").replace("_", " ")
+            if importance:
+                return f"I checked your inbox and didn’t find any significant emails for {period_label}."
+            return f"I checked your inbox and didn’t find any emails to summarize for {period_label}."
+
+        total = len(emails)
+        period_label = (time_period or "recent").replace("_", " ")
+        provider_label = (
+            "Outlook" if provider == "outlook" else "Gmail" if provider == "gmail" else ""
+        )
+        provider_prefix = f"{provider_label} " if provider_label else ""
+
+        items = []
+        for email in emails[:max_items]:
+            if isinstance(email, dict):
+                sender = (email.get("sender") or "Unknown sender").strip()
+                subject = (email.get("subject") or "(No subject)").strip()
+            else:
+                sender = getattr(email, "sender", "Unknown sender")
+                subject = getattr(email, "subject", "(No subject)")
+            sender = sender.replace('"', "")
+            items.append(f"{subject} from {sender}")
+
+        highlights = "; ".join(items)
+        if total > max_items:
+            highlights = f"{highlights}, and {total - max_items} more"
+
+        if importance:
+            return (
+                f"Today’s significant {provider_prefix}emails ({total}) include {highlights}."
+            )
+        return f"Today’s {provider_prefix}emails ({total}) include {highlights}."
+
+    def _summarize_emails_with_llm(
+        self,
+        emails: list,
+        time_period: str | None = None,
+        importance: bool | None = None,
+        provider: str | None = None,
+        max_items: int = 20,
+    ) -> str | None:
+        if not emails:
+            return None
+
+        period_label = (time_period or "recent").replace("_", " ")
+        provider_label = (
+            "Outlook" if provider == "outlook" else "Gmail" if provider == "gmail" else ""
+        )
+        provider_prefix = f"{provider_label} " if provider_label else ""
+        importance_label = "significant " if importance else ""
+
+        items = []
+        for email in emails[:max_items]:
+            if isinstance(email, dict):
+                sender = (email.get("sender") or "Unknown sender").strip()
+                subject = (email.get("subject") or "(No subject)").strip()
+                body = (email.get("body") or "").strip()
+                date = email.get("date")
+            else:
+                sender = getattr(email, "sender", "Unknown sender")
+                subject = getattr(email, "subject", "(No subject)")
+                body = getattr(email, "body", "")
+                date = getattr(email, "date", None)
+
+            snippet = " ".join(body.split())
+            if len(snippet) > 180:
+                snippet = snippet[:180].rstrip() + "..."
+            date_str = date.isoformat() if hasattr(date, "isoformat") else str(date or "")
+            items.append(
+                f"- Subject: {subject}\n  From: {sender}\n  Date: {date_str}\n  Snippet: {snippet}"
+            )
+
+        prompt = (
+            "You are an email assistant. Write a concise, human-sounding paragraph summary "
+            f"of the user's {importance_label}{provider_prefix}emails from {period_label}. "
+            "Focus on the main topics and any action items. "
+            "Use 2-4 sentences. Do NOT use bullet points, lists, JSON, or code fences.\n\n"
+            "Emails:\n" + "\n".join(items)
+        )
+
+        try:
+            response = self.llm.invoke(prompt)
+            summary = response.content.strip() if hasattr(response, "content") else str(response).strip()
+        except Exception as e:
+            logger.warning(f"LLM summary failed: {e}")
+            return None
+
+        if not summary:
+            return None
+
+        import re
+
+        summary = re.sub(r"```[\s\S]*?```", "", summary).strip()
+        if not summary or summary.lower().startswith("```"):
+            return None
+        if any(token in summary for token in ["```json", "{", "[", "]"]):
+            return None
+
+        return summary
+
+    def _maybe_handle_summary_request(self, raw_user_message: str) -> str | None:
+        """Handle summary-style inbox requests deterministically."""
+        msg = (raw_user_message or "").strip()
+        if not msg:
+            return None
+
+        msg_lower = msg.lower()
+
+        if any(k in msg_lower for k in ["draft", "send", "reply", "forward"]):
+            return None
+
+        summary_keywords = [
+            "summarize",
+            "summarise",
+            "summary",
+            "recap",
+            "overview",
+            "highlight",
+            "highlights",
+            "brief",
+            "news",
+            "updates",
+        ]
+        significant_keywords = ["significant", "important", "priority", "high priority", "urgent"]
+        email_keywords = ["email", "emails", "inbox", "message", "messages", "mail", "mails"]
+
+        wants_summary = any(k in msg_lower for k in summary_keywords)
+        wants_significant = any(k in msg_lower for k in significant_keywords)
+
+        time_period = None
+        if any(k in msg_lower for k in ["this week", "last week", "past week", "recent week"]):
+            time_period = "last_week"
+        elif any(k in msg_lower for k in ["this month", "last month", "past month"]):
+            time_period = "last_month"
+        elif any(k in msg_lower for k in ["last 3 months", "past 3 months", "three months"]):
+            time_period = "last_3_months"
+        elif "yesterday" in msg_lower:
+            time_period = "yesterday"
+        elif "today" in msg_lower:
+            time_period = "today"
+
+        if not wants_summary and not (wants_significant and time_period):
+            return None
+
+        is_emailish = any(k in msg_lower for k in email_keywords)
+        if not is_emailish and not time_period and not wants_summary:
+            return None
+
+        provider = None
+        if "outlook" in msg_lower:
+            provider = "outlook"
+        elif "gmail" in msg_lower:
+            provider = "gmail"
+
+        importance = True if wants_significant else None
+        time_period = time_period or "today"
+
+        payload = {"folder": "inbox", "max_results": 25, "time_period": time_period}
+        if provider:
+            payload["provider"] = provider
+        if importance is not None:
+            payload["importance"] = importance
+
+        emails = self._parse_fetch_mails(json.dumps(payload))
+        if isinstance(emails, dict) and "error" in emails:
+            return json.dumps(emails, indent=2, cls=DateTimeEncoder)
+        if not isinstance(emails, list):
+            return "I couldn't fetch your emails right now. Please try again."
+
+        llm_summary = self._summarize_emails_with_llm(
+            emails=emails,
+            time_period=time_period,
+            importance=importance,
+            provider=provider,
+        )
+        if llm_summary:
+            return llm_summary
+
+        return self._build_summary_from_emails(
+            emails=emails,
+            time_period=time_period,
+            importance=importance,
+            provider=provider,
+        )
+
     def _maybe_handle_direct_inbox_fetch(self, raw_user_message: str) -> str | None:
         """Handle common inbox requests without the LLM.
 
@@ -696,20 +890,24 @@ NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
             return json.dumps(emails, indent=2, cls=DateTimeEncoder)
 
         if isinstance(emails, list):
-            emails_for_json = []
-            for email in emails:
-                try:
-                    e_copy = email.copy() if isinstance(email, dict) else email.model_dump()
-                    if "body" in e_copy and e_copy["body"] and len(e_copy["body"]) > 200:
-                        e_copy["body"] = e_copy["body"][:200] + "..."
-                    emails_for_json.append(e_copy)
-                except Exception:
-                    emails_for_json.append(email)
-
-            json_str = json.dumps(emails_for_json, indent=2, cls=DateTimeEncoder)
-            return f"```json\n{json_str}\n```"
+            return self._format_email_list_json_block(emails)
 
         return json.dumps(emails, indent=2, cls=DateTimeEncoder)
+
+    def _format_email_list_json_block(self, emails: list) -> str:
+        """Return a JSON block for a list of emails, truncating long bodies."""
+        emails_for_json = []
+        for email in emails:
+            try:
+                e_copy = email.copy() if isinstance(email, dict) else email.model_dump()
+                if "body" in e_copy and e_copy["body"] and len(e_copy["body"]) > 200:
+                    e_copy["body"] = e_copy["body"][:200] + "..."
+                emails_for_json.append(e_copy)
+            except Exception:
+                emails_for_json.append(email)
+
+        json_str = json.dumps(emails_for_json, indent=2, cls=DateTimeEncoder)
+        return f"```json\n{json_str}\n```"
 
     def _parse_move_mails_by_sender(self, input_str: str) -> dict:
         try:
@@ -850,18 +1048,42 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
             return None
 
         text = response_text.strip()
+        fetch_keys = {"time_period", "sender", "label", "folder", "max_results",
+                     "importance", "since_date", "until_date", "provider", "subject_keyword"}
 
-        # Pattern 1: ```json\n{"_arg1": "{...}"}\n``` or {"__arg1": "{...}"}
-        # Handle both single and double underscore
-        code_block_match = re.search(r"```json\s*\{[^}]*[\"']_+arg1[\"']\s*:\s*[\"'](.+?)[\"']\s*\}\s*```", text, re.DOTALL)
+        def _coerce_arg1(value: object) -> dict | None:
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except (json.JSONDecodeError, ValueError):
+                    return None
+            return None
+
+        def _extract_from_parsed(parsed: object) -> dict | None:
+            if not isinstance(parsed, dict):
+                return None
+            for key, value in parsed.items():
+                if isinstance(key, str) and key.lstrip("_") == "arg1":
+                    coerced = _coerce_arg1(value)
+                    if coerced:
+                        return coerced
+            if any(k in parsed for k in fetch_keys):
+                return parsed
+            return None
+
+        # Pattern 1: any JSON block that contains tool args (including _arg1 wrappers)
+        code_block_match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text, re.DOTALL)
         if code_block_match:
+            json_str = (code_block_match.group(1) or "").strip()
             try:
-                inner_json = code_block_match.group(1)
-                # Unescape the inner JSON
-                inner_json = inner_json.replace('\\"', '"').replace('\\\\', '\\')
-                return json.loads(inner_json)
+                parsed = json.loads(json_str)
             except (json.JSONDecodeError, ValueError):
-                pass
+                parsed = None
+            extracted = _extract_from_parsed(parsed)
+            if extracted:
+                return extracted
 
         # Pattern 2: {"_arg1": "{...}"} or {"__arg1": "{...}"}
         arg1_match = re.search(r'\{[^}]*["\']_+arg1["\']\s*:\s*["\'](.+?)["\']\s*\}', text, re.DOTALL)
@@ -882,13 +1104,10 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                 json_str = direct_json_match.group(1).strip()
                 parsed = json.loads(json_str)
 
-                # Check if this looks like fetch_mails arguments
-                fetch_keys = {"time_period", "sender", "label", "folder", "max_results",
-                             "importance", "since_date", "until_date", "provider", "subject_keyword"}
-
-                if any(k in parsed for k in fetch_keys):
-                    logger.info(f"[MALFORMED_DETECTION] Found direct JSON tool args: {parsed}")
-                    return parsed
+                extracted = _extract_from_parsed(parsed)
+                if extracted:
+                    logger.info(f"[MALFORMED_DETECTION] Found direct JSON tool args: {extracted}")
+                    return extracted
             except (json.JSONDecodeError, ValueError) as e:
                 logger.debug(f"Failed to parse direct JSON: {e}")
                 pass
@@ -1299,6 +1518,11 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                 "delete draft",
             ]
             is_draft_related = any(kw in message_stripped.lower() for kw in draft_keywords)
+
+            summary_response = self._maybe_handle_summary_request(message_stripped)
+            if summary_response:
+                self._append_to_history(message_stripped, summary_response)
+                return summary_response
 
             direct_fetch = self._maybe_handle_direct_inbox_fetch(message_stripped)
             if direct_fetch:

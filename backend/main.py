@@ -175,6 +175,23 @@ origins = [
 if FRONTEND_ORIGIN not in origins:
     origins.append(FRONTEND_ORIGIN)
 
+# Allow localhost and 127.0.0.1 variants for the selected frontend origin.
+def _add_loopback_variant(origin: str) -> None:
+    split = urlsplit(origin)
+    host = split.hostname
+    if host == "localhost":
+        alt_host = "127.0.0.1"
+    elif host == "127.0.0.1":
+        alt_host = "localhost"
+    else:
+        return
+    port = f":{split.port}" if split.port else ""
+    alt_origin = f"{split.scheme}://{alt_host}{port}"
+    if alt_origin not in origins:
+        origins.append(alt_origin)
+
+_add_loopback_variant(FRONTEND_ORIGIN)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
