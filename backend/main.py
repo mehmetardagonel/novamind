@@ -59,6 +59,12 @@ from gmail_service import (
     list_labels_multi,
     create_label_multi,
     delete_label_multi,
+    # Multi-provider functions (Gmail + Outlook)
+    fetch_sent_multi_provider,
+    fetch_trash_multi_provider,
+    trash_message_multi_provider,
+    untrash_message_multi_provider,
+    modify_message_labels_multi_provider,
     CLIENT_CONFIG,
     SCOPES
 )
@@ -555,8 +561,12 @@ async def list_drafts(user_id: str = Header(..., alias="X-User-Id")):
 
 @app.get("/emails/sent", response_model=List[EmailOut])
 async def list_sent(user_id: str = Header(..., alias="X-User-Id")):
+    """
+    Retrieve sent emails from all connected accounts (Gmail + Outlook).
+    """
     try:
-        emails = await fetch_messages_by_label_multi(user_id, "SENT", max_per_account=50)
+        # Use unified multi-provider sent fetching (Gmail + Outlook)
+        emails = await fetch_sent_multi_provider(user_id, max_per_account=50)
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -588,10 +598,11 @@ async def list_spam(user_id: str = Header(..., alias="X-User-Id")):
 @app.get("/emails/trash", response_model=List[EmailOut])
 async def list_trash(user_id: str = Header(..., alias="X-User-Id")):
     """
-    Retrieve deleted emails (Trash folder).
+    Retrieve deleted emails (Trash folder) from all connected accounts (Gmail + Outlook).
     """
     try:
-        emails = await fetch_messages_by_label_multi(user_id, "TRASH", max_per_account=50, include_spam_trash=True)
+        # Use unified multi-provider trash fetching (Gmail + Outlook)
+        emails = await fetch_trash_multi_provider(user_id, max_per_account=50)
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -599,24 +610,26 @@ async def list_trash(user_id: str = Header(..., alias="X-User-Id")):
 @app.delete("/emails/{message_id}")
 async def delete_email(message_id: str, user_id: str = Header(..., alias="X-User-Id")):
     """
-    Move an email to Trash.
+    Move an email to Trash. Works for both Gmail and Outlook messages.
     """
     try:
-        resp = await trash_message_multi(user_id, message_id)
+        # Use multi-provider function to handle both Gmail and Outlook
+        resp = await trash_message_multi_provider(user_id, message_id)
         return {
             "status": "trashed",
             "message_id": resp.get("id", message_id),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 @app.post("/emails/{message_id}/restore")
 async def restore_email(message_id: str, user_id: str = Header(..., alias="X-User-Id")):
     """
-    Restore an email from Trash back to the mailbox (Inbox).
+    Restore an email from Trash back to the mailbox (Inbox). Works for both Gmail and Outlook messages.
     """
     try:
-        resp = await untrash_message_multi(user_id, message_id)
+        # Use multi-provider function to handle both Gmail and Outlook
+        resp = await untrash_message_multi_provider(user_id, message_id)
         return {
             "status": "restored",
             "message_id": resp.get("id", message_id),
@@ -780,7 +793,8 @@ async def update_email_labels(
     user_id: str = Header(..., alias="X-User-Id"),
 ):
     """
-    Add/remove labels on a specific email.
+    Add/remove labels on a specific email. Works for both Gmail and Outlook messages.
+    For Gmail, uses labels. For Outlook, uses categories.
 
     Body example:
     {
@@ -789,7 +803,8 @@ async def update_email_labels(
     }
     """
     try:
-        resp = await modify_message_labels_multi(
+        # Use multi-provider function to handle both Gmail labels and Outlook categories
+        resp = await modify_message_labels_multi_provider(
             user_id=user_id,
             message_id=message_id,
             add_label_ids=payload.add_label_ids,

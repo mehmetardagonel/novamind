@@ -1211,15 +1211,17 @@ async def fetch_drafts_multi_provider(user_id: str, max_per_account: int = 25) -
                     # Convert to EmailOut format
                     for draft in outlook_drafts_raw:
                         email_out = EmailOut(
-                            id=draft.get("message_id", ""),
-                            from_addr=draft.get("sender", ""),
-                            to=draft.get("recipient", ""),
+                            message_id=draft.get("message_id", ""),
+                            sender=draft.get("sender", ""),
+                            recipient=draft.get("recipient", ""),
                             subject=draft.get("subject", "(No Subject)"),
-                            snippet=draft.get("snippet", ""),
+                            body=draft.get("body", draft.get("snippet", "")),
                             date=draft.get("date", datetime.now()),
-                            is_read=draft.get("is_read", False),
-                            labels=[],
-                            classifications={"type": "draft", "provider": "outlook"},
+                            ml_prediction=None,
+                            label_ids=[],
+                            account_id=account_id,
+                            account_email=account.get("email_address", ""),
+                            provider="outlook",
                         )
                         all_drafts.append(email_out)
 
@@ -1362,3 +1364,360 @@ async def delete_label_multi(user_id: str, label_id: str) -> None:
     """
     service = await get_primary_account_service(user_id)
     service.users().labels().delete(userId="me", id=label_id).execute()
+
+
+async def fetch_sent_multi_provider(user_id: str, max_per_account: int = 25) -> List[EmailOut]:
+    """
+    Fetch sent emails from ALL connected accounts (Gmail + Outlook).
+
+    Args:
+        user_id: User ID from Supabase auth
+        max_per_account: Max results per account
+
+    Returns:
+        List of EmailOut objects sorted by date (newest first)
+    """
+    from email_account_service import email_account_service
+    from outlook_service import fetch_sent as fetch_outlook_sent
+
+    all_sent = []
+
+    # Get all active accounts for user
+    accounts = await email_account_service.get_all_accounts(user_id)
+
+    if not accounts:
+        logger.warning(f"No email accounts found for user {user_id}")
+        return []
+
+    # Fetch from each account based on provider
+    for account in accounts:
+        try:
+            provider = account.get("provider", "gmail")
+            account_id = account.get("id")
+            account_email = account.get("email_address", "")
+
+            if provider == "gmail":
+                # Fetch Gmail sent emails
+                logger.info(f"Fetching Gmail sent from account {account_email}")
+                try:
+                    service = await get_user_gmail_service(user_id, account_id)
+                    gmail_sent = fetch_messages_with_service(
+                        service,
+                        query=None,
+                        max_results=max_per_account,
+                        label_ids=["SENT"]
+                    )
+                    # Add account metadata
+                    for email in gmail_sent:
+                        email.account_id = account_id
+                        email.account_email = account_email
+                        email.provider = "gmail"
+                    all_sent.extend(gmail_sent)
+                except Exception as e:
+                    logger.error(f"Error fetching Gmail sent for {account_email}: {e}")
+                    continue
+
+            elif provider == "outlook":
+                # Fetch Outlook sent emails
+                logger.info(f"Fetching Outlook sent from account {account_email}")
+                try:
+                    access_token = await email_account_service.get_outlook_access_token(user_id, account_id)
+                    outlook_sent_raw = await fetch_outlook_sent(access_token, max_results=max_per_account)
+
+                    # Convert to EmailOut format
+                    for msg in outlook_sent_raw:
+                        email_out = EmailOut(
+                            message_id=msg.get("message_id", ""),
+                            sender=msg.get("sender", ""),
+                            recipient=msg.get("recipient", ""),
+                            subject=msg.get("subject", "(No Subject)"),
+                            body=msg.get("body", msg.get("snippet", "")),
+                            date=msg.get("date", datetime.now()),
+                            ml_prediction=None,
+                            label_ids=["SENT"],
+                            account_id=account_id,
+                            account_email=account_email,
+                            provider="outlook",
+                        )
+                        all_sent.append(email_out)
+
+                except Exception as e:
+                    logger.error(f"Error fetching Outlook sent for {account_email}: {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Error fetching sent from account {account.get('email_address')}: {e}")
+            continue
+
+    # Sort all sent by date (newest first)
+    from datetime import datetime as dt_class, timezone
+
+    def normalize_date(date_obj):
+        if date_obj is None:
+            return dt_class.min.replace(tzinfo=timezone.utc)
+        if date_obj.tzinfo is None:
+            return date_obj.replace(tzinfo=timezone.utc)
+        return date_obj.astimezone(timezone.utc)
+
+    all_sent.sort(key=lambda x: normalize_date(x.date), reverse=True)
+
+    logger.info(f"Fetched {len(all_sent)} total sent emails from {len(accounts)} accounts for user {user_id}")
+    return all_sent
+
+
+async def fetch_trash_multi_provider(user_id: str, max_per_account: int = 25) -> List[EmailOut]:
+    """
+    Fetch trash/deleted emails from ALL connected accounts (Gmail + Outlook).
+
+    Args:
+        user_id: User ID from Supabase auth
+        max_per_account: Max results per account
+
+    Returns:
+        List of EmailOut objects sorted by date (newest first)
+    """
+    from email_account_service import email_account_service
+    from outlook_service import fetch_trash as fetch_outlook_trash
+
+    all_trash = []
+
+    # Get all active accounts for user
+    accounts = await email_account_service.get_all_accounts(user_id)
+
+    if not accounts:
+        logger.warning(f"No email accounts found for user {user_id}")
+        return []
+
+    # Fetch from each account based on provider
+    for account in accounts:
+        try:
+            provider = account.get("provider", "gmail")
+            account_id = account.get("id")
+            account_email = account.get("email_address", "")
+
+            if provider == "gmail":
+                # Fetch Gmail trash
+                logger.info(f"Fetching Gmail trash from account {account_email}")
+                try:
+                    service = await get_user_gmail_service(user_id, account_id)
+                    gmail_trash = fetch_messages_with_service(
+                        service,
+                        query=None,
+                        max_results=max_per_account,
+                        label_ids=["TRASH"]
+                    )
+                    # Add account metadata
+                    for email in gmail_trash:
+                        email.account_id = account_id
+                        email.account_email = account_email
+                        email.provider = "gmail"
+                    all_trash.extend(gmail_trash)
+                except Exception as e:
+                    logger.error(f"Error fetching Gmail trash for {account_email}: {e}")
+                    continue
+
+            elif provider == "outlook":
+                # Fetch Outlook trash
+                logger.info(f"Fetching Outlook trash from account {account_email}")
+                try:
+                    access_token = await email_account_service.get_outlook_access_token(user_id, account_id)
+                    outlook_trash_raw = await fetch_outlook_trash(access_token, max_results=max_per_account)
+
+                    # Convert to EmailOut format
+                    for msg in outlook_trash_raw:
+                        email_out = EmailOut(
+                            message_id=msg.get("message_id", ""),
+                            sender=msg.get("sender", ""),
+                            recipient=msg.get("recipient", ""),
+                            subject=msg.get("subject", "(No Subject)"),
+                            body=msg.get("body", msg.get("snippet", "")),
+                            date=msg.get("date", datetime.now()),
+                            ml_prediction=None,
+                            label_ids=["TRASH"],
+                            account_id=account_id,
+                            account_email=account_email,
+                            provider="outlook",
+                        )
+                        all_trash.append(email_out)
+
+                except Exception as e:
+                    logger.error(f"Error fetching Outlook trash for {account_email}: {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Error fetching trash from account {account.get('email_address')}: {e}")
+            continue
+
+    # Sort all trash by date (newest first)
+    from datetime import datetime as dt_class, timezone
+
+    def normalize_date(date_obj):
+        if date_obj is None:
+            return dt_class.min.replace(tzinfo=timezone.utc)
+        if date_obj.tzinfo is None:
+            return date_obj.replace(tzinfo=timezone.utc)
+        return date_obj.astimezone(timezone.utc)
+
+    all_trash.sort(key=lambda x: normalize_date(x.date), reverse=True)
+
+    logger.info(f"Fetched {len(all_trash)} total trash emails from {len(accounts)} accounts for user {user_id}")
+    return all_trash
+
+
+async def trash_message_multi_provider(user_id: str, message_id: str) -> Dict:
+    """
+    Move message to trash - routes to Gmail or Outlook based on which account owns the message.
+    """
+    from email_account_service import email_account_service
+    from gmail_account_service import gmail_account_service
+    from outlook_service import move_to_trash as outlook_trash
+
+    # First try Gmail accounts
+    gmail_accounts = await gmail_account_service.get_all_accounts(user_id)
+    for account in (gmail_accounts or []):
+        try:
+            service = await get_user_gmail_service(user_id, account["id"])
+            result = service.users().messages().trash(userId="me", id=message_id).execute()
+            logger.info(f"Trashed Gmail message {message_id} in account {account['email_address']}")
+            return result
+        except Exception as e:
+            # Message not found in this account, try next
+            continue
+
+    # Then try Outlook accounts
+    outlook_accounts = await email_account_service.get_accounts_by_provider(user_id, "outlook")
+    for account in (outlook_accounts or []):
+        try:
+            access_token = await email_account_service.get_outlook_access_token(user_id, account["id"])
+            result = await outlook_trash(access_token, message_id)
+            if result.get("success"):
+                logger.info(f"Trashed Outlook message {message_id} in account {account['email_address']}")
+                return result
+        except Exception as e:
+            # Message not found in this account, try next
+            continue
+
+    raise Exception(f"Message {message_id} not found in any Gmail or Outlook account")
+
+
+async def untrash_message_multi_provider(user_id: str, message_id: str) -> Dict:
+    """
+    Restore message from trash - routes to Gmail or Outlook based on which account owns the message.
+    """
+    from email_account_service import email_account_service
+    from gmail_account_service import gmail_account_service
+    from outlook_service import restore_from_trash as outlook_restore
+
+    # First try Gmail accounts
+    gmail_accounts = await gmail_account_service.get_all_accounts(user_id)
+    for account in (gmail_accounts or []):
+        try:
+            service = await get_user_gmail_service(user_id, account["id"])
+            result = service.users().messages().untrash(userId="me", id=message_id).execute()
+            logger.info(f"Restored Gmail message {message_id} in account {account['email_address']}")
+            return result
+        except Exception as e:
+            # Message not found in this account, try next
+            continue
+
+    # Then try Outlook accounts
+    outlook_accounts = await email_account_service.get_accounts_by_provider(user_id, "outlook")
+    for account in (outlook_accounts or []):
+        try:
+            access_token = await email_account_service.get_outlook_access_token(user_id, account["id"])
+            result = await outlook_restore(access_token, message_id)
+            if result.get("success"):
+                logger.info(f"Restored Outlook message {message_id} in account {account['email_address']}")
+                return result
+        except Exception as e:
+            # Message not found in this account, try next
+            continue
+
+    raise Exception(f"Message {message_id} not found in any Gmail or Outlook account")
+
+
+async def modify_message_labels_multi_provider(
+    user_id: str,
+    message_id: str,
+    add_label_ids: List[str] = None,
+    remove_label_ids: List[str] = None
+) -> Dict:
+    """
+    Modify message labels/categories - routes to Gmail or Outlook based on which account owns the message.
+    For Outlook, uses categories instead of labels.
+    """
+    from email_account_service import email_account_service
+    from gmail_account_service import gmail_account_service
+    from outlook_service import outlook_service
+
+    # First try Gmail accounts
+    gmail_accounts = await gmail_account_service.get_all_accounts(user_id)
+    for account in (gmail_accounts or []):
+        try:
+            service = await get_user_gmail_service(user_id, account["id"])
+            body = {
+                "addLabelIds": add_label_ids or [],
+                "removeLabelIds": remove_label_ids or []
+            }
+            result = service.users().messages().modify(userId="me", id=message_id, body=body).execute()
+            logger.info(f"Modified Gmail labels for message {message_id} in account {account['email_address']}")
+            return result
+        except Exception as e:
+            # Message not found in this account, try next
+            continue
+
+    # Then try Outlook accounts (using categories)
+    outlook_accounts = await email_account_service.get_accounts_by_provider(user_id, "outlook")
+    for account in (outlook_accounts or []):
+        try:
+            access_token = await email_account_service.get_outlook_access_token(user_id, account["id"])
+
+            # For Outlook, we need to get current categories first, then modify them
+            # The category names in Outlook are just strings
+            import requests
+
+            # Get current message to see existing categories
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
+
+            # Get current message
+            get_url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}?$select=categories"
+            get_resp = requests.get(get_url, headers=headers)
+
+            if get_resp.status_code != 200:
+                continue  # Message not found in this account
+
+            current_categories = get_resp.json().get("categories", [])
+
+            # Apply changes
+            new_categories = set(current_categories)
+
+            # Add new labels/categories
+            for label in (add_label_ids or []):
+                # Skip system labels that don't map to Outlook categories
+                if label in ["INBOX", "SENT", "DRAFT", "TRASH", "SPAM", "STARRED", "UNREAD", "IMPORTANT"]:
+                    continue
+                new_categories.add(label)
+
+            # Remove labels/categories
+            for label in (remove_label_ids or []):
+                if label in new_categories:
+                    new_categories.discard(label)
+
+            # Update the message
+            patch_url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}"
+            patch_data = {"categories": list(new_categories)}
+            patch_resp = requests.patch(patch_url, headers=headers, json=patch_data)
+
+            if patch_resp.status_code in [200, 204]:
+                logger.info(f"Modified Outlook categories for message {message_id} in account {account['email_address']}")
+                return {"success": True, "id": message_id, "categories": list(new_categories)}
+
+        except Exception as e:
+            # Message not found in this account, try next
+            logger.error(f"Error modifying Outlook labels: {e}")
+            continue
+
+    raise Exception(f"Message {message_id} not found in any Gmail or Outlook account")

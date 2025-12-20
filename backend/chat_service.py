@@ -837,8 +837,103 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
             logger.warning(f"Gemini body enhancement failed for draft {draft_id}: {str(e)}")
             return instruction
 
+    def _detect_malformed_tool_output(self, response_text: str) -> dict | None:
+        """
+        Detect if the response is a malformed tool call output (Gemini sometimes outputs
+        tool arguments as text instead of executing the tool).
+
+        Returns parsed tool arguments if detected, None otherwise.
+        """
+        import re
+
+        if not response_text:
+            return None
+
+        text = response_text.strip()
+
+        # Pattern 1: ```json\n{"_arg1": "{...}"}\n``` or {"__arg1": "{...}"}
+        # Handle both single and double underscore
+        code_block_match = re.search(r"```json\s*\{[^}]*[\"']_+arg1[\"']\s*:\s*[\"'](.+?)[\"']\s*\}\s*```", text, re.DOTALL)
+        if code_block_match:
+            try:
+                inner_json = code_block_match.group(1)
+                # Unescape the inner JSON
+                inner_json = inner_json.replace('\\"', '"').replace('\\\\', '\\')
+                return json.loads(inner_json)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Pattern 2: {"_arg1": "{...}"} or {"__arg1": "{...}"}
+        arg1_match = re.search(r'\{[^}]*["\']_+arg1["\']\s*:\s*["\'](.+?)["\']\s*\}', text, re.DOTALL)
+        if arg1_match:
+            try:
+                inner_json = arg1_match.group(1)
+                inner_json = inner_json.replace('\\"', '"').replace('\\\\', '\\')
+                return json.loads(inner_json)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Pattern 3: ```json\n{...tool arguments directly...}\n```
+        # This handles cases where Gemini outputs tool arguments directly in a code block
+        # without the _arg1 wrapper
+        direct_json_match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text)
+        if direct_json_match:
+            try:
+                json_str = direct_json_match.group(1).strip()
+                parsed = json.loads(json_str)
+
+                # Check if this looks like fetch_mails arguments
+                fetch_keys = {"time_period", "sender", "label", "folder", "max_results",
+                             "importance", "since_date", "until_date", "provider", "subject_keyword"}
+
+                if any(k in parsed for k in fetch_keys):
+                    logger.info(f"[MALFORMED_DETECTION] Found direct JSON tool args: {parsed}")
+                    return parsed
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.debug(f"Failed to parse direct JSON: {e}")
+                pass
+
+        return None
+
+    def _handle_malformed_tool_output(self, parsed_args: dict) -> str | None:
+        """
+        Execute the appropriate tool based on detected malformed output.
+        Returns tool result or None if cannot be handled.
+        """
+        try:
+            # Check if this looks like a fetch_mails request
+            fetch_keys = {"time_period", "sender", "label", "folder", "max_results",
+                         "importance", "since_date", "until_date", "provider", "subject_keyword"}
+
+            if any(k in parsed_args for k in fetch_keys):
+                logger.info(f"[MALFORMED_OUTPUT_FIX] Detected fetch_mails args: {parsed_args}")
+                result = self._format_fetch_mails_response(json.dumps(parsed_args))
+
+                # Add a nice intro based on the filters
+                intro = "Here are your emails"
+                if parsed_args.get("time_period"):
+                    period = parsed_args["time_period"].replace("_", " ")
+                    intro = f"Here are your emails from {period}"
+                elif parsed_args.get("sender"):
+                    intro = f"Here are emails from {parsed_args['sender']}"
+
+                return f"{intro}:\n\n{result}"
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error handling malformed tool output: {e}")
+            return None
+
     def _extract_json_from_response(self, response_text: str) -> str:
         import re
+
+        # First, check for malformed tool output and handle it
+        malformed_args = self._detect_malformed_tool_output(response_text)
+        if malformed_args:
+            handled_result = self._handle_malformed_tool_output(malformed_args)
+            if handled_result:
+                return handled_result
 
         code_block_match = re.search(
             r"```json\s*([\s\S]*?)\s*```", response_text, re.IGNORECASE
