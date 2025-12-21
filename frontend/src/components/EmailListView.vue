@@ -27,9 +27,9 @@
       </p>
     </div>
 
-    <div v-else-if="errorMessage" class="error-box">
-      <h3>Gmail API Error</h3>
-      <p>{{ errorMessage }}</p>
+    <div v-else-if="errorMessage || searchError" class="error-box">
+      <h3>{{ searchError ? 'Search Error' : 'Gmail API Error' }}</h3>
+      <p>{{ errorMessage || searchError }}</p>
       <div class="setup-instructions">
         <p><strong>Troubleshooting:</strong></p>
         <ol>
@@ -44,7 +44,7 @@
     </div>
 
     <div
-      v-else-if="emails.length > 0"
+      v-else-if="displayedEmails.length > 0"
       class="email-container"
       :class="{ 'has-detail': selectedEmail && !isTrash }"
     >
@@ -77,7 +77,7 @@
         </div>
         <div class="email-list">
           <div
-            v-for="(email, index) in emails"
+            v-for="(email, index) in displayedEmails"
             :key="index"
             class="email-item"
             :class="{
@@ -272,7 +272,7 @@
     </div>
 
     <div
-      v-if="!loading && !authUrl && !errorMessage && emails.length === 0"
+      v-if="!loading && !authUrl && !errorMessage && !searchLoading && displayedEmails.length === 0"
       class="no-emails"
     >
       <p>No emails found.</p>
@@ -337,15 +337,19 @@ export default {
     const loading = computed(() => folderState.value.is_loading);
     const errorMessage = computed(() => folderState.value.error || "");
     const nextCursor = computed(() => folderState.value.next_cursor);
-    const canLoadMore = computed(() => !!nextCursor.value);
+    const canLoadMore = computed(() => !!nextCursor.value && !isSearchMode.value);
+    const displayedEmails = computed(() => {
+      return isSearchMode.value ? searchResults.value : emails.value;
+    });
+
     const isInitialLoading = computed(
-      () => loading.value && emails.value.length === 0
+      () => loading.value && emails.value.length === 0 && !isSearchMode.value
     );
     const isLoadingMore = computed(
       () => loading.value && loadMoreInFlight.value
     );
     const isBackgroundLoading = computed(
-      () => loading.value && emails.value.length > 0 && !loadMoreInFlight.value
+      () => (loading.value && emails.value.length > 0 && !loadMoreInFlight.value) || searchLoading.value
     );
 
     // 🔹 label popup state
@@ -684,16 +688,26 @@ export default {
       selectedEmail.value = null;
 
       try {
+        const searchKey = `search:${query}`;
+        
+        // Check if we already have these search results in cache
+        const existingSearch = emailCache.getFolder(searchKey);
+        if (existingSearch.items.length > 0 && emailCache.isFresh(searchKey)) {
+          searchResults.value = existingSearch.items;
+          searchLoading.value = false;
+          return;
+        }
+
         const response = await searchEmails(query);
 
         if (response.success) {
-          searchResults.value = decorateEmails(response.emails || []);
-
-          // Update the folder cache with search results
-          const key = folderKey.value;
-          const folder = emailCache.getFolder(key);
-          folder.items = searchResults.value;
-          folder.error = '';
+          const results = decorateEmails(response.emails || []);
+          searchResults.value = results;
+          
+          // Store in Pinia cache
+          const folder = emailCache.getFolder(searchKey);
+          folder.items = results;
+          folder.fetched_at = Date.now();
         } else {
           searchError.value = 'Search failed. Please try again.';
         }
@@ -710,9 +724,7 @@ export default {
       searchResults.value = [];
       searchError.value = '';
       selectedEmail.value = null;
-
-      // Reload normal inbox emails
-      await loadEmails({ force: true });
+      // No need to reload normal inbox emails as they are still in cache
     };
 
     const openLabelMenu = async () => {
@@ -831,6 +843,7 @@ export default {
 
     return {
       emails,
+      displayedEmails,
       loading,
       errorMessage,
       selectedEmail,

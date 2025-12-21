@@ -7,7 +7,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 // Create axios instance with default configuration
 const apiClient = axios.create({
   baseURL: API_URL,
-  timeout: 30000, // 30 seconds
+  timeout: 120000, // 120 seconds
   headers: {
     'Content-Type': 'application/json',
   },

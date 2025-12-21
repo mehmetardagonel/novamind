@@ -14,7 +14,7 @@ from googleapiclient.discovery import build
 
 from models import EmailOut
 
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 load_dotenv()
@@ -411,7 +411,7 @@ def get_current_user_email() -> str:
     profile = service.users().getProfile(userId="me").execute()
     return profile.get("emailAddress", "")
 
-def _to_emailout(msg: dict) -> EmailOut:
+def parse_message(msg: dict) -> EmailOut:
     headers = msg.get("payload", {}).get("headers", [])
     subject = _extract_header(headers, "Subject")
     sender = _extract_header(headers, "From")
@@ -419,12 +419,14 @@ def _to_emailout(msg: dict) -> EmailOut:
     date_str = _extract_header(headers, "Date")
     body = _decode_body(msg.get("payload", {}))
 
-    dt: Optional[datetime] = None
+    # Gmail date header is RFC 2822; parse it into datetime
+    # Use current time as fallback to satisfy EmailOut validation
+    dt = datetime.now(timezone.utc)
     if date_str:
         try:
             dt = parsedate_to_datetime(date_str)
         except Exception:
-            dt = None
+            logger.warning(f"Failed to parse date header: {date_str}. Using current time.")
 
     return EmailOut(
         message_id=msg["id"],
@@ -459,7 +461,7 @@ def fetch_messages_by_label(label_id: str, max_results: int = 25, include_spam_t
             id=ref["id"],
             format="full",
         ).execute()
-        results.append(_to_emailout(msg))
+        results.append(parse_message(msg))
 
     return results
 
@@ -483,7 +485,7 @@ def fetch_drafts(max_results: int = 25, user_id: str = "") -> list[EmailOut]:
                 msg = service.users().messages().get(
                     userId="me", id=msg["id"], format="full"
                 ).execute()
-            results.append(_to_emailout(msg))
+            results.append(parse_message(msg))
 
     return results
 

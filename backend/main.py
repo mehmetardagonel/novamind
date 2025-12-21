@@ -1071,6 +1071,20 @@ async def search_emails(
             max_results=max_results
         )
 
+        # Apply ML classification to search results
+        try:
+            from models import EmailOut
+            # Convert dicts back to models for apply_ml_classification
+            email_models = [EmailOut(**email) for email in results]
+            classified_emails = apply_ml_classification(email_models)
+            
+            # Use classified emails if they are models, otherwise results is already a list of dicts
+            # apply_ml_classification returns models or dicts depending on implementation
+            # We want to return JSON-compatible dicts
+            results = [email.model_dump(mode='json') if hasattr(email, 'model_dump') else email for email in classified_emails]
+        except Exception as ml_err:
+            logger.warning(f"ML classification failed for search results: {ml_err}")
+
         logger.info(f"Search returned {len(results)} results")
 
         return {
