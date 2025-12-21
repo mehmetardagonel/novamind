@@ -55,6 +55,13 @@
           'full-width': !selectedEmail || isTrash,
         }"
       >
+        <!-- Email Search Bar -->
+        <EmailSearchBar
+          v-if="folder === 'inbox'"
+          @search="handleSearch"
+          @clear="handleClearSearch"
+        />
+
         <div class="email-list-toolbar">
           <button
             class="icon-action-btn refresh-btn"
@@ -284,11 +291,16 @@ import {
   restoreEmail,
   fetchLabels,
   updateEmailLabels,
+  searchEmails,
 } from "../api/emails";
 import { useEmailCacheStore } from "../stores/emails";
+import EmailSearchBar from "./EmailSearchBar.vue";
 
 export default {
   name: "EmailListView",
+  components: {
+    EmailSearchBar,
+  },
   props: {
     folder: {
       type: String,
@@ -657,6 +669,52 @@ export default {
       return labels[prediction] || prediction;
     };
 
+    // ===== Email Search Functionality =====
+    const isSearchMode = ref(false);
+    const searchResults = ref([]);
+    const searchLoading = ref(false);
+    const searchError = ref('');
+
+    const handleSearch = async (query) => {
+      if (!query || !query.trim()) return;
+
+      isSearchMode.value = true;
+      searchLoading.value = true;
+      searchError.value = '';
+      selectedEmail.value = null;
+
+      try {
+        const response = await searchEmails(query);
+
+        if (response.success) {
+          searchResults.value = decorateEmails(response.emails || []);
+
+          // Update the folder cache with search results
+          const key = folderKey.value;
+          const folder = emailCache.getFolder(key);
+          folder.items = searchResults.value;
+          folder.error = '';
+        } else {
+          searchError.value = 'Search failed. Please try again.';
+        }
+      } catch (error) {
+        console.error('Search error:', error);
+        searchError.value = error.response?.data?.detail || error.message || 'Search failed. Please try again.';
+      } finally {
+        searchLoading.value = false;
+      }
+    };
+
+    const handleClearSearch = async () => {
+      isSearchMode.value = false;
+      searchResults.value = [];
+      searchError.value = '';
+      selectedEmail.value = null;
+
+      // Reload normal inbox emails
+      await loadEmails({ force: true });
+    };
+
     const openLabelMenu = async () => {
       if (!selectedEmail.value) return;
 
@@ -796,6 +854,13 @@ export default {
       isLoadingMore,
       isBackgroundLoading,
       authenticate,
+      // Search
+      isSearchMode,
+      searchResults,
+      searchLoading,
+      searchError,
+      handleSearch,
+      handleClearSearch,
       // Label menu
       showLabelMenu,
       availableLabels,

@@ -1290,4 +1290,262 @@ def move_mails_by_sender(sender: str, target_folder: str, max_results: int = 50,
             "moved_count": 0,
             "message": f"Failed to move emails: {str(e)}"
         }
-    
+
+
+def query_emails(query: str, user_id: str = None) -> Dict:
+    """
+    Query emails using natural language.
+
+    This function intelligently searches emails based on natural language queries like:
+    - "what did I receive from Google jobs"
+    - "is there anything important from Google jobs"
+    - "do I have any meetings tomorrow"
+    - "show me emails about project updates from last week"
+
+    It uses semantic search (RAG) if enabled, otherwise falls back to intelligent filtering.
+
+    Parameters:
+    - query: Natural language query string
+    - user_id: User ID for multi-account support
+
+    Returns: Dict with emails and insights
+    """
+    try:
+        import asyncio
+        from rag_service import rag_service, EMAIL_EMBEDDINGS_ENABLED
+
+        logger.info(f"Query emails with: '{query}'")
+
+        # Try RAG semantic search first if enabled
+        if EMAIL_EMBEDDINGS_ENABLED and user_id:
+            logger.info("Using RAG semantic search for query")
+            relevant_emails = asyncio.run(rag_service.search(user_id, query, limit=10))
+
+            if relevant_emails:
+                # Format RAG results
+                formatted_emails = []
+                for email in relevant_emails:
+                    metadata = email.get('metadata', {})
+                    formatted_emails.append({
+                        'from': metadata.get('from', 'Unknown'),
+                        'subject': metadata.get('subject', 'No subject'),
+                        'date': metadata.get('date', 'Unknown'),
+                        'content': email.get('content', '')[:500],
+                        'relevance': email.get('similarity', 0),
+                        'account_id': metadata.get('account_id'),
+                        'provider': metadata.get('provider', 'gmail')
+                    })
+
+                return {
+                    "success": True,
+                    "method": "semantic_search",
+                    "query": query,
+                    "count": len(formatted_emails),
+                    "emails": formatted_emails,
+                    "insights": _generate_insights(formatted_emails, query)
+                }
+
+        # Fallback: Intelligent filtering based on query keywords
+        logger.info("Using intelligent filtering for query")
+        filters = _extract_filters_from_query(query)
+        logger.info(f"Extracted filters: {filters}")
+
+        # Fetch emails with extracted filters
+        emails = fetch_mails(
+            sender=filters.get('sender'),
+            importance=filters.get('importance'),
+            time_period=filters.get('time_period'),
+            subject_keyword=filters.get('subject_keyword'),
+            max_results=filters.get('max_results', 25),
+            user_id=user_id
+        )
+
+        if not emails:
+            return {
+                "success": True,
+                "method": "intelligent_filtering",
+                "query": query,
+                "count": 0,
+                "emails": [],
+                "insights": f"No emails found matching your query: '{query}'"
+            }
+
+        # Format results
+        formatted_emails = []
+        for email in emails:
+            formatted_emails.append({
+                'from': email.get('sender', 'Unknown'),
+                'subject': email.get('subject', 'No subject'),
+                'date': str(email.get('date', 'Unknown')),
+                'body': email.get('body', '')[:500],
+                'message_id': email.get('message_id'),
+                'account_id': email.get('account_id'),
+                'provider': email.get('provider', 'gmail'),
+                'ml_prediction': email.get('ml_prediction')
+            })
+
+        return {
+            "success": True,
+            "method": "intelligent_filtering",
+            "query": query,
+            "filters_used": filters,
+            "count": len(formatted_emails),
+            "emails": formatted_emails,
+            "insights": _generate_insights(formatted_emails, query)
+        }
+
+    except Exception as e:
+        logger.error(f"Error querying emails: {str(e)}")
+        return {
+            "success": False,
+            "query": query,
+            "error": str(e),
+            "message": f"Failed to query emails: {str(e)}"
+        }
+
+
+def _extract_filters_from_query(query: str) -> Dict:
+    """
+    Extract email filters from natural language query using smart keyword extraction.
+
+    Examples:
+    - "emails from Google jobs" -> {'subject_keyword': 'google jobs'} (searches in subject/body)
+    - "important emails from boss today" -> {'sender': 'boss', 'importance': True, 'time_period': 'today'}
+    - "meetings tomorrow" -> {'subject_keyword': 'meeting', 'time_period': 'today'}
+    - "what did I receive from Google jobs" -> {'subject_keyword': 'google jobs'}
+
+    IMPROVED LOGIC:
+    - Company/service names (Google, Amazon, LinkedIn, etc.) are treated as subject keywords, not senders
+    - Only use sender filter when it's clearly a person's name or specific email
+    - Partial matching: "Google jobs" will match "Google Careers" emails
+    """
+    query_lower = query.lower()
+    filters = {}
+    import re
+
+    # Common company/service names that should be searched in subject/body, not sender
+    company_keywords = [
+        'google', 'amazon', 'microsoft', 'apple', 'meta', 'facebook',
+        'linkedin', 'twitter', 'netflix', 'uber', 'airbnb', 'spotify',
+        'openai', 'chatgpt', 'github', 'stackoverflow', 'reddit',
+        'tesla', 'nvidia', 'intel', 'oracle', 'salesforce'
+    ]
+
+    # Extract importance
+    if any(word in query_lower for word in ['important', 'urgent', 'priority', 'critical']):
+        filters['importance'] = True
+
+    # Extract time period
+    if 'today' in query_lower or 'tomorrow' in query_lower:
+        filters['time_period'] = 'today'
+    elif 'yesterday' in query_lower:
+        filters['time_period'] = 'yesterday'
+    elif 'last week' in query_lower or 'past week' in query_lower or 'this week' in query_lower:
+        filters['time_period'] = 'last_week'
+    elif 'last month' in query_lower or 'past month' in query_lower or 'this month' in query_lower:
+        filters['time_period'] = 'last_month'
+    elif 'last 3 months' in query_lower or 'past 3 months' in query_lower:
+        filters['time_period'] = 'last_3_months'
+
+    # Smart extraction of "from X" - check if it's a company or person
+    from_patterns = [
+        r'from\s+([a-zA-Z0-9\s@._-]+?)(?:\s+about|\s+regarding|\s+in|\s+on|\s+yesterday|\s+today|\s+last|\s+$|\?)',
+        r'by\s+([a-zA-Z0-9\s@._-]+?)(?:\s+about|\s+regarding|\s+in|\s+on|\s+yesterday|\s+today|\s+last|\s+$|\?)'
+    ]
+
+    from_match = None
+    for pattern in from_patterns:
+        match = re.search(pattern, query_lower)
+        if match:
+            from_match = match.group(1).strip()
+            break
+
+    if from_match:
+        # Check if it's a company/service name
+        is_company = any(company in from_match for company in company_keywords)
+
+        if is_company or 'jobs' in from_match or 'careers' in from_match:
+            # Treat as subject keyword for broader matching
+            filters['subject_keyword'] = from_match
+        elif '@' in from_match:
+            # It's an email address
+            filters['sender'] = from_match
+        else:
+            # Check if it looks like a person's name (short, no special keywords)
+            words = from_match.split()
+            if len(words) <= 2 and not any(kw in from_match for kw in ['jobs', 'careers', 'team', 'support']):
+                filters['sender'] = from_match
+            else:
+                # Treat as subject keyword for broader search
+                filters['subject_keyword'] = from_match
+
+    # Extract "about X" or "regarding X"
+    about_patterns = [
+        r'about\s+([a-zA-Z0-9\s]+?)(?:\s+from|\s+by|\s+in|\s+on|\s+yesterday|\s+today|\s+last|\s+$|\?)',
+        r'regarding\s+([a-zA-Z0-9\s]+?)(?:\s+from|\s+by|\s+in|\s+on|\s+yesterday|\s+today|\s+last|\s+$|\?)'
+    ]
+    for pattern in about_patterns:
+        match = re.search(pattern, query_lower)
+        if match:
+            filters['subject_keyword'] = match.group(1).strip()
+            break
+
+    # Look for specific keywords in the query
+    if 'meeting' in query_lower or 'meetings' in query_lower:
+        filters['subject_keyword'] = 'meeting'
+    elif 'invitation' in query_lower:
+        filters['subject_keyword'] = 'invitation'
+
+    # Set reasonable max results
+    filters['max_results'] = 25
+
+    return filters
+
+
+def _generate_insights(emails: List[Dict], query: str) -> str:
+    """
+    Generate insights from the email results based on the query.
+
+    This provides a natural language summary of the results.
+    """
+    if not emails:
+        return f"No emails found matching: '{query}'"
+
+    insights = []
+    count = len(emails)
+
+    # Count by sender
+    senders = {}
+    for email in emails:
+        sender = email.get('from', 'Unknown')
+        senders[sender] = senders.get(sender, 0) + 1
+
+    # Check for important emails
+    important_count = sum(1 for email in emails if email.get('ml_prediction') == 'important')
+
+    # Build insights
+    insights.append(f"Found {count} email(s) matching your query.")
+
+    if senders:
+        top_senders = sorted(senders.items(), key=lambda x: x[1], reverse=True)[:3]
+        sender_summary = ", ".join([f"{sender} ({count})" for sender, count in top_senders])
+        insights.append(f"Top senders: {sender_summary}")
+
+    if important_count > 0:
+        insights.append(f"{important_count} of these are marked as important.")
+
+    # Check for meetings in subject
+    meeting_emails = [
+        email for email in emails
+        if 'meeting' in email.get('subject', '').lower() or
+           'invitation' in email.get('subject', '').lower() or
+           'event' in email.get('subject', '').lower()
+    ]
+    if meeting_emails:
+        insights.append(f"{len(meeting_emails)} email(s) appear to be about meetings or events.")
+        # Extract first meeting details
+        first_meeting = meeting_emails[0]
+        insights.append(f"Most recent: '{first_meeting.get('subject')}' from {first_meeting.get('from')}")
+
+    return "\n".join(insights)
+

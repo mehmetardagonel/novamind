@@ -1032,6 +1032,59 @@ async def get_unified_emails(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ===== Email Search Endpoint (Gmail + Outlook) =====
+
+@app.get("/search-emails")
+async def search_emails(
+    query: str,
+    user_id: str = Header(..., alias="X-User-Id"),
+    provider: Optional[str] = None,
+    account_id: Optional[str] = None,
+    max_results: int = 50
+):
+    """
+    Unified search endpoint for Gmail and Outlook.
+    Supports Gmail search operators that are automatically converted for Outlook.
+
+    Args:
+        query: Search query string (supports Gmail operators like from:, subject:, is:unread, etc.)
+        provider: "gmail" or "outlook" (optional - searches both if not specified)
+        account_id: Specific account ID (optional)
+        max_results: Maximum results to return (default: 50)
+
+    Examples:
+        - "from:google jobs" - emails from Google about jobs
+        - "subject:meeting is:unread" - unread emails with "meeting" in subject
+        - "has:attachment after:2025/01/01" - emails with attachments after Jan 1, 2025
+    """
+    logger.info(f"Email search request: query='{query}', provider={provider}, account_id={account_id}")
+
+    try:
+        from email_search_service import unified_search
+
+        # Perform unified search across Gmail and/or Outlook
+        results = await unified_search(
+            query=query,
+            user_id=user_id,
+            provider=provider,
+            account_id=account_id,
+            max_results=max_results
+        )
+
+        logger.info(f"Search returned {len(results)} results")
+
+        return {
+            "success": True,
+            "query": query,
+            "count": len(results),
+            "emails": results
+        }
+
+    except Exception as e:
+        logger.error(f"Error in email search: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ===== Unified Email Account Management (Gmail + Outlook) =====
 
 @app.get("/email/accounts", response_model=List[EmailAccountOut])

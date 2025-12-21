@@ -302,6 +302,42 @@ export const searchBySender = (sender, userId) =>
 export const searchBySubject = (subject, userId) =>
   fetchEmails("inbox", userId, { subject_contains: subject });
 
+/**
+ * ============================================================
+ *   EMAIL SEARCH (Gmail + Outlook Unified)
+ * ============================================================
+ */
+
+/**
+ * Search emails across Gmail and Outlook accounts using Gmail search operators.
+ *
+ * @param {string} query - Search query with Gmail operators (e.g., "from:google subject:jobs is:unread")
+ * @param {string} userId - User ID (optional, will be resolved from Supabase if not provided)
+ * @param {Object} options - Search options
+ * @param {string} options.provider - "gmail" or "outlook" (optional - searches both if not specified)
+ * @param {string} options.accountId - Specific account ID to search (optional)
+ * @param {number} options.maxResults - Maximum results to return (default: 50)
+ * @returns {Promise<Object>} Search results with emails array and metadata
+ */
+export const searchEmails = async (query, userId, options = {}) => {
+  const resolvedUserId = await resolveUserId(userId);
+
+  const params = new URLSearchParams();
+  params.append("query", query);
+
+  if (options.provider) params.append("provider", options.provider);
+  if (options.accountId) params.append("account_id", options.accountId);
+  if (options.maxResults) params.append("max_results", String(options.maxResults));
+
+  const endpoint = `/search-emails?${params.toString()}`;
+
+  const res = await apiClient.get(endpoint, {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+
+  return res.data;
+};
+
 // ============================================================
 //   LABEL MANAGEMENT
 // ============================================================
@@ -373,6 +409,7 @@ export default {
   getEmailsByLabel,
   searchBySender,
   searchBySubject,
+  searchEmails,
   logoutGmail,
   fetchLabels,
   createLabel,

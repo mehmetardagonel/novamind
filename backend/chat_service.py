@@ -130,6 +130,7 @@ from email_tools import (
     get_drafts,
     get_drafts_for_recipient,
     move_mails_by_sender,
+    query_emails,
     send_draft,
     send_email,
     update_draft,
@@ -304,6 +305,31 @@ class ChatService:
                     "If multiple drafts exist, you will be asked to choose which one."
                 ),
             ),
+            Tool(
+                name="query_emails",
+                func=lambda x: json.dumps(query_emails(query=x, user_id=self.user_id), indent=2),
+                description=(
+                    "Query emails using natural language. This tool intelligently searches emails "
+                    "and provides insights based on your query.\n\n"
+                    "Use this when the user asks questions about their emails like:\n"
+                    "- 'what did I receive from Google jobs'\n"
+                    "- 'is there anything important from Google jobs'\n"
+                    "- 'do I have any meetings tomorrow'\n"
+                    "- 'show me emails about project updates from last week'\n"
+                    "- 'what emails do I have about the budget'\n\n"
+                    "Input: Natural language query string\n"
+                    "Example: 'what did I receive from Google jobs'\n\n"
+                    "The tool will:\n"
+                    "1. Use semantic search if enabled for better results\n"
+                    "2. Fall back to intelligent keyword filtering\n"
+                    "3. Extract relevant filters (sender, time period, importance, subject)\n"
+                    "4. Return matching emails with insights and summaries\n\n"
+                    "Output includes:\n"
+                    "- Count of matching emails\n"
+                    "- Email details (sender, subject, date, body preview)\n"
+                    "- Insights (top senders, important emails, meeting notifications)\n"
+                ),
+            ),
         ]
 
         try:
@@ -331,6 +357,17 @@ class ChatService:
             self.ml_classifier = None
 
         system_prompt = """You are an AI email assistant. Your job is to help users manage their emails efficiently.
+
+CRITICAL COMMUNICATION RULES:
+1. NEVER output raw JSON responses to the user (EXCEPTION: fetch_mails tool requires JSON for UI rendering)
+2. ALWAYS respond in natural, conversational language
+3. When users request features you don't have:
+   - Politely acknowledge you can't do that specific thing
+   - Immediately suggest similar features you CAN do
+   - Ask if the alternative would work for them
+   - Example: "I don't have a direct archive feature, but I can move emails to a specific label for you. Would that work?"
+4. Be friendly, helpful, and solution-oriented
+5. Present information in readable, formatted text - NOT as JSON objects
 
 This system can access both Gmail and Outlook accounts.
 - Use the tool `list_email_accounts` when you need to choose a specific account/provider.
@@ -382,6 +419,67 @@ When using the 'fetch_mails' tool, the tool will return a JSON block fenced in `
 You MUST include that raw JSON block in your final answer exactly as it appears.
 The frontend relies on this JSON to render the UI cards.
 NEVER remove, summarize, or alter the JSON data returned by fetch_mails.
+
+CRITICAL RULE FOR QUERYING EMAILS:
+When using the 'query_emails' tool, the tool will return a JSON response with:
+- insights: A natural language summary of the results
+- emails: List of matching emails with details
+- count: Number of emails found
+- filters_used: The filters extracted from the query
+
+IMPORTANT: You MUST extract the information from this JSON and present it conversationally to the user.
+DO NOT copy-paste the raw JSON. Transform it into friendly, readable text.
+
+UNDERSTANDING USER QUERIES (Few-Shot Learning):
+Here are examples of how to interpret different types of queries:
+
+Example 1:
+User: "what did I receive from Google jobs?"
+Interpretation: User wants emails ABOUT Google jobs/careers, not necessarily FROM Google.
+Look for: Emails with "Google", "jobs", "careers" in subject or body
+Tool to use: query_emails
+
+Example 2:
+User: "is there anything important from Google jobs?"
+Interpretation: Same as above, but filter for important emails
+Look for: Important emails about Google jobs/careers
+Tool to use: query_emails
+
+Example 3:
+User: "do I have any meetings tomorrow?"
+Interpretation: User wants emails about meetings in the near future
+Look for: Emails with "meeting", "invitation", "event" in subject
+Tool to use: query_emails
+
+Example 4:
+User: "emails from John about the project"
+Interpretation: Emails FROM a person named John, ABOUT the project
+Look for: Sender contains "John" AND subject/body contains "project"
+Tool to use: query_emails
+
+RESPONSE FORMAT:
+You MUST:
+1. Present the insights in a conversational, friendly way
+2. Show the most relevant emails first (especially those matching the query best)
+3. For emails about jobs/careers, highlight the job title, company, and key details
+4. For meeting invitations, highlight the date, time, and subject
+5. If there are many results, summarize and show the top 3-5 most relevant ones
+6. Always include the sender, subject, and date for each email shown
+
+Example response format:
+"I found [count] emails about [topic]. [insights]
+
+The most relevant ones are:
+
+1. **[Subject]** from [Sender]
+   Date: [date]
+   [Key details from preview]
+
+2. **[Subject]** from [Sender]
+   Date: [date]
+   [Key details from preview]
+
+Would you like me to show more details about any of these?"
 """
 
         from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
