@@ -107,7 +107,10 @@
               </div>
             </div>
 
-            <div v-if="isLoading" class="message ai-message loading-indicator">
+            <div
+              v-if="isLoading && !isVoiceActive"
+              class="message ai-message loading-indicator"
+            >
               <p>
                 <span class="dot">.</span>
                 <span class="dot">.</span>
@@ -178,7 +181,7 @@
       </div>
     </div>
 
-    <div v-if="isVoiceActive" class="voice-overlay" aria-live="polite">
+    <div v-if="isListening" class="voice-overlay" aria-live="polite">
       <div class="voice-orb">
         <span class="voice-orb-core"></span>
         <span class="voice-orb-ring ring-1"></span>
@@ -210,8 +213,9 @@ export default {
     const userPrompt = ref("");
     const isLoading = ref(false);
     const historyContainer = ref(null);
-    const isListening = ref(false); // New state for listening box
-    const listeningDots = ref(""); // New state for dot animation
+    const isListening = ref(false); // Listening state for voice
+    const isVoiceThinking = ref(false); // Waiting on voice response
+    const listeningDots = ref(""); // Dot animation state
     const activeRecorder = ref(null);
     let dotInterval = null; // For managing the dot animation timer
     const isRecording = ref(false);
@@ -224,6 +228,7 @@ export default {
       ? API_BASE_URL.slice(0, -1)
       : API_BASE_URL;
     const API_URL = `${normalizedBase}/chat`;
+    const VOICE_RESPONSE_URL = `${normalizedBase}/voice/response`;
 
     const chats = computed(() => chatStore.chats);
     const activeChatId = computed(() => chatStore.activeChatId);
@@ -231,17 +236,18 @@ export default {
     const activeMessages = computed(() => activeChat.value?.messages || []);
 
     const isVoiceActive = computed(
-      () => isListening.value || isSpeaking.value
+      () => isListening.value || isVoiceThinking.value || isSpeaking.value
     );
 
     const voiceStatusLabel = computed(() => {
       if (isListening.value) return "Listening";
+      if (isVoiceThinking.value) return "Thinking";
       if (isSpeaking.value) return "Speaking";
       return "Voice";
     });
 
     const voiceDots = computed(() =>
-      isListening.value ? listeningDots.value : ""
+      isListening.value || isVoiceThinking.value ? listeningDots.value : ""
     );
 
     const formatBody = (text) => {
@@ -262,37 +268,141 @@ export default {
     };
 
     const isEmailArray = (parsed) => {
-      if (!Array.isArray(parsed) || parsed.length === 0) return false;
+      if (!Array.isArray(parsed)) return false;
+      if (parsed.length === 0) return true;
       const first = parsed[0];
       if (!first || typeof first !== "object") return false;
       return (
-        Object.prototype.hasOwnProperty.call(first, "subject") &&
-        (Object.prototype.hasOwnProperty.call(first, "from") ||
-          Object.prototype.hasOwnProperty.call(first, "sender"))
+        Object.prototype.hasOwnProperty.call(first, "subject") ||
+        Object.prototype.hasOwnProperty.call(first, "from") ||
+        Object.prototype.hasOwnProperty.call(first, "sender") ||
+        Object.prototype.hasOwnProperty.call(first, "date") ||
+        Object.prototype.hasOwnProperty.call(first, "body")
       );
+    };
+
+    const normalizeEmailsPayload = (parsed) => {
+      if (isEmailArray(parsed)) {
+        return { emails: parsed, insights: null };
+      }
+      if (parsed && typeof parsed === "object") {
+        const emails = parsed.emails;
+        if (isEmailArray(emails)) {
+          const insights =
+            typeof parsed.insights === "string"
+              ? parsed.insights
+              : typeof parsed.summary === "string"
+              ? parsed.summary
+              : typeof parsed.message === "string"
+              ? parsed.message
+              : null;
+          return { emails, insights };
+        }
+      }
+      return null;
     };
 
     const tryParseEmailsJson = (raw) => {
       try {
         const parsed = JSON.parse(raw);
-        return isEmailArray(parsed) ? parsed : null;
+        return normalizeEmailsPayload(parsed);
       } catch {
         return null;
       }
     };
 
+    const stripJsonBlocks = (text) => {
+      if (!text) return "";
+      return text
+        .replace(/```[\s\S]*?```/g, (block) => {
+          const inner = block
+            .replace(/^```\s*[a-z]*\s*/i, "")
+            .replace(/```$/, "")
+            .trim();
+          if (!inner) return "";
+          try {
+            JSON.parse(inner);
+            return "";
+          } catch {
+            return block;
+          }
+        })
+        .trim();
+    };
+
+    const cleanTextBeforeJson = (text) => {
+      if (!text) return "";
+      return text
+        .replace(/```/g, "")
+        .replace(/\bjson\b/gi, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/[:\s]+$/, "");
+    };
+
+    const findBalancedJson = (text, startIndex, openChar, closeChar) => {
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      for (let i = startIndex; i < text.length; i += 1) {
+        const ch = text[i];
+        if (inString) {
+          if (escape) {
+            escape = false;
+          } else if (ch === "\\") {
+            escape = true;
+          } else if (ch === '"') {
+            inString = false;
+          }
+          continue;
+        }
+        if (ch === '"') {
+          inString = true;
+          continue;
+        }
+        if (ch === openChar) {
+          depth += 1;
+        } else if (ch === closeChar) {
+          depth -= 1;
+          if (depth === 0) {
+            return text.slice(startIndex, i + 1);
+          }
+        }
+      }
+      return null;
+    };
+
+    const findFirstBalancedJson = (text, openChar, closeChar) => {
+      let idx = text.indexOf(openChar);
+      while (idx !== -1) {
+        const candidate = findBalancedJson(text, idx, openChar, closeChar);
+        if (candidate) {
+          return { candidate, index: idx };
+        }
+        idx = text.indexOf(openChar, idx + 1);
+      }
+      return null;
+    };
+
     const extractJsonFromText = (text) => {
-      const result = { textBefore: "", json: null };
-      if (!text) return { textBefore: "", json: null };
+      const result = { textBefore: "", emails: null, insights: null };
+      if (!text) return result;
+
+      const tryCandidate = (candidate, index) => {
+        const cleaned = candidate.replace(/^json\s*/i, "").trim();
+        const payload = tryParseEmailsJson(cleaned);
+        if (!payload) return false;
+        result.emails = payload.emails;
+        result.insights = payload.insights;
+        result.textBefore = cleanTextBeforeJson(text.slice(0, index || 0).trim());
+        return true;
+      };
 
       // 1) Prefer fenced JSON blocks: ```json ... ``` (with or without newline after json)
-      const fenceRegex = /```json\s*([\s\S]*?)\s*```/gi;
+      const fenceRegex = /```\s*json\s*([\s\S]*?)\s*```/gi;
       for (const match of text.matchAll(fenceRegex)) {
         const candidate = (match[1] || "").trim();
-        const emails = tryParseEmailsJson(candidate);
-        if (emails) {
-          result.json = emails;
-          result.textBefore = text.slice(0, match.index || 0).trim();
+        if (tryCandidate(candidate, match.index)) {
           return result;
         }
       }
@@ -301,27 +411,32 @@ export default {
       const anyFenceRegex = /```\s*([\s\S]*?)\s*```/g;
       for (const match of text.matchAll(anyFenceRegex)) {
         const candidate = (match[1] || "").trim();
-        const emails = tryParseEmailsJson(candidate);
-        if (emails) {
-          result.json = emails;
-          result.textBefore = text.slice(0, match.index || 0).trim();
+        if (tryCandidate(candidate, match.index)) {
           return result;
         }
       }
 
-      // 3) Last resort: locate the first JSON array substring and try parsing it
-      const bracketRegex = /\[[\s\S]*\]/g;
-      for (const match of text.matchAll(bracketRegex)) {
-        const candidate = match[0];
-        const emails = tryParseEmailsJson(candidate);
-        if (emails) {
-          result.json = emails;
-          result.textBefore = text.slice(0, match.index || 0).trim();
-          return result;
-        }
+      // 3) Direct parse if the whole response is JSON
+      const directPayload = tryParseEmailsJson(text.trim());
+      if (directPayload) {
+        result.emails = directPayload.emails;
+        result.insights = directPayload.insights;
+        return result;
       }
 
-      result.textBefore = text;
+      // 4) Locate a balanced JSON array substring and try parsing it
+      const arrayMatch = findFirstBalancedJson(text, "[", "]");
+      if (arrayMatch && tryCandidate(arrayMatch.candidate, arrayMatch.index)) {
+        return result;
+      }
+
+      // 5) Locate a balanced JSON object substring and try parsing it
+      const objectMatch = findFirstBalancedJson(text, "{", "}");
+      if (objectMatch && tryCandidate(objectMatch.candidate, objectMatch.index)) {
+        return result;
+      }
+
+      result.textBefore = stripJsonBlocks(text);
       return result;
     };
 
@@ -383,16 +498,24 @@ export default {
 
         // Ensure we always have some text to display
         let displayText = extracted.textBefore;
-        if (!displayText && extracted.json && extracted.json.length > 0) {
-          displayText = `Found ${extracted.json.length} email(s):`;
-        } else if (!displayText && !extracted.json) {
-          displayText = responseText || "I processed your request.";
+        if (extracted.insights) {
+          displayText = displayText
+            ? `${displayText}\n\n${extracted.insights}`
+            : extracted.insights;
+        }
+        if (!displayText && Array.isArray(extracted.emails)) {
+          displayText = extracted.emails.length
+            ? `Found ${extracted.emails.length} email(s).`
+            : "No emails found.";
+        } else if (!displayText) {
+          displayText =
+            stripJsonBlocks(responseText) || "I processed your request.";
         }
 
         chatStore.appendMessage(chatId, {
           role: "bot",
           text: displayText,
-          emails: extracted.json,
+          emails: extracted.emails,
         });
       } catch (error) {
         console.error("Error:", error);
@@ -469,14 +592,19 @@ export default {
         activeRecorder.value = recorder;
         const audioBlob = await recorder.promise;
         activeRecorder.value = null;
+        isRecording.value = false;
+        isListening.value = false;
+        isVoiceThinking.value = true;
         if (!audioBlob || audioBlob.size === 0) {
           return;
         }
+        isLoading.value = true;
         const {
           audioBlob: replyAudio,
           sessionId,
           userTranscript,
           assistantReply,
+          responseId,
         } = await sendVoicePrompt(audioBlob, activeChat.value?.sessionId || null);
 
         const chatId = activeChat.value.id;
@@ -490,22 +618,69 @@ export default {
             emails: null,
           });
         }
-        if (assistantReply) {
-          const extracted = extractJsonFromText(assistantReply);
+        if (!userTranscript && !assistantReply && !replyAudio) {
+          chatStore.appendMessage(chatId, {
+            role: "bot",
+            text: "I didn't catch that. Please try again.",
+            emails: null,
+          });
+        }
+        if (assistantReply || responseId) {
+          let responseText = assistantReply || "";
+          let extracted = extractJsonFromText(responseText);
+
+          if (responseId) {
+            try {
+              const res = await fetch(
+                `${VOICE_RESPONSE_URL}/${encodeURIComponent(responseId)}`,
+                {
+                  headers: {
+                    "X-User-Id": authStore.user?.id,
+                  },
+                }
+              );
+              if (res.ok) {
+                const payload = await res.json();
+                responseText = payload.response_text || responseText;
+                if (Array.isArray(payload.emails)) {
+                  extracted = {
+                    textBefore: payload.text_before || "",
+                    emails: payload.emails,
+                    insights:
+                      typeof payload.insights === "string"
+                        ? payload.insights
+                        : null,
+                  };
+                } else {
+                  extracted = extractJsonFromText(responseText);
+                }
+              }
+            } catch (error) {
+              console.warn("Failed to load voice response payload:", error);
+            }
+          }
+
           let displayText = extracted.textBefore;
-          if (!displayText && extracted.json && extracted.json.length > 0) {
-            displayText = `Found ${extracted.json.length} email(s):`;
-          } else if (!displayText && !extracted.json) {
-            displayText = assistantReply.trim();
+          if (extracted.insights) {
+            displayText = displayText
+              ? `${displayText}\n\n${extracted.insights}`
+              : extracted.insights;
+          }
+          if (!displayText && Array.isArray(extracted.emails)) {
+            displayText = extracted.emails.length
+              ? `Found ${extracted.emails.length} email(s).`
+              : "No emails found.";
+          } else if (!displayText) {
+            displayText = stripJsonBlocks(responseText).trim();
           }
 
           chatStore.appendMessage(chatId, {
             role: "bot",
             text: displayText,
-            emails: extracted.json,
+            emails: extracted.emails,
           });
 
-          if (!extracted.json && replyAudio) {
+          if (replyAudio) {
             await playReplyAudio(replyAudio);
           }
         }
@@ -516,6 +691,8 @@ export default {
       } finally {
         isRecording.value = false;
         isListening.value = false;
+        isVoiceThinking.value = false;
+        isLoading.value = false;
         stopDotAnimation();
         activeRecorder.value = null;
         if (!isListening.value) {
@@ -571,6 +748,7 @@ export default {
       userPrompt,
       isLoading,
       isListening,
+      isVoiceThinking,
       listeningDots,
       isRecording,
       isSpeaking,

@@ -169,11 +169,10 @@ class ChatService:
         masked_key = f"{api_key[:10]}...{api_key[-4:]}" if len(api_key) > 14 else "***"
         logger.info(f"🔑 Using GEMINI_API_KEY: {masked_key}")
 
-        # Use configured Gemini model (defaults to gemini-2.0-flash-lite)
-        # Note: 2.0-flash series is recommended for stable tool calling
-        # (2.5 has known issues with LangChain agents - see: https://github.com/langchain-ai/langgraph/issues/4780)
+        # Use configured Gemini model (defaults to gemini-3-flash).
+        # Note: Avoid 2.5 for now due to tool-calling instability with LangChain agents.
         self.llm = ChatGoogleGenerativeAI(
-            model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite"),
+            model=os.getenv("GEMINI_MODEL", "gemini-3-flash"),
             google_api_key=api_key,
             temperature=0.7,
         )
@@ -763,15 +762,7 @@ Would you like me to show more details about any of these?"
         elif "today" in msg_lower:
             time_period = "today"
 
-        if not wants_summary and not (wants_significant and time_period):
-            return None
-
-        is_emailish = any(k in msg_lower for k in email_keywords)
-        if not is_emailish and not time_period and not wants_summary:
-            return None
-
-        list_keywords = ["show", "list", "display", "get", "fetch", "see"]
-        if wants_significant and not wants_summary and any(k in msg_lower for k in list_keywords):
+        if not wants_summary and not wants_significant:
             return None
 
         provider = None
@@ -780,7 +771,17 @@ Would you like me to show more details about any of these?"
         elif "gmail" in msg_lower:
             provider = "gmail"
 
+        is_emailish = any(k in msg_lower for k in email_keywords) or provider is not None
+        if not is_emailish and not time_period and not wants_summary:
+            return None
+
+        list_keywords = ["show", "list", "display", "get", "fetch", "see"]
+        if wants_significant and not wants_summary and any(k in msg_lower for k in list_keywords):
+            return None
+
         importance = True if wants_significant else None
+        if wants_significant and not time_period:
+            time_period = "today"
         time_period = time_period or "today"
 
         payload = {"folder": "inbox", "max_results": 25, "time_period": time_period}
@@ -896,6 +897,9 @@ Would you like me to show more details about any of these?"
             "read",
             "fetch",
             "get",
+            "receive",
+            "received",
+            "got",
         ]
 
         if any(k in msg_lower for k in ["draft", "send", "reply", "forward"]):
@@ -906,8 +910,10 @@ Would you like me to show more details about any of these?"
         ):
             return None
 
-        is_emailish = any(k in msg_lower for k in email_keywords) or any(
-            k in msg_lower for k in action_keywords
+        is_emailish = (
+            any(k in msg_lower for k in email_keywords)
+            or any(k in msg_lower for k in action_keywords)
+            or provider is not None
         )
         if not is_emailish and importance and time_period:
             # Users often omit the word "email" in questions like:
@@ -952,6 +958,9 @@ Would you like me to show more details about any of these?"
             # - time-bounded importance queries ("important this week")
             # - latest email (handled above)
             return None
+
+        if importance and not time_period:
+            time_period = "today"
 
         payload = {"folder": "inbox", "max_results": max_results}
         if provider:

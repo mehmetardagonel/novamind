@@ -30,13 +30,45 @@ export const sendVoicePrompt = async (audioBlob, sessionId = null) => {
   })
 
   const headers = response.headers || {}
-  const contentType = headers['content-type'] || headers['Content-Type'] || 'audio/wav'
+  const contentType =
+    headers['content-type'] || headers['Content-Type'] || 'audio/wav'
   const responseSessionId =
     headers['x-session-id'] || headers['X-Session-Id'] || sessionId || null
   const userTranscript =
     headers['x-user-transcript'] || headers['X-User-Transcript'] || null
   const assistantReply =
     headers['x-assistant-reply'] || headers['X-Assistant-Reply'] || null
+  const assistantTts =
+    headers['x-assistant-tts'] || headers['X-Assistant-Tts'] || null
+  const responseId =
+    headers['x-voice-response-id'] || headers['X-Voice-Response-Id'] || null
+  const isJson = contentType.toLowerCase().includes('application/json')
+
+  if (isJson) {
+    const decoder = new TextDecoder('utf-8')
+    const text = decoder.decode(new Uint8Array(response.data || []))
+    try {
+      const payload = JSON.parse(text)
+      return {
+        audioBlob: null,
+        sessionId: payload.session_id || responseSessionId,
+        userTranscript: payload.transcript || userTranscript,
+        assistantReply: payload.response_text || assistantReply,
+        assistantTts,
+        responseId,
+      }
+    } catch {
+      return {
+        audioBlob: null,
+        sessionId: responseSessionId,
+        userTranscript,
+        assistantReply,
+        assistantTts,
+        responseId,
+      }
+    }
+  }
+
   const replyAudioBlob = new Blob([response.data], { type: contentType })
 
   return {
@@ -44,5 +76,7 @@ export const sendVoicePrompt = async (audioBlob, sessionId = null) => {
     sessionId: responseSessionId,
     userTranscript,
     assistantReply,
+    assistantTts,
+    responseId,
   }
 }

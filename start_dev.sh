@@ -158,7 +158,7 @@ export OUTLOOK_REDIRECT_URI="http://localhost:$BACKEND_PORT/auth/outlook/callbac
 # Set protobuf implementation
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 
-"$VENV_DIR/bin/uvicorn" main:app --port $BACKEND_PORT > "$SCRIPT_DIR/backend.log" 2>&1 &
+nohup "$VENV_DIR/bin/uvicorn" main:app --host 0.0.0.0 --port $BACKEND_PORT > "$SCRIPT_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo "BACKEND_PID=$BACKEND_PID" >> "$PID_FILE"
 print_success "Backend server started (PID: $BACKEND_PID)"
@@ -220,7 +220,7 @@ cd "$FRONTEND_DIR"
 # Export VITE_API_URL to override .env and point to the correct dynamic backend port
 export VITE_API_URL="http://localhost:$BACKEND_PORT"
 
-npm run dev -- --port $FRONTEND_PORT > "$SCRIPT_DIR/frontend.log" 2>&1 &
+nohup npm run dev -- --host 0.0.0.0 --port $FRONTEND_PORT > "$SCRIPT_DIR/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 echo "FRONTEND_PID=$FRONTEND_PID" >> "$PID_FILE"
 print_success "Frontend server started (PID: $FRONTEND_PID)"

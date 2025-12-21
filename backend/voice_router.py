@@ -4,6 +4,7 @@ import uuid
 import asyncio
 import logging
 import re
+import json
 from typing import Optional
 
 import httpx
@@ -25,6 +26,9 @@ VOICE_TTS_MODEL = os.getenv("VOICE_TTS_MODEL", "aura-asteria-en")
 VOICE_TTS_ENCODING = os.getenv("VOICE_TTS_ENCODING", "linear16")  # easiest for browser playback
 VOICE_TTS_SAMPLE_RATE = int(os.getenv("VOICE_TTS_SAMPLE_RATE", "24000"))
 
+VOICE_RESPONSE_CACHE: dict[str, dict] = {}
+VOICE_RESPONSE_CACHE_MAX = 200
+
 def _safe_header_value(value: Optional[str], max_len: int = 2000) -> str:
     if not value:
         return ""
@@ -32,6 +36,187 @@ def _safe_header_value(value: Optional[str], max_len: int = 2000) -> str:
     cleaned = re.sub(r"[\x00-\x1F\x7F]", " ", cleaned)
     cleaned = cleaned.encode("latin-1", "ignore").decode("latin-1")
     return cleaned[:max_len]
+
+def _normalize_transcript(text: str) -> str:
+    if not text:
+        return ""
+    lowered = text.lower()
+    if any(k in lowered for k in ["mail", "email", "inbox", "account", "outlook", "gmail"]):
+        text = re.sub(r"\bout\\s+look\\b", "outlook", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bout\\s+lock\\b", "outlook", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bout\\s+put\\b", "outlook", text, flags=re.IGNORECASE)
+        text = re.sub(r"\boutput\\b", "outlook", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bg\\s+mail\\b", "gmail", text, flags=re.IGNORECASE)
+    return text
+
+def _find_balanced_json(text: str, start_index: int, open_char: str, close_char: str) -> Optional[str]:
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start_index, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == "\"":
+                in_string = False
+            continue
+        if ch == "\"":
+            in_string = True
+            continue
+        if ch == open_char:
+            depth += 1
+        elif ch == close_char:
+            depth -= 1
+            if depth == 0:
+                return text[start_index : i + 1]
+    return None
+
+def _first_balanced_json(text: str, open_char: str, close_char: str) -> Optional[tuple[str, int]]:
+    idx = text.find(open_char)
+    while idx != -1:
+        candidate = _find_balanced_json(text, idx, open_char, close_char)
+        if candidate:
+            return candidate, idx
+        idx = text.find(open_char, idx + 1)
+    return None
+
+def _normalize_emails_payload(parsed) -> Optional[dict]:
+    if isinstance(parsed, list):
+        return {"emails": parsed, "insights": None}
+    if isinstance(parsed, dict):
+        emails = parsed.get("emails")
+        if isinstance(emails, list):
+            insights = parsed.get("insights") or parsed.get("summary") or parsed.get("message")
+            return {
+                "emails": emails,
+                "insights": insights if isinstance(insights, str) else None,
+            }
+    return None
+
+def _extract_emails_payload(text: str) -> dict:
+    result = {"emails": None, "insights": None, "text_before": ""}
+    if not text:
+        return result
+
+    fence_regex = re.compile(r"```\s*json\s*([\s\S]*?)\s*```", re.IGNORECASE)
+    for match in fence_regex.finditer(text):
+        candidate = (match.group(1) or "").strip()
+        try:
+            payload = _normalize_emails_payload(json.loads(candidate))
+        except Exception:
+            payload = None
+        if payload:
+            result.update(payload)
+            result["text_before"] = text[: match.start()].strip()
+            return result
+
+    any_fence = re.compile(r"```\s*([\s\S]*?)\s*```")
+    for match in any_fence.finditer(text):
+        candidate = (match.group(1) or "").strip()
+        try:
+            payload = _normalize_emails_payload(json.loads(candidate))
+        except Exception:
+            payload = None
+        if payload:
+            result.update(payload)
+            result["text_before"] = text[: match.start()].strip()
+            return result
+
+    try:
+        payload = _normalize_emails_payload(json.loads(text.strip()))
+    except Exception:
+        payload = None
+    if payload:
+        result.update(payload)
+        return result
+
+    array_match = _first_balanced_json(text, "[", "]")
+    if array_match:
+        candidate, idx = array_match
+        try:
+            payload = _normalize_emails_payload(json.loads(candidate))
+        except Exception:
+            payload = None
+        if payload:
+            result.update(payload)
+            result["text_before"] = text[:idx].strip()
+            return result
+
+    obj_match = _first_balanced_json(text, "{", "}")
+    if obj_match:
+        candidate, idx = obj_match
+        try:
+            payload = _normalize_emails_payload(json.loads(candidate))
+        except Exception:
+            payload = None
+        if payload:
+            result.update(payload)
+            result["text_before"] = text[:idx].strip()
+            return result
+
+    result["text_before"] = text.strip()
+    return result
+
+def _store_voice_response(user_id: str, response_text: str) -> str:
+    payload = _extract_emails_payload(response_text or "")
+    response_id = str(uuid.uuid4())
+    VOICE_RESPONSE_CACHE[response_id] = {
+        "user_id": user_id,
+        "response_text": response_text or "",
+        "emails": payload.get("emails"),
+        "insights": payload.get("insights"),
+        "text_before": payload.get("text_before") or "",
+    }
+    logger.info(
+        "Stored voice response %s (emails=%s).",
+        response_id,
+        len(payload.get("emails") or []) if isinstance(payload.get("emails"), list) else "none",
+    )
+    if len(VOICE_RESPONSE_CACHE) > VOICE_RESPONSE_CACHE_MAX:
+        oldest_key = next(iter(VOICE_RESPONSE_CACHE))
+        VOICE_RESPONSE_CACHE.pop(oldest_key, None)
+    return response_id
+
+def _is_email_heavy_response(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    if "```json" in lowered:
+        return True
+    if "📧" in text:
+        return True
+    keyword_hits = sum(k in lowered for k in ["from:", "subject:", "date:"])
+    if keyword_hits >= 2:
+        return True
+    if "here are your" in lowered and "email" in lowered:
+        return True
+    if "emails about" in lowered and "date:" in lowered:
+        return True
+    return False
+
+def _build_voice_summary(text: str) -> str:
+    if not text:
+        return ""
+    lowered = text.lower()
+    provider = None
+    if "outlook" in lowered:
+        provider = "Outlook"
+    elif "gmail" in lowered:
+        provider = "Gmail"
+
+    provider_phrase = f" from your {provider} account" if provider else ""
+
+    if "didn't find" in lowered or "no emails" in lowered or "couldn't find" in lowered:
+        first = re.split(r"[\n\.]", text.strip(), 1)[0].strip()
+        return first or "I didn't find any emails."
+    if "here are" in lowered and "email" in lowered:
+        return f"Here are your emails{provider_phrase} on the screen."
+    if "i found" in lowered and "email" in lowered:
+        return f"I found some emails{provider_phrase}. They're shown on the screen."
+    return f"Here are your emails{provider_phrase} on the screen."
 
 async def deepgram_stt(audio_bytes: bytes, content_type: str) -> str:
     if not DEEPGRAM_API_KEY:
@@ -144,6 +329,16 @@ async def voice_chat(
     if not transcript:
         return JSONResponse({"transcript": "", "response_text": "", "session_id": session_id})
 
+    normalized_transcript = _normalize_transcript(transcript)
+    if normalized_transcript != transcript:
+        logger.info(
+            "Voice STT normalized transcript (%s chars): %s",
+            len(normalized_transcript),
+            normalized_transcript[:200],
+        )
+    else:
+        logger.info("Voice STT transcript (%s chars): %s", len(transcript), transcript[:200])
+
     # Reuse the SAME session mechanism as /chat
     sid = session_id or str(uuid.uuid4())
     session_key = f"{user_id}:{sid}"
@@ -177,9 +372,10 @@ async def voice_chat(
     async with lock:
         response_text = await asyncio.to_thread(
             chat_sessions[session_key].chat,
-            transcript,
+            normalized_transcript,
             context_message,
         )
+    logger.info("Voice response (%s chars).", len(response_text or ""))
 
     # Store chat memory for RAG (best-effort)
     try:
@@ -204,12 +400,38 @@ async def voice_chat(
     except Exception as e:
         logger.error(f"Failed to schedule voice chat memory embeddings: {e}")
 
-    audio_out, mime = await deepgram_tts(response_text)
+    tts_text = response_text or ""
+    if _is_email_heavy_response(response_text):
+        first_line = ""
+        for line in (response_text or "").splitlines():
+            if line.strip():
+                first_line = line.strip()
+                break
+        if first_line and not first_line.lstrip().startswith("```") and not first_line.lstrip().startswith("["):
+            tts_text = first_line
+        else:
+            tts_text = _build_voice_summary(response_text)
+    logger.info("Voice TTS text (%s chars): %s", len(tts_text or ""), tts_text[:200])
+
+    response_id = _store_voice_response(user_id, response_text)
+
+    if not tts_text:
+        return JSONResponse(
+            {
+                "transcript": transcript,
+                "response_text": response_text or "",
+                "session_id": sid,
+            }
+        )
+
+    audio_out, mime = await deepgram_tts(tts_text)
+    logger.info("Voice TTS audio bytes: %s", len(audio_out))
 
     # Return audio for immediate playback + useful metadata in headers
-    safe_transcript = _safe_header_value(transcript, max_len=200)
-    safe_full_transcript = _safe_header_value(transcript, max_len=2000)
+    safe_transcript = _safe_header_value(normalized_transcript, max_len=200)
+    safe_full_transcript = _safe_header_value(normalized_transcript, max_len=2000)
     safe_reply = _safe_header_value(response_text, max_len=2000)
+    safe_tts = _safe_header_value(tts_text, max_len=2000)
 
     return Response(
         content=audio_out,
@@ -219,5 +441,23 @@ async def voice_chat(
             "X-Transcript": safe_transcript,
             "X-User-Transcript": safe_full_transcript,
             "X-Assistant-Reply": safe_reply,
+            "X-Assistant-Tts": safe_tts,
+            "X-Voice-Response-Id": response_id,
         },
+    )
+
+@router.get("/response/{response_id}")
+async def get_voice_response(
+    response_id: str, user_id: str = Header(..., alias="X-User-Id")
+):
+    payload = VOICE_RESPONSE_CACHE.get(response_id)
+    if not payload or payload.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Voice response not found")
+    return JSONResponse(
+        {
+            "response_text": payload.get("response_text", ""),
+            "emails": payload.get("emails"),
+            "insights": payload.get("insights"),
+            "text_before": payload.get("text_before", ""),
+        }
     )
