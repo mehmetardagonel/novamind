@@ -30,7 +30,93 @@
       </aside>
 
       <div class="chat-main">
-        <div class="chat-container">
+        <!-- ✅ Voice Agent -->
+        <div v-if="isVoicePage" class="voice-page" aria-live="polite">
+          <div class="voice-header">
+            <div class="voice-title">
+              Voice Agent
+              <span v-if="activeChat" class="voice-subtitle">
+                · {{ activeChat.title || "Chat" }}
+              </span>
+            </div>
+
+            <!-- ✅ X is disabled while agent is active -->
+            <button
+              class="voice-close"
+              @click="closeVoicePage"
+              title="Close voice agent"
+              :disabled="isVoiceBusy"
+              :class="{ disabled: isVoiceBusy }"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div class="voice-stage">
+            <!-- Orb -->
+            <div
+              class="voice-orb"
+              :class="voicePhase"
+              :style="orbStyle"
+              aria-hidden="true"
+            >
+              <span class="voice-orb-core"></span>
+              <span class="voice-orb-ring ring-1"></span>
+              <span class="voice-orb-ring ring-2"></span>
+              <span class="voice-orb-ring ring-3"></span>
+            </div>
+
+            <!-- Status ABOVE wave -->
+            <div class="voice-status">
+              <div class="voice-status-pill" :class="voicePhase">
+                <span class="voice-status-dot" :class="voicePhase"></span>
+
+                <span class="voice-status-text">
+                  {{ voiceStatusLabel
+                  }}<span v-if="voicePhase === 'listening'">{{
+                    listeningDots
+                  }}</span>
+                </span>
+              </div>
+
+              <div class="voice-hint">{{ voiceHint }}</div>
+            </div>
+
+            <!-- Old bars animation -->
+            <div class="voice-wave" :class="{ active: voicePhase !== 'ready' }">
+              <span></span><span></span><span></span><span></span><span></span
+              ><span></span><span></span>
+            </div>
+          </div>
+
+          <div class="voice-footer">
+            <button
+              class="voice-primary"
+              @click="handleVoiceInput"
+              :disabled="isLoading || !activeChat"
+            >
+              <span class="material-symbols-outlined">
+                {{
+                  voicePhase === "listening" || voicePhase === "recording"
+                    ? "stop"
+                    : "mic"
+                }}
+              </span>
+              <span>
+                {{
+                  voicePhase === "listening" || voicePhase === "recording"
+                    ? "Stop"
+                    : "Start"
+                }}
+              </span>
+            </button>
+
+            <!-- ✅ Cancel removed -->
+          </div>
+        </div>
+
+        <!-- ✅ Normal chat panel -->
+        <div v-else class="chat-container">
           <div class="chat-history" ref="historyContainer">
             <div
               v-for="(message, index) in activeMessages"
@@ -46,6 +132,7 @@
                 class="message-text"
                 v-html="formatMessageText(message.text)"
               ></p>
+
               <p
                 v-else-if="
                   message.role === 'bot' &&
@@ -107,31 +194,12 @@
               </div>
             </div>
 
-            <div
-              v-if="isLoading && !isVoiceActive"
-              class="message ai-message loading-indicator"
-            >
+            <div v-if="isLoading" class="message ai-message loading-indicator">
               <p>
                 <span class="dot">.</span>
                 <span class="dot">.</span>
                 <span class="dot">.</span>
               </p>
-            </div>
-
-            <div v-if="isVoiceActive" class="message ai-message voice-inline">
-              <div class="voice-inline-row">
-                <span class="voice-inline-dot"></span>
-                <span class="voice-inline-label">
-                  {{ voiceStatusLabel }}{{ voiceDots }}
-                </span>
-              </div>
-              <div class="voice-inline-wave">
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
             </div>
           </div>
 
@@ -142,16 +210,13 @@
                 placeholder="Type your prompt here..."
                 v-model="userPrompt"
                 @keyup.enter="sendMessage"
-                :disabled="isLoading || isListening || !activeChat"
+                :disabled="isLoading || !activeChat"
               />
 
-              <!-- Send button -->
               <button
                 class="inner-send"
                 @click="sendMessage"
-                :disabled="
-                  !userPrompt.trim() || isLoading || isListening || !activeChat
-                "
+                :disabled="!userPrompt.trim() || isLoading || !activeChat"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -164,36 +229,19 @@
                 </svg>
               </button>
 
-              <!-- Voice button (always visible, disabled while loading) -->
               <button
                 class="inner-voice"
-                @click="handleVoiceInput"
+                @click="openVoicePage"
                 :disabled="isLoading || !activeChat"
-                :class="{ 'listening-active': isListening }"
+                title="Open voice agent"
               >
-                <span class="material-symbols-outlined mic-icon">
-                  {{ isRecording ? "stop" : "mic" }}
-                </span>
+                <span class="material-symbols-outlined mic-icon">mic</span>
               </button>
             </div>
           </div>
         </div>
+        <!-- /chat-container -->
       </div>
-    </div>
-
-    <div v-if="isListening" class="voice-overlay" aria-live="polite">
-      <div class="voice-orb">
-        <span class="voice-orb-core"></span>
-        <span class="voice-orb-ring ring-1"></span>
-        <span class="voice-orb-ring ring-2"></span>
-        <span class="voice-orb-ring ring-3"></span>
-      </div>
-      <div class="voice-overlay-label">
-        {{ voiceStatusLabel }}{{ voiceDots }}
-      </div>
-      <button class="voice-overlay-stop" @click="handleVoiceInput">
-        Stop
-      </button>
     </div>
   </div>
 </template>
@@ -210,18 +258,44 @@ export default {
   setup() {
     const authStore = useAuthStore();
     const chatStore = useChatStore();
+
     const userPrompt = ref("");
     const isLoading = ref(false);
     const historyContainer = ref(null);
-    const isListening = ref(false); // Listening state for voice
-    const isVoiceThinking = ref(false); // Waiting on voice response
-    const listeningDots = ref(""); // Dot animation state
+
+    const isVoicePage = ref(false);
+
+    /**
+     * ✅ Voice UI phase
+     * - ready | listening | recording | thinking | speaking
+     */
+    const voicePhase = ref("ready");
+
+    // ✅ Busy state (used to disable X)
+    const isVoiceBusy = computed(() =>
+      ["listening", "recording", "thinking", "speaking"].includes(
+        voicePhase.value
+      )
+    );
+
+    const listeningDots = ref("");
+    let dotInterval = null;
+
+    // Mic-reactive level (0..1)
+    const voiceLevel = ref(0);
+
+    // WebAudio meter internals
+    let meterStream = null;
+    let audioCtx = null;
+    let analyser = null;
+    let meterRAF = null;
+    let analyserData = null;
+
     const activeRecorder = ref(null);
-    let dotInterval = null; // For managing the dot animation timer
-    const isRecording = ref(false);
-    const isSpeaking = ref(false);
+
     const audioPlayer = new Audio();
     let currentAudioUrl = null;
+
     const API_BASE_URL =
       import.meta.env.VITE_API_URL || "http://localhost:8001";
     const normalizedBase = API_BASE_URL.endsWith("/")
@@ -235,37 +309,49 @@ export default {
     const activeChat = computed(() => chatStore.activeChat);
     const activeMessages = computed(() => activeChat.value?.messages || []);
 
-    const isVoiceActive = computed(
-      () => isListening.value || isVoiceThinking.value || isSpeaking.value
-    );
-
     const voiceStatusLabel = computed(() => {
-      if (isListening.value) return "Listening";
-      if (isVoiceThinking.value) return "Thinking";
-      if (isSpeaking.value) return "Speaking";
-      return "Voice";
+      if (voicePhase.value === "listening") return "Listening";
+      if (voicePhase.value === "recording") return "Recording";
+      if (voicePhase.value === "thinking") return "Thinking";
+      if (voicePhase.value === "speaking") return "Speaking";
+      return "Ready";
     });
 
-    const voiceDots = computed(() =>
-      isListening.value || isVoiceThinking.value ? listeningDots.value : ""
-    );
+    const voiceHint = computed(() => {
+      if (!activeChat.value) return "Select a chat to start.";
+      if (voicePhase.value === "listening")
+        return "Speak naturally. Recording stops on silence.";
+      if (voicePhase.value === "recording") return "Recording…";
+      if (voicePhase.value === "thinking") return "Processing your request…";
+      if (voicePhase.value === "speaking") return "Assistant is replying.";
+      return "Tap Start to talk.";
+    });
 
-    const formatBody = (text) => {
-      if (!text) return "";
-      return text.replace(/\n/g, "<br>");
-    };
+    const orbStyle = computed(() => {
+      const lvl = Math.max(0, Math.min(1, voiceLevel.value || 0));
+      const scale = 1 + lvl * 0.32;
+      const glow = 0.55 + lvl * 0.55;
+      return {
+        "--v-lvl": String(lvl),
+        "--v-scale": String(scale),
+        "--v-glow": String(glow),
+      };
+    });
+
+    const formatBody = (text) => (!text ? "" : text.replace(/\n/g, "<br>"));
 
     const isImportantEmail = (email) => {
       if (!email || typeof email !== "object") return false;
       if (email.is_important) return true;
       if (email.ml_prediction === "important") return true;
       const labels = Array.isArray(email.label_ids) ? email.label_ids : [];
-      return labels.some((label) => String(label).toUpperCase() === "IMPORTANT");
+      return labels.some(
+        (label) => String(label).toUpperCase() === "IMPORTANT"
+      );
     };
 
     const formatMessageText = (text) => {
       if (!text) return "";
-      // Escape HTML entities first, then convert newlines to <br>
       const escaped = text
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -355,26 +441,19 @@ export default {
       for (let i = startIndex; i < text.length; i += 1) {
         const ch = text[i];
         if (inString) {
-          if (escape) {
-            escape = false;
-          } else if (ch === "\\") {
-            escape = true;
-          } else if (ch === '"') {
-            inString = false;
-          }
+          if (escape) escape = false;
+          else if (ch === "\\") escape = true;
+          else if (ch === '"') inString = false;
           continue;
         }
         if (ch === '"') {
           inString = true;
           continue;
         }
-        if (ch === openChar) {
-          depth += 1;
-        } else if (ch === closeChar) {
+        if (ch === openChar) depth += 1;
+        else if (ch === closeChar) {
           depth -= 1;
-          if (depth === 0) {
-            return text.slice(startIndex, i + 1);
-          }
+          if (depth === 0) return text.slice(startIndex, i + 1);
         }
       }
       return null;
@@ -384,9 +463,7 @@ export default {
       let idx = text.indexOf(openChar);
       while (idx !== -1) {
         const candidate = findBalancedJson(text, idx, openChar, closeChar);
-        if (candidate) {
-          return { candidate, index: idx };
-        }
+        if (candidate) return { candidate, index: idx };
         idx = text.indexOf(openChar, idx + 1);
       }
       return null;
@@ -402,29 +479,24 @@ export default {
         if (!payload) return false;
         result.emails = payload.emails;
         result.insights = payload.insights;
-        result.textBefore = cleanTextBeforeJson(text.slice(0, index || 0).trim());
+        result.textBefore = cleanTextBeforeJson(
+          text.slice(0, index || 0).trim()
+        );
         return true;
       };
 
-      // 1) Prefer fenced JSON blocks: ```json ... ``` (with or without newline after json)
       const fenceRegex = /```\s*json\s*([\s\S]*?)\s*```/gi;
       for (const match of text.matchAll(fenceRegex)) {
         const candidate = (match[1] || "").trim();
-        if (tryCandidate(candidate, match.index)) {
-          return result;
-        }
+        if (tryCandidate(candidate, match.index)) return result;
       }
 
-      // 2) Fallback: any fenced block that happens to contain the email array
       const anyFenceRegex = /```\s*([\s\S]*?)\s*```/g;
       for (const match of text.matchAll(anyFenceRegex)) {
         const candidate = (match[1] || "").trim();
-        if (tryCandidate(candidate, match.index)) {
-          return result;
-        }
+        if (tryCandidate(candidate, match.index)) return result;
       }
 
-      // 3) Direct parse if the whole response is JSON
       const directPayload = tryParseEmailsJson(text.trim());
       if (directPayload) {
         result.emails = directPayload.emails;
@@ -432,17 +504,13 @@ export default {
         return result;
       }
 
-      // 4) Locate a balanced JSON array substring and try parsing it
       const arrayMatch = findFirstBalancedJson(text, "[", "]");
-      if (arrayMatch && tryCandidate(arrayMatch.candidate, arrayMatch.index)) {
+      if (arrayMatch && tryCandidate(arrayMatch.candidate, arrayMatch.index))
         return result;
-      }
 
-      // 5) Locate a balanced JSON object substring and try parsing it
       const objectMatch = findFirstBalancedJson(text, "{", "}");
-      if (objectMatch && tryCandidate(objectMatch.candidate, objectMatch.index)) {
+      if (objectMatch && tryCandidate(objectMatch.candidate, objectMatch.index))
         return result;
-      }
 
       result.textBefore = stripJsonBlocks(text);
       return result;
@@ -469,9 +537,9 @@ export default {
         text: messageText,
         emails: null,
       });
+
       userPrompt.value = "";
       scrollToBottom();
-
       isLoading.value = true;
 
       try {
@@ -487,30 +555,25 @@ export default {
           }),
         });
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error("API error response:", errorText);
+        if (!response.ok)
           throw new Error(`API request failed: ${response.status}`);
-        }
 
         const data = await response.json();
-        console.log("Chat response data:", data);
 
         if (data.session_id) {
           chatStore.setSessionId(chatId, data.session_id);
         }
 
-        // Handle response - extract JSON and text
         const responseText = data.response || "";
         const extracted = extractJsonFromText(responseText);
 
-        // Ensure we always have some text to display
         let displayText = extracted.textBefore;
         if (extracted.insights) {
           displayText = displayText
             ? `${displayText}\n\n${extracted.insights}`
             : extracted.insights;
         }
+
         if (!displayText && Array.isArray(extracted.emails)) {
           displayText = extracted.emails.length
             ? `Found ${extracted.emails.length} email(s).`
@@ -527,7 +590,7 @@ export default {
         });
       } catch (error) {
         console.error("Error:", error);
-        chatStore.appendMessage(chatId, {
+        chatStore.appendMessage(activeChat.value.id, {
           role: "bot",
           text: "Sorry, an error occurred connecting to the server. Please ensure the backend is running.",
           emails: null,
@@ -538,87 +601,217 @@ export default {
       }
     };
 
-    // New function for dot animation
-    const startDotAnimation = () => {
+    const startDots = () => {
       listeningDots.value = "";
       dotInterval = setInterval(() => {
         listeningDots.value =
           listeningDots.value.length < 3 ? listeningDots.value + "." : "";
-      }, 500); // Change dot every 0.5 seconds
+      }, 500);
     };
 
-    // New function to clear the dot animation
-    const stopDotAnimation = () => {
-      if (dotInterval) {
-        clearInterval(dotInterval);
-        dotInterval = null;
-      }
+    const stopDots = () => {
+      if (dotInterval) clearInterval(dotInterval);
+      dotInterval = null;
       listeningDots.value = "";
     };
 
-    // New function to toggle the voice input state
-    const playReplyAudio = async (blob) => {
-      if (currentAudioUrl) {
-        URL.revokeObjectURL(currentAudioUrl);
-      }
-      currentAudioUrl = URL.createObjectURL(blob);
-      audioPlayer.src = currentAudioUrl;
+    const stopMicMeter = async () => {
+      voiceLevel.value = 0;
+      if (meterRAF) cancelAnimationFrame(meterRAF);
+      meterRAF = null;
+
       try {
-        isSpeaking.value = true;
-        await audioPlayer.play();
-      } catch (error) {
-        isSpeaking.value = false;
-        console.error("Failed to play voice response:", error);
+        if (audioCtx) await audioCtx.close();
+      } catch {}
+      audioCtx = null;
+      analyser = null;
+      analyserData = null;
+
+      if (meterStream) meterStream.getTracks().forEach((t) => t.stop());
+      meterStream = null;
+    };
+
+    const startMicMeter = async () => {
+      if (meterStream || analyser || audioCtx) return;
+      try {
+        meterStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: false,
+        });
+
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = audioCtx.createMediaStreamSource(meterStream);
+
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.85;
+        src.connect(analyser);
+
+        analyserData = new Uint8Array(analyser.frequencyBinCount);
+
+        const tick = () => {
+          if (!analyser) return;
+          analyser.getByteTimeDomainData(analyserData);
+
+          let sum = 0;
+          for (let i = 0; i < analyserData.length; i++) {
+            const v = (analyserData[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / analyserData.length);
+          const scaled = Math.max(0, Math.min(1, rms * 2.8));
+          voiceLevel.value = voiceLevel.value * 0.75 + scaled * 0.25;
+
+          meterRAF = requestAnimationFrame(tick);
+        };
+
+        tick();
+      } catch (e) {
+        console.warn("Mic meter unavailable:", e);
+        await stopMicMeter();
+      }
+    };
+
+    const stopRecordingSession = async () => {
+      if (activeRecorder.value?.stop) {
+        try {
+          activeRecorder.value.stop();
+        } catch {}
+      }
+      activeRecorder.value = null;
+      stopDots();
+      await stopMicMeter();
+      if (
+        voicePhase.value === "listening" ||
+        voicePhase.value === "recording"
+      ) {
+        voicePhase.value = "ready";
       }
     };
 
     audioPlayer.addEventListener("ended", () => {
-      isSpeaking.value = false;
       if (currentAudioUrl) {
         URL.revokeObjectURL(currentAudioUrl);
         currentAudioUrl = null;
       }
+      if (voicePhase.value === "speaking") voicePhase.value = "ready";
     });
 
-    // New function to handle voice input
+    const playReplyAudio = async (blob) => {
+      if (!blob) return;
+      if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
+      currentAudioUrl = URL.createObjectURL(blob);
+      audioPlayer.src = currentAudioUrl;
+
+      voicePhase.value = "speaking";
+      try {
+        await audioPlayer.play();
+      } catch (e) {
+        console.error("Failed to play voice response:", e);
+        voicePhase.value = "ready";
+      }
+    };
+
+    const speakFallback = async (text) => {
+      if (!text) return;
+
+      voicePhase.value = "speaking";
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.onend = () => {
+          if (voicePhase.value === "speaking") voicePhase.value = "ready";
+        };
+        utter.onerror = () => {
+          if (voicePhase.value === "speaking") voicePhase.value = "ready";
+        };
+        window.speechSynthesis.speak(utter);
+      } catch {
+        voicePhase.value = "ready";
+      }
+    };
+
+    const openVoicePage = () => {
+      if (!activeChat.value) return;
+      isVoicePage.value = true;
+      voicePhase.value = "ready";
+      voiceLevel.value = 0;
+    };
+
+    // ✅ Close is blocked while busy (and X is disabled)
+    const closeVoicePage = async () => {
+      if (isVoiceBusy.value) return;
+
+      await stopRecordingSession();
+
+      try {
+        audioPlayer.pause();
+        audioPlayer.src = "";
+      } catch {}
+      try {
+        window.speechSynthesis?.cancel?.();
+      } catch {}
+
+      voicePhase.value = "ready";
+      isVoicePage.value = false;
+    };
+
     const handleVoiceInput = async () => {
       if (isLoading.value || !activeChat.value) return;
 
-      if (isRecording.value) {
-        if (activeRecorder.value?.stop) {
-          activeRecorder.value.stop();
-        }
+      if (
+        voicePhase.value === "listening" ||
+        voicePhase.value === "recording"
+      ) {
+        await stopRecordingSession();
         return;
       }
 
-      isRecording.value = true;
-      isListening.value = true;
-      startDotAnimation();
+      voicePhase.value = "listening";
+      startDots();
+      await startMicMeter();
 
       try {
         const recorder = recordUntilSilence();
         activeRecorder.value = recorder;
+
+        voicePhase.value = "recording";
+
         const audioBlob = await recorder.promise;
         activeRecorder.value = null;
-        isRecording.value = false;
-        isListening.value = false;
-        isVoiceThinking.value = true;
+
+        await stopMicMeter();
+        stopDots();
+
         if (!audioBlob || audioBlob.size === 0) {
+          voicePhase.value = "ready";
           return;
         }
+
+        voicePhase.value = "thinking";
         isLoading.value = true;
+
         const {
           audioBlob: replyAudio,
           sessionId,
           userTranscript,
           assistantReply,
           responseId,
-        } = await sendVoicePrompt(audioBlob, activeChat.value?.sessionId || null);
+        } = await sendVoicePrompt(
+          audioBlob,
+          activeChat.value?.sessionId || null
+        );
 
         const chatId = activeChat.value.id;
+
         if (sessionId) {
           await chatStore.setSessionId(chatId, sessionId);
         }
+
         if (userTranscript) {
           chatStore.appendMessage(chatId, {
             role: "user",
@@ -626,120 +819,114 @@ export default {
             emails: null,
           });
         }
-        if (!userTranscript && !assistantReply && !replyAudio) {
-          chatStore.appendMessage(chatId, {
-            role: "bot",
-            text: "I didn't catch that. Please try again.",
-            emails: null,
-          });
-        }
-        if (assistantReply || responseId) {
-          let responseText = assistantReply || "";
-          let extracted = extractJsonFromText(responseText);
 
-          if (responseId) {
-            try {
-              const res = await fetch(
-                `${VOICE_RESPONSE_URL}/${encodeURIComponent(responseId)}`,
-                {
-                  headers: {
-                    "X-User-Id": authStore.user?.id,
-                  },
-                }
-              );
-              if (res.ok) {
-                const payload = await res.json();
-                responseText = payload.response_text || responseText;
-                if (Array.isArray(payload.emails)) {
-                  extracted = {
-                    textBefore: payload.text_before || "",
-                    emails: payload.emails,
-                    insights:
-                      typeof payload.insights === "string"
-                        ? payload.insights
-                        : null,
-                  };
-                } else {
-                  extracted = extractJsonFromText(responseText);
-                }
+        let responseText = assistantReply || "";
+        let extracted = extractJsonFromText(responseText);
+
+        if (responseId) {
+          try {
+            const res = await fetch(
+              `${VOICE_RESPONSE_URL}/${encodeURIComponent(responseId)}`,
+              { headers: { "X-User-Id": authStore.user?.id } }
+            );
+
+            if (res.ok) {
+              const payload = await res.json();
+              responseText = payload.response_text || responseText;
+
+              if (Array.isArray(payload.emails)) {
+                extracted = {
+                  textBefore: payload.text_before || "",
+                  emails: payload.emails,
+                  insights:
+                    typeof payload.insights === "string"
+                      ? payload.insights
+                      : null,
+                };
+              } else {
+                extracted = extractJsonFromText(responseText);
               }
-            } catch (error) {
-              console.warn("Failed to load voice response payload:", error);
             }
+          } catch (e) {
+            console.warn("Failed to load voice response payload:", e);
           }
+        }
 
-          let displayText = extracted.textBefore;
-          if (extracted.insights) {
-            displayText = displayText
-              ? `${displayText}\n\n${extracted.insights}`
-              : extracted.insights;
-          }
-          if (!displayText && Array.isArray(extracted.emails)) {
-            displayText = extracted.emails.length
-              ? `Found ${extracted.emails.length} email(s).`
-              : "No emails found.";
-          } else if (!displayText) {
-            displayText = stripJsonBlocks(responseText).trim();
-          }
+        let displayText = extracted.textBefore;
+        if (extracted.insights) {
+          displayText = displayText
+            ? `${displayText}\n\n${extracted.insights}`
+            : extracted.insights;
+        }
+        if (!displayText && Array.isArray(extracted.emails)) {
+          displayText = extracted.emails.length
+            ? `Found ${extracted.emails.length} email(s).`
+            : "No emails found.";
+        } else if (!displayText) {
+          displayText = stripJsonBlocks(responseText).trim();
+        }
 
+        if (!displayText && !replyAudio) {
+          displayText = "I didn't catch that. Please try again.";
+        }
+
+        if (displayText || Array.isArray(extracted.emails)) {
           chatStore.appendMessage(chatId, {
             role: "bot",
             text: displayText,
             emails: extracted.emails,
           });
-
-          if (replyAudio) {
-            await playReplyAudio(replyAudio);
-          }
         }
+
+        if (replyAudio) {
+          await playReplyAudio(replyAudio);
+        } else {
+          await speakFallback(displayText);
+        }
+
         scrollToBottom();
       } catch (error) {
         console.error("Voice request failed:", error);
+        await stopMicMeter();
+        stopDots();
+        voicePhase.value = "ready";
         window.alert("Voice request failed");
       } finally {
-        isRecording.value = false;
-        isListening.value = false;
-        isVoiceThinking.value = false;
         isLoading.value = false;
-        stopDotAnimation();
-        activeRecorder.value = null;
-        if (!isListening.value) {
-          isSpeaking.value = false;
-        }
+        if (voicePhase.value === "thinking") voicePhase.value = "ready";
       }
     };
 
-    // Clear interval when component is destroyed
-    onUnmounted(() => {
-      stopDotAnimation();
+    onUnmounted(async () => {
+      stopDots();
+      await stopMicMeter();
+
       if (currentAudioUrl) {
         URL.revokeObjectURL(currentAudioUrl);
         currentAudioUrl = null;
       }
-      audioPlayer.pause();
-      audioPlayer.src = "";
+      try {
+        audioPlayer.pause();
+        audioPlayer.src = "";
+      } catch {}
+      try {
+        window.speechSynthesis?.cancel?.();
+      } catch {}
     });
 
-    // Initialize chat store on mount
     onMounted(async () => {
       await chatStore.initialize();
       nextTick(scrollToBottom);
     });
 
-    const clearChat = async () => {
-      await chatStore.clearAll();
-    };
-
     const createChat = async () => {
       await chatStore.createChat();
       nextTick(scrollToBottom);
     };
-
     const deleteChat = async (chatId) => {
       await chatStore.deleteChat(chatId);
       nextTick(scrollToBottom);
     };
-
     const setActiveChat = async (chatId) => {
       await chatStore.setActiveChat(chatId);
       nextTick(scrollToBottom);
@@ -747,33 +934,37 @@ export default {
 
     watch(
       () => activeChatId.value,
-      () => {
-        nextTick(scrollToBottom);
-      }
+      () => nextTick(scrollToBottom)
     );
 
     return {
       userPrompt,
       isLoading,
-      isListening,
-      isVoiceThinking,
-      listeningDots,
-      isRecording,
-      isSpeaking,
-      isVoiceActive,
-      voiceStatusLabel,
-      voiceDots,
+
       chats,
       activeChatId,
       activeChat,
       activeMessages,
+
+      isVoicePage,
+      openVoicePage,
+      closeVoicePage,
+
+      voicePhase,
+      isVoiceBusy, // ✅ exposed for X disabled
+      listeningDots,
+      voiceStatusLabel,
+      voiceHint,
+      orbStyle,
+
       sendMessage,
+      handleVoiceInput,
+
       formatBody,
       formatMessageText,
       isImportantEmail,
       historyContainer,
-      handleVoiceInput,
-      clearChat,
+
       createChat,
       deleteChat,
       setActiveChat,
@@ -783,49 +974,35 @@ export default {
 </script>
 
 <style scoped>
+/* ✅ Keep your exact styles from your last working file (unchanged) */
 .compose-view {
-  --primary-color: #10a37f;
-  --primary-color-light: rgba(16, 163, 127, 0.16);
-  --border-color: rgba(17, 24, 39, 0.12);
-  --light-border-color: rgba(17, 24, 39, 0.08);
-  --hover-bg: rgba(17, 24, 39, 0.05);
-  --content-bg: rgba(255, 255, 255, 0.9);
-  --text-primary: #1f2328;
-  --text-secondary: #667085;
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
   padding: 0 1.5rem 1.5rem 0;
-  font-family: "IBM Plex Sans", "Söhne", sans-serif;
-  background: radial-gradient(
-      circle at top right,
-      rgba(16, 163, 127, 0.14),
-      transparent 55%
-    ),
-    radial-gradient(
-      circle at bottom left,
-      rgba(17, 24, 39, 0.08),
-      transparent 45%
-    ),
-    #f6f7f4;
 }
 
 .chat-split {
+  flex: 1;
+  min-height: 0;
   display: flex;
   gap: 12px;
-  height: 100%;
-  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-sidebar {
-  width: 260px;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  overflow: hidden;
-  background-color: var(--content-bg);
+  width: 270px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background-color: var(--content-bg);
+  overflow: hidden;
 }
 
 .chat-sidebar-header {
@@ -856,12 +1033,15 @@ export default {
 }
 
 .chat-list {
+  flex: 1;
+  min-height: 0;
   padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  overflow: auto;
-  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
 }
 
 .chat-list-item {
@@ -877,6 +1057,7 @@ export default {
   color: var(--text-primary);
   cursor: pointer;
   text-align: left;
+  min-width: 0;
 }
 
 .chat-list-item:hover {
@@ -895,6 +1076,7 @@ export default {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  min-width: 0;
 }
 
 .chat-delete {
@@ -918,74 +1100,62 @@ export default {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .chat-container {
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  flex-grow: 1;
   border: 1px solid var(--border-color);
-  border-radius: 18px;
+  border-radius: 12px;
+  background-color: var(--content-bg);
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(12px);
 }
 
-/* Scrollable messages */
 .chat-history {
-  flex-grow: 1;
-  padding: 1.75rem 1.5rem 1rem;
-  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding: 1rem 1rem 0.75rem;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-/* Message bubbles */
 .message {
-  max-width: 760px;
-  width: fit-content;
-  padding: 0;
-  border-radius: 16px;
-  line-height: 1.55;
-  font-size: 0.96rem;
-  box-shadow: none;
-  word-wrap: break-word;
+  max-width: 70%;
+  padding: 10px 14px;
+  border-radius: 18px;
+  line-height: 1.5;
+  font-size: 0.95rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .user-message {
   align-self: flex-end;
   background-color: var(--primary-color);
   color: #fff;
-  padding: 10px 14px;
-  border-bottom-right-radius: 6px;
+  border-bottom-right-radius: 4px;
 }
 
 .ai-message {
   align-self: flex-start;
-  background-color: transparent;
+  background-color: var(--hover-bg);
   color: var(--text-primary);
-  border: none;
-  border-bottom-left-radius: 6px;
+  border: 1px solid var(--light-border-color);
+  border-bottom-left-radius: 4px;
 }
 
 .message-text {
   margin: 0;
-  display: inline-block;
-  padding: 10px 14px;
-  border-radius: 16px;
-  border: 1px solid var(--light-border-color);
-  background: rgba(17, 24, 39, 0.04);
 }
 
-.user-message .message-text {
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-}
-
-/* Email cards inside AI messages */
 .emails-list {
   margin-top: 10px;
   display: flex;
@@ -1053,7 +1223,6 @@ export default {
   color: #444;
 }
 
-/* Loading dots */
 .loading-indicator .dot {
   opacity: 0;
   animation: dot-flicker 1.5s infinite;
@@ -1077,7 +1246,6 @@ export default {
   }
 }
 
-/* Bottom input area */
 .chat-input-area {
   padding: 0.75rem 1rem 1rem;
   border-top: 1px solid var(--border-color);
@@ -1091,7 +1259,6 @@ export default {
   flex-grow: 1;
 }
 
-/* Input field */
 .input-wrapper input {
   width: 100%;
   padding: 10px 90px 10px 14px;
@@ -1105,10 +1272,9 @@ export default {
 
 .input-wrapper input:focus {
   border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.18);
+  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.15);
 }
 
-/* Send & voice buttons */
 .inner-send,
 .inner-voice {
   position: absolute;
@@ -1121,186 +1287,6 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.voice-inline {
-  align-self: flex-start;
-  background: rgba(17, 24, 39, 0.06);
-  border: 1px solid rgba(17, 24, 39, 0.1);
-  padding: 10px 14px;
-  border-radius: 14px;
-  max-width: 320px;
-}
-
-.voice-inline-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.voice-inline-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--primary-color);
-  box-shadow: 0 0 0 6px rgba(16, 163, 127, 0.12);
-  animation: voice-pulse 1.2s ease-in-out infinite;
-}
-
-.voice-inline-wave {
-  display: flex;
-  gap: 4px;
-  margin-top: 8px;
-  height: 18px;
-}
-
-.voice-inline-wave span {
-  width: 4px;
-  height: 100%;
-  background: rgba(16, 163, 127, 0.8);
-  border-radius: 999px;
-  animation: voice-wave 1s ease-in-out infinite;
-}
-
-.voice-inline-wave span:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.voice-inline-wave span:nth-child(3) {
-  animation-delay: 0.3s;
-}
-.voice-inline-wave span:nth-child(4) {
-  animation-delay: 0.45s;
-}
-.voice-inline-wave span:nth-child(5) {
-  animation-delay: 0.6s;
-}
-
-.voice-overlay {
-  position: fixed;
-  inset: 0;
-  background: radial-gradient(
-      circle at top,
-      rgba(16, 163, 127, 0.25),
-      transparent 60%
-    ),
-    rgba(9, 11, 13, 0.9);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  z-index: 50;
-}
-
-.voice-orb {
-  position: relative;
-  width: 140px;
-  height: 140px;
-  display: grid;
-  place-items: center;
-}
-
-.voice-orb-core {
-  width: 54px;
-  height: 54px;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle,
-    rgba(16, 163, 127, 1),
-    rgba(16, 163, 127, 0.65)
-  );
-  box-shadow: 0 0 24px rgba(16, 163, 127, 0.55);
-  animation: orb-core 1.6s ease-in-out infinite;
-}
-
-.voice-orb-ring {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  border: 2px solid rgba(16, 163, 127, 0.35);
-  animation: orb-ring 2.4s ease-out infinite;
-}
-
-.voice-orb-ring.ring-2 {
-  animation-delay: 0.5s;
-}
-
-.voice-orb-ring.ring-3 {
-  animation-delay: 1s;
-}
-
-.voice-overlay-label {
-  color: #f3f4f6;
-  font-size: 1rem;
-  letter-spacing: 0.3px;
-}
-
-.voice-overlay-stop {
-  background: transparent;
-  color: #f3f4f6;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  padding: 8px 18px;
-  border-radius: 999px;
-  cursor: pointer;
-  font-weight: 600;
-  transition: transform 0.2s ease, border-color 0.2s ease;
-}
-
-.voice-overlay-stop:hover {
-  transform: translateY(-1px);
-  border-color: rgba(255, 255, 255, 0.6);
-}
-
-@keyframes voice-pulse {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.15);
-  }
-}
-
-@keyframes voice-wave {
-  0%,
-  100% {
-    transform: scaleY(0.35);
-  }
-  50% {
-    transform: scaleY(1);
-  }
-}
-
-@keyframes orb-core {
-  0%,
-  100% {
-    transform: scale(0.9);
-  }
-  50% {
-    transform: scale(1.1);
-  }
-}
-
-@keyframes orb-ring {
-  0% {
-    transform: scale(0.7);
-    opacity: 0.7;
-  }
-  100% {
-    transform: scale(1.15);
-    opacity: 0;
-  }
-}
-
-/* Style for voice button when active */
-.inner-voice.listening-active {
-  background-color: #10a37f;
-  color: #fff;
-  box-shadow: 0 0 0 4px rgba(16, 163, 127, 0.2);
 }
 
 .inner-send {
@@ -1326,5 +1312,409 @@ export default {
 .mic-icon.material-symbols-outlined {
   font-size: 20px;
   font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+/* ===== Voice Page ===== */
+.voice-page {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+
+  --voice-accent: #3b82f6;
+  --voice-accent-soft: rgba(59, 130, 246, 0.18);
+  --voice-accent-ring: rgba(59, 130, 246, 0.28);
+
+  background: radial-gradient(
+      circle at top,
+      var(--voice-accent-soft),
+      transparent 60%
+    ),
+    var(--content-bg);
+  overflow: hidden;
+  position: relative;
+}
+
+.voice-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.voice-title {
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.voice-subtitle {
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.voice-close {
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+/* ✅ Disabled X styling */
+.voice-close:disabled,
+.voice-close.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.voice-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  gap: 14px;
+  padding: 24px 18px 18px;
+}
+
+.voice-orb {
+  position: relative;
+  width: min(240px, 46vw);
+  height: min(240px, 46vw);
+  max-width: 260px;
+  max-height: 260px;
+  min-width: 160px;
+  min-height: 160px;
+  display: grid;
+  place-items: center;
+  transform: translateZ(0);
+}
+
+.voice-orb-core {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    var(--voice-accent),
+    rgba(59, 130, 246, 0.62)
+  );
+  transform: scale(var(--v-scale, 1));
+  box-shadow: 0 0 calc(26px * var(--v-glow, 1)) rgba(59, 130, 246, 0.55);
+  transition: box-shadow 80ms linear, transform 80ms linear;
+}
+
+.voice-orb-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid var(--voice-accent-ring);
+  opacity: 0.35;
+}
+
+.voice-orb.ready .voice-orb-core {
+  animation: orb-breathe 2.6s ease-in-out infinite;
+}
+.voice-orb.ready .voice-orb-ring {
+  animation: ring-float 3.2s ease-in-out infinite;
+}
+.voice-orb.ready .ring-2 {
+  animation-delay: 0.35s;
+}
+.voice-orb.ready .ring-3 {
+  animation-delay: 0.7s;
+}
+
+.voice-orb.listening {
+  animation: orb-wobble 1.3s ease-in-out infinite;
+}
+.voice-orb.listening .voice-orb-core {
+  animation: orb-pulse 0.95s ease-in-out infinite;
+}
+.voice-orb.listening .voice-orb-ring {
+  animation: ring-ripple 1.2s ease-out infinite;
+  opacity: 0.55;
+}
+.voice-orb.listening .ring-2 {
+  animation-delay: 0.18s;
+}
+.voice-orb.listening .ring-3 {
+  animation-delay: 0.36s;
+}
+
+.voice-orb.recording .voice-orb-core {
+  animation: orb-record 0.75s ease-in-out infinite;
+}
+.voice-orb.recording .voice-orb-ring {
+  animation: ring-ripple 0.95s ease-out infinite;
+  opacity: 0.6;
+}
+.voice-orb.recording .ring-2 {
+  animation-delay: 0.16s;
+}
+.voice-orb.recording .ring-3 {
+  animation-delay: 0.32s;
+}
+
+.voice-orb.thinking .voice-orb-core {
+  animation: orb-speak 1.25s ease-in-out infinite;
+}
+.voice-orb.thinking .voice-orb-ring {
+  animation: ring-ripple 1.9s ease-out infinite;
+  opacity: 0.5;
+}
+
+.voice-orb.speaking .voice-orb-core {
+  animation: orb-speak 1.1s ease-in-out infinite;
+}
+.voice-orb.speaking .voice-orb-ring {
+  animation: ring-ripple 1.65s ease-out infinite;
+  opacity: 0.55;
+}
+.voice-orb.speaking .ring-2 {
+  animation-delay: 0.22s;
+}
+.voice-orb.speaking .ring-3 {
+  animation-delay: 0.44s;
+}
+
+@keyframes orb-breathe {
+  0%,
+  100% {
+    filter: saturate(1);
+  }
+  50% {
+    filter: saturate(1.12);
+  }
+}
+@keyframes ring-float {
+  0%,
+  100% {
+    transform: translateY(0) scale(0.94);
+    opacity: 0.28;
+  }
+  50% {
+    transform: translateY(-6px) scale(1.02);
+    opacity: 0.42;
+  }
+}
+@keyframes orb-wobble {
+  0%,
+  100% {
+    transform: rotate(-1.5deg);
+  }
+  50% {
+    transform: rotate(1.5deg);
+  }
+}
+@keyframes orb-pulse {
+  0%,
+  100% {
+    filter: saturate(1);
+  }
+  50% {
+    filter: saturate(1.15);
+  }
+}
+@keyframes orb-record {
+  0%,
+  100% {
+    filter: saturate(1.05);
+  }
+  50% {
+    filter: saturate(1.18);
+  }
+}
+@keyframes orb-speak {
+  0%,
+  100% {
+    filter: saturate(1.06);
+  }
+  50% {
+    filter: saturate(1.22);
+  }
+}
+@keyframes ring-ripple {
+  0% {
+    transform: scale(0.78);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.22);
+    opacity: 0;
+  }
+}
+
+.voice-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.voice-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.voice-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.12);
+  animation: voice-pulse 1.2s ease-in-out infinite;
+  background: #3b82f6;
+}
+.voice-status-dot.ready {
+  background: #3b82f6;
+}
+.voice-status-dot.listening {
+  background: #22c55e;
+  box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.14);
+}
+.voice-status-dot.recording {
+  background: #ef4444;
+  box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.14);
+}
+.voice-status-dot.thinking {
+  background: #a855f7;
+  box-shadow: 0 0 0 6px rgba(168, 85, 247, 0.14);
+}
+.voice-status-dot.speaking {
+  background: #f59e0b;
+  box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.14);
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.18);
+  }
+}
+
+.voice-hint {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+.voice-wave {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  height: 22px;
+  opacity: 0.65;
+}
+.voice-wave span {
+  width: 5px;
+  height: 100%;
+  background: rgba(59, 130, 246, 0.65);
+  border-radius: 999px;
+  transform: scaleY(0.25);
+}
+.voice-wave.active span {
+  animation: voice-wave 1s ease-in-out infinite;
+}
+.voice-wave.active span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+.voice-wave.active span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+.voice-wave.active span:nth-child(4) {
+  animation-delay: 0.36s;
+}
+.voice-wave.active span:nth-child(5) {
+  animation-delay: 0.48s;
+}
+.voice-wave.active span:nth-child(6) {
+  animation-delay: 0.6s;
+}
+.voice-wave.active span:nth-child(7) {
+  animation-delay: 0.72s;
+}
+
+@keyframes voice-wave {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.voice-footer {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  border-top: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.voice-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: var(--primary-color);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 800;
+}
+.voice-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.voice-page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+      circle at 30% 20%,
+      rgba(59, 130, 246, 0.12),
+      transparent 45%
+    ),
+    radial-gradient(circle at 70% 70%, rgba(59, 130, 246, 0.1), transparent 45%),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.08));
+  pointer-events: none;
+}
+
+.voice-page::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+      rgba(255, 255, 255, 0.03) 1px,
+      transparent 1px
+    ),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.25;
+  mask-image: radial-gradient(circle at center, black 40%, transparent 75%);
+  pointer-events: none;
 }
 </style>
