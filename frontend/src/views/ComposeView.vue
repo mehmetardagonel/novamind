@@ -88,7 +88,7 @@
                   </div>
 
                   <div
-                    v-if="email.is_important"
+                    v-if="isImportantEmail(email)"
                     class="email-field email-important"
                   >
                     ⭐ <strong>Important</strong>
@@ -253,6 +253,14 @@ export default {
     const formatBody = (text) => {
       if (!text) return "";
       return text.replace(/\n/g, "<br>");
+    };
+
+    const isImportantEmail = (email) => {
+      if (!email || typeof email !== "object") return false;
+      if (email.is_important) return true;
+      if (email.ml_prediction === "important") return true;
+      const labels = Array.isArray(email.label_ids) ? email.label_ids : [];
+      return labels.some((label) => String(label).toUpperCase() === "IMPORTANT");
     };
 
     const formatMessageText = (text) => {
@@ -762,6 +770,7 @@ export default {
       sendMessage,
       formatBody,
       formatMessageText,
+      isImportantEmail,
       historyContainer,
       handleVoiceInput,
       clearChat,

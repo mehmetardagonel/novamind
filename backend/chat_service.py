@@ -556,8 +556,15 @@ Would you like me to show more details about any of these?"
     ) -> str:
         if not emails:
             period_label = (time_period or "recent").replace("_", " ")
+            provider_label = (
+                "Outlook" if provider == "outlook" else "Gmail" if provider == "gmail" else ""
+            )
+            provider_prefix = f"{provider_label} " if provider_label else ""
             if importance:
-                return f"I checked your inbox and didn’t find any significant emails for {period_label}."
+                return (
+                    "I checked your inbox and didn’t find any "
+                    f"important {provider_prefix}emails for {period_label}."
+                )
             return f"I checked your inbox and didn’t find any emails to summarize for {period_label}."
 
         total = len(emails)
@@ -582,11 +589,15 @@ Would you like me to show more details about any of these?"
         if total > max_items:
             highlights = f"{highlights}, and {total - max_items} more"
 
-        if importance:
-            return (
-                f"Today’s significant {provider_prefix}emails ({total}) include {highlights}."
-            )
-        return f"Today’s {provider_prefix}emails ({total}) include {highlights}."
+        importance_label = "important " if importance else ""
+        if time_period:
+            if time_period in {"today", "yesterday"}:
+                scope = f"from {period_label}"
+            else:
+                scope = f"from the {period_label}"
+        else:
+            scope = "recently"
+        return f"Your {importance_label}{provider_prefix}emails {scope} ({total}) include {highlights}."
 
     def _summarize_emails_with_llm(
         self,
@@ -604,7 +615,7 @@ Would you like me to show more details about any of these?"
             "Outlook" if provider == "outlook" else "Gmail" if provider == "gmail" else ""
         )
         provider_prefix = f"{provider_label} " if provider_label else ""
-        importance_label = "significant " if importance else ""
+        importance_label = "important " if importance else ""
 
         items = []
         for email in emails[:max_items]:
@@ -984,10 +995,26 @@ Would you like me to show more details about any of these?"
                         mode="fetch",
                     )
         try:
-            emails_block = self._format_fetch_mails_response(json.dumps(payload))
+            emails = self._parse_fetch_mails(json.dumps(payload))
         except Exception as e:
             logger.error(f"Direct inbox fetch failed: {e}")
             return None
+
+        if isinstance(emails, dict) and "error" in emails:
+            return json.dumps(emails, indent=2, cls=DateTimeEncoder)
+
+        if not isinstance(emails, list):
+            return "I couldn't fetch your emails right now. Please try again."
+
+        if not emails:
+            return self._build_summary_from_emails(
+                emails=emails,
+                time_period=time_period,
+                importance=importance,
+                provider=provider,
+            )
+
+        emails_block = self._format_email_list_json_block(emails)
 
         if importance and time_period:
             provider_label = "Outlook" if provider == "outlook" else "Gmail" if provider == "gmail" else ""
@@ -1666,7 +1693,19 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
                     try:
                         payload = {"folder": folder, "max_results": max_results, "provider": provider}
-                        emails_block = self._format_fetch_mails_response(json.dumps(payload))
+                        emails = self._parse_fetch_mails(json.dumps(payload))
+                        if isinstance(emails, dict) and "error" in emails:
+                            return json.dumps(emails, indent=2, cls=DateTimeEncoder)
+                        if not isinstance(emails, list):
+                            return "I couldn't fetch your emails right now. Please try again."
+                        if not emails:
+                            return self._build_summary_from_emails(
+                                emails=emails,
+                                time_period=payload.get("time_period"),
+                                importance=payload.get("importance"),
+                                provider=provider,
+                            )
+                        emails_block = self._format_email_list_json_block(emails)
                         if provider == "outlook" and int(max_results) == 1:
                             intro = "Here’s your latest Outlook email:"
                         elif provider == "outlook":
@@ -1732,7 +1771,22 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                         self._append_to_history(message_stripped, fallback_summary)
                         return fallback_summary
 
-                    emails_block = self._format_fetch_mails_response(json.dumps(payload))
+                    emails = self._parse_fetch_mails(json.dumps(payload))
+                    if isinstance(emails, dict) and "error" in emails:
+                        return json.dumps(emails, indent=2, cls=DateTimeEncoder)
+                    if not isinstance(emails, list):
+                        return "I couldn't fetch your emails right now. Please try again."
+                    if not emails:
+                        summary = self._build_summary_from_emails(
+                            emails=emails,
+                            time_period=payload.get("time_period"),
+                            importance=payload.get("importance"),
+                            provider=payload.get("provider"),
+                        )
+                        self._append_to_history(message_stripped, summary)
+                        return summary
+
+                    emails_block = self._format_email_list_json_block(emails)
                     intro = self._build_fetch_intro(payload)
                     response_text = f"{intro}\n\n{emails_block}"
                     self._append_to_history(message_stripped, response_text)

@@ -62,6 +62,7 @@ from gmail_service import (
     # Multi-provider functions (Gmail + Outlook)
     fetch_sent_multi_provider,
     fetch_trash_multi_provider,
+    fetch_important_multi_provider,
     trash_message_multi_provider,
     untrash_message_multi_provider,
     modify_message_labels_multi_provider,
@@ -601,7 +602,7 @@ async def list_starred(user_id: str = Header(..., alias="X-User-Id")):
 @app.get("/emails/important", response_model=List[EmailOut])
 async def list_important(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        emails = await fetch_messages_by_label_multi(user_id, "IMPORTANT", max_per_account=50)
+        emails = await fetch_important_multi_provider(user_id, max_per_account=50)
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

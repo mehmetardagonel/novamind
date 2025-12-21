@@ -348,6 +348,24 @@ async def fetch_spam(access_token: str, max_results: int = 25) -> List[Dict]:
     """Fetch junk/spam messages."""
     return await fetch_messages(access_token, "junkemail", max_results=max_results)
 
+async def fetch_important(access_token: str, max_results: int = 25) -> List[Dict]:
+    """Fetch important messages (importance == high)."""
+    endpoint = "/me/messages"
+    params = [
+        f"$top={max_results}",
+        "$orderby=receivedDateTime desc",
+        "$select=id,subject,bodyPreview,body,from,toRecipients,receivedDateTime,isRead,importance,categories,flag",
+        "$filter=importance eq 'high'",
+    ]
+    endpoint += "?" + "&".join(params)
+
+    try:
+        response = _make_graph_request(access_token, endpoint)
+        messages = response.get("value", [])
+        return [_parse_outlook_message(msg) for msg in messages]
+    except Exception as e:
+        logger.error(f"Error fetching Outlook important messages: {e}")
+        return []
 
 async def fetch_messages_by_category(
     access_token: str,
@@ -794,6 +812,10 @@ class OutlookService:
     ) -> List[Dict]:
         """Fetch messages with a specific category/label."""
         return await fetch_messages_by_category(access_token, category, max_results)
+
+    async def fetch_important(self, access_token: str, max_results: int = 25) -> List[Dict]:
+        """Fetch messages marked as important (importance == high)."""
+        return await fetch_important(access_token, max_results)
 
 
 # Global instance

@@ -1566,6 +1566,93 @@ async def fetch_trash_multi_provider(user_id: str, max_per_account: int = 25) ->
     return all_trash
 
 
+async def fetch_important_multi_provider(user_id: str, max_per_account: int = 25) -> List[EmailOut]:
+    """
+    Fetch important emails from ALL connected accounts (Gmail + Outlook).
+
+    Args:
+        user_id: User ID from Supabase auth
+        max_per_account: Max results per account
+
+    Returns:
+        List of EmailOut objects sorted by date (newest first)
+    """
+    from email_account_service import email_account_service
+    from outlook_service import fetch_important as fetch_outlook_important
+    from datetime import datetime as dt_class, timezone
+
+    all_important = []
+
+    accounts = await email_account_service.get_all_accounts(user_id)
+    if not accounts:
+        logger.warning(f"No email accounts found for user {user_id}")
+        return []
+
+    for account in accounts:
+        provider = account.get("provider", "gmail")
+        account_id = account.get("id")
+        account_email = account.get("email_address", "")
+
+        if provider == "gmail":
+            logger.info(f"Fetching Gmail important from account {account_email}")
+            try:
+                service = await get_user_gmail_service(user_id, account_id)
+                gmail_important = fetch_messages_with_service(
+                    service,
+                    query=None,
+                    max_results=max_per_account,
+                    label_ids=["IMPORTANT"],
+                )
+                for email in gmail_important:
+                    email.account_id = account_id
+                    email.account_email = account_email
+                    email.provider = "gmail"
+                    if not getattr(email, "ml_prediction", None):
+                        email.ml_prediction = "important"
+                    if "IMPORTANT" not in (email.label_ids or []):
+                        email.label_ids = list(set((email.label_ids or []) + ["IMPORTANT"]))
+                all_important.extend(gmail_important)
+            except Exception as e:
+                logger.error(f"Error fetching Gmail important for {account_email}: {e}")
+                continue
+
+        elif provider == "outlook":
+            logger.info(f"Fetching Outlook important from account {account_email}")
+            try:
+                access_token = await email_account_service.get_outlook_access_token(user_id, account_id)
+                outlook_important_raw = await fetch_outlook_important(
+                    access_token, max_results=max_per_account
+                )
+                for msg in outlook_important_raw:
+                    email_out = EmailOut(
+                        message_id=msg.get("message_id", ""),
+                        sender=msg.get("sender", ""),
+                        recipient=msg.get("recipient", ""),
+                        subject=msg.get("subject", "(No Subject)"),
+                        body=msg.get("body", msg.get("snippet", "")),
+                        date=msg.get("date", dt_class.now()),
+                        ml_prediction="important",
+                        label_ids=list(set((msg.get("label_ids") or []) + ["IMPORTANT"])),
+                        account_id=account_id,
+                        account_email=account_email,
+                        provider="outlook",
+                    )
+                    all_important.append(email_out)
+            except Exception as e:
+                logger.error(f"Error fetching Outlook important for {account_email}: {e}")
+                continue
+
+    def normalize_date(date_obj):
+        if date_obj is None:
+            return dt_class.min.replace(tzinfo=timezone.utc)
+        if date_obj.tzinfo is None:
+            return date_obj.replace(tzinfo=timezone.utc)
+        return date_obj.astimezone(timezone.utc)
+
+    all_important.sort(key=lambda x: normalize_date(x.date), reverse=True)
+    return all_important
+
+
 async def trash_message_multi_provider(user_id: str, message_id: str) -> Dict:
     """
     Move message to trash - routes to Gmail or Outlook based on which account owns the message.
