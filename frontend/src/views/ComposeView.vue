@@ -1,116 +1,176 @@
 <template>
   <div class="compose-view adjusted-view">
-    <div class="chat-container">
-      <div class="chat-history" ref="historyContainer">
-        <div
-          v-for="(message, index) in chatHistory"
-          :key="index"
-          class="message"
-          :class="{
-            'ai-message': message.role === 'bot',
-            'user-message': message.role === 'user',
-          }"
-        >
-          <p v-if="message.text" class="message-text">{{ message.text }}</p>
+    <!-- Chat Split: Sidebar + Main -->
+    <div class="chat-split">
+      <!-- Overlay (Outside sidebar for proper z-index) -->
+      <div
+        class="chat-sidebar-overlay"
+        :class="{ visible: sidebarOpen }"
+        @click="sidebarOpen = false"
+      ></div>
 
-          <div
-            v-if="message.emails && message.emails.length > 0"
-            class="emails-list"
-          >
+      <!-- Chat Sidebar (Left) -->
+      <div class="chat-sidebar" :class="{ open: sidebarOpen }">
+        <div class="chat-sidebar-content">
+          <div class="chat-sidebar-header">
+            <h3>Chats</h3>
+            <button @click="handleNewChat" class="btn-new-chat">
+              <span class="material-symbols-outlined">add</span>
+              New
+            </button>
+          </div>
+
+          <div class="chat-list">
             <div
-              v-for="(email, eIndex) in message.emails"
-              :key="eIndex"
-              class="email-block"
+              v-for="chat in chats"
+              :key="chat.id"
+              class="chat-list-item"
+              :class="{ active: chat.id === activeChatId }"
+              @click="handleChatSwitch(chat.id)"
             >
-              <div class="email-header">📧 Email #{{ eIndex + 1 }}</div>
-
-              <div class="email-field">
-                <strong>From:</strong>
-                {{ email.from || email.sender || "Unknown" }}
+              <div class="chat-list-item-content">
+                <div class="chat-list-item-title">{{ chat.title }}</div>
+                <div class="chat-list-item-time">{{ formatChatTime(chat.updatedAt) }}</div>
               </div>
-
-              <div class="email-field">
-                <strong>Subject:</strong> {{ email.subject || "(No subject)" }}
-              </div>
-
-              <div v-if="email.date || email.timestamp" class="email-field">
-                <strong>Date:</strong> {{ email.date || email.timestamp }}
-              </div>
-
-              <div v-if="email.label" class="email-field email-label">
-                <strong>Label:</strong>
-                <span class="label-badge">{{ email.label }}</span>
-              </div>
-
-              <div
-                v-if="email.is_important"
-                class="email-field email-important"
+              <button
+                class="chat-delete-btn"
+                @click.stop="handleDeleteChat(chat.id)"
+                v-if="chats.length > 1"
               >
-                ⭐ <strong>Important</strong>
-              </div>
+                ×
+              </button>
+            </div>
 
-              <div class="email-separator"></div>
-
-              <div class="email-field email-body">
-                <strong>Body:</strong><br />
-                <div
-                  class="email-body-content"
-                  v-html="formatBody(email.body)"
-                ></div>
-              </div>
+            <div v-if="chats.length === 0" class="chat-list-empty">
+              <p>No chats yet</p>
+              <button @click="handleNewChat" class="btn-create-first">
+                Create your first chat
+              </button>
             </div>
           </div>
         </div>
-
-        <div v-if="isLoading" class="message ai-message loading-indicator">
-          <p>
-            <span class="dot">.</span>
-            <span class="dot">.</span>
-            <span class="dot">.</span>
-          </p>
-        </div>
       </div>
 
-      <div v-if="isListening" class="listening-box">
-        Listening<span class="dot-animation">{{ listeningDots }}</span>
-      </div>
+      <!-- Chat Main (Right) -->
+      <div class="chat-main">
+        <!-- Mobile: Hamburger menu -->
+        <button class="btn-toggle-sidebar" @click="sidebarOpen = !sidebarOpen">
+          <span class="material-symbols-outlined">{{ sidebarOpen ? 'close' : 'menu' }}</span>
+        </button>
 
-      <div class="chat-input-area">
-        <div class="input-wrapper">
-          <input
-            type="text"
-            placeholder="Type your prompt here..."
-            v-model="userPrompt"
-            @keyup.enter="sendMessage"
-            :disabled="isLoading || isListening"
-          />
-
-          <!-- Send button -->
-          <button
-            class="inner-send"
-            @click="sendMessage"
-            :disabled="!userPrompt.trim() || isLoading || isListening"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              width="20"
-              height="20"
+        <div class="chat-container">
+          <div class="chat-history" ref="historyContainer">
+            <div
+              v-for="(message, index) in chatHistory"
+              :key="index"
+              class="message"
+              :class="{
+                'ai-message': message.role === 'bot',
+                'user-message': message.role === 'user',
+              }"
             >
-              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
-            </svg>
-          </button>
+              <p v-if="message.text" class="message-text">{{ message.text }}</p>
 
-          <!-- Voice button (always visible, disabled while loading) -->
-          <button
-            class="inner-voice"
-            @click="toggleVoiceInput"
-            :disabled="isLoading"
-            :class="{ 'listening-active': isListening }"
-          >
-            <span class="material-symbols-outlined mic-icon">mic</span>
-          </button>
+              <div
+                v-if="message.emails && message.emails.length > 0"
+                class="emails-list"
+              >
+                <div
+                  v-for="(email, eIndex) in message.emails"
+                  :key="eIndex"
+                  class="email-block"
+                >
+                  <div class="email-header">📧 Email #{{ eIndex + 1 }}</div>
+
+                  <div class="email-field">
+                    <strong>From:</strong>
+                    {{ email.from || email.sender || "Unknown" }}
+                  </div>
+
+                  <div class="email-field">
+                    <strong>Subject:</strong> {{ email.subject || "(No subject)" }}
+                  </div>
+
+                  <div v-if="email.date || email.timestamp" class="email-field">
+                    <strong>Date:</strong> {{ email.date || email.timestamp }}
+                  </div>
+
+                  <div v-if="email.label" class="email-field email-label">
+                    <strong>Label:</strong>
+                    <span class="label-badge">{{ email.label }}</span>
+                  </div>
+
+                  <div
+                    v-if="email.is_important"
+                    class="email-field email-important"
+                  >
+                    ⭐ <strong>Important</strong>
+                  </div>
+
+                  <div class="email-separator"></div>
+
+                  <div class="email-field email-body">
+                    <strong>Body:</strong><br />
+                    <div
+                      class="email-body-content"
+                      v-html="formatBody(email.body)"
+                    ></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="isLoading" class="message ai-message loading-indicator">
+              <p>
+                <span class="dot">.</span>
+                <span class="dot">.</span>
+                <span class="dot">.</span>
+              </p>
+            </div>
+          </div>
+
+          <div v-if="isListening" class="listening-box">
+            Listening<span class="dot-animation">{{ listeningDots }}</span>
+          </div>
+
+          <div class="chat-input-area">
+            <div class="input-wrapper">
+              <input
+                type="text"
+                placeholder="Type your prompt here..."
+                v-model="userPrompt"
+                @keyup.enter="sendMessage"
+                :disabled="isLoading || isListening"
+              />
+
+              <!-- Send button -->
+              <button
+                class="inner-send"
+                @click="sendMessage"
+                :disabled="!userPrompt.trim() || isLoading || isListening"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  width="20"
+                  height="20"
+                >
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
+                </svg>
+              </button>
+
+              <!-- Voice button -->
+              <button
+                class="inner-voice"
+                @click="toggleVoiceInput"
+                :disabled="isLoading"
+                :class="{ 'listening-active': isListening }"
+              >
+                <span class="material-symbols-outlined mic-icon">mic</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -118,89 +178,83 @@
 </template>
 
 <script>
-import { ref, nextTick, onUnmounted } from "vue";
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { useAuthStore } from "../stores/auth";
+import { useChatStore } from "../stores/chat";
 import { getApiUrl } from "../utils/platformHelper";
 
 export default {
   name: "ComposeView",
   setup() {
     const authStore = useAuthStore();
+    const chatStore = useChatStore();
+
     const userPrompt = ref("");
     const isLoading = ref(false);
     const historyContainer = ref(null);
-    const isListening = ref(false); // New state for listening box
-    const listeningDots = ref(""); // New state for dot animation
-    let dotInterval = null; // For managing the dot animation timer
+    const isListening = ref(false);
+    const listeningDots = ref("");
+    const sidebarOpen = ref(false);
+    let dotInterval = null;
+
     const API_URL = getApiUrl() + "/chat";
 
-    const STORAGE_KEY_HISTORY = "chat_history";
-    const STORAGE_KEY_SESSION = "chat_session_id";
+    // Computed
+    const chats = computed(() => chatStore.chats);
+    const activeChatId = computed(() => chatStore.activeChatId);
+    const activeChat = computed(() => chatStore.activeChat);
 
-    const initialBotMessage = {
-      role: "bot",
-      text: "Hello! How can I help you manage your emails today?",
-      emails: [],
-    };
+    const chatHistory = computed(() => {
+      return activeChat.value?.messages || [];
+    });
 
-    const loadStoredHistory = () => {
-      try {
-        const raw = sessionStorage.getItem(STORAGE_KEY_HISTORY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : null;
-      } catch (e) {
-        console.error("Failed to load chat history from storage:", e);
-        return null;
+    // Initialize chat store
+    onMounted(async () => {
+      await chatStore.initialize();
+      scrollToBottom();
+    });
+
+    // Watch active chat changes
+    watch(activeChatId, () => {
+      scrollToBottom();
+      sidebarOpen.value = false; // Close sidebar on mobile after switching
+    });
+
+    // Format chat time
+    const formatChatTime = (dateString) => {
+      if (!dateString) return '';
+      const date = new Date(dateString);
+      const now = new Date();
+      const diff = now - date;
+
+      // Less than 1 minute
+      if (diff < 60000) return 'Just now';
+
+      // Less than 1 hour
+      if (diff < 3600000) {
+        const mins = Math.floor(diff / 60000);
+        return `${mins}m ago`;
       }
-    };
 
-    const storedHistory = loadStoredHistory();
-    const chatHistory = ref(
-      storedHistory && storedHistory.length
-        ? storedHistory
-        : [initialBotMessage]
-    );
-
-    const storedSessionId = sessionStorage.getItem(STORAGE_KEY_SESSION);
-    const sessionId = ref(storedSessionId || null);
-
-    const persistChatState = () => {
-      try {
-        sessionStorage.setItem(
-          STORAGE_KEY_HISTORY,
-          JSON.stringify(chatHistory.value)
-        );
-        if (sessionId.value) {
-          sessionStorage.setItem(STORAGE_KEY_SESSION, sessionId.value);
-        } else {
-          sessionStorage.removeItem(STORAGE_KEY_SESSION);
-        }
-      } catch (e) {
-        console.error("Failed to persist chat state:", e);
+      // Less than 1 day
+      if (diff < 86400000) {
+        const hours = Math.floor(diff / 3600000);
+        return `${hours}h ago`;
       }
+
+      // Less than 7 days
+      if (diff < 604800000) {
+        const days = Math.floor(diff / 86400000);
+        return `${days}d ago`;
+      }
+
+      // Older - show date
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     };
 
     const formatBody = (text) => {
       if (!text) return "";
       return text.replace(/\n/g, "<br>");
-    };
-
-    const isEmailArray = (text) => {
-      if (!text.trim().startsWith("[") || !text.trim().endsWith("]"))
-        return false;
-      try {
-        const parsed = JSON.parse(text);
-        return (
-          Array.isArray(parsed) &&
-          parsed.length > 0 &&
-          parsed[0].hasOwnProperty("subject") &&
-          (parsed[0].hasOwnProperty("from") ||
-            parsed[0].hasOwnProperty("sender"))
-        );
-      } catch {
-        return false;
-      }
     };
 
     const extractJsonFromText = (text) => {
@@ -209,8 +263,10 @@ export default {
 
       if (jsonMatch) {
         try {
-          if (isEmailArray(jsonMatch[0])) {
-            result.json = JSON.parse(jsonMatch[0]);
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (Array.isArray(parsed) && parsed.length > 0 &&
+              (parsed[0].hasOwnProperty("subject") || parsed[0].hasOwnProperty("from"))) {
+            result.json = parsed;
             const textBefore = text.substring(0, jsonMatch.index).trim();
             if (textBefore) result.textBefore = textBefore;
             return result;
@@ -227,20 +283,25 @@ export default {
     const scrollToBottom = () => {
       nextTick(() => {
         if (historyContainer.value) {
-          historyContainer.value.scrollTop =
-            historyContainer.value.scrollHeight;
+          historyContainer.value.scrollTop = historyContainer.value.scrollHeight;
         }
       });
     };
 
     const sendMessage = async () => {
-      if (!userPrompt.value.trim() || isLoading.value) return;
+      if (!userPrompt.value.trim() || isLoading.value || !activeChat.value) return;
 
       const messageText = userPrompt.value.trim();
+      const currentChatId = activeChat.value.id;
 
-      chatHistory.value.push({ role: "user", text: messageText, emails: null });
+      // Append user message
+      await chatStore.appendMessage(currentChatId, {
+        role: "user",
+        text: messageText,
+        emails: null
+      });
+
       userPrompt.value = "";
-      persistChatState();
       scrollToBottom();
 
       isLoading.value = true;
@@ -254,7 +315,7 @@ export default {
           },
           body: JSON.stringify({
             message: messageText,
-            session_id: sessionId.value,
+            session_id: activeChat.value.sessionId,
           }),
         });
 
@@ -262,43 +323,43 @@ export default {
 
         const data = await response.json();
 
-        if (data.session_id) {
-          sessionId.value = data.session_id;
+        // Update backend session ID if provided
+        if (data.session_id && data.session_id !== activeChat.value.sessionId) {
+          await chatStore.setSessionId(currentChatId, data.session_id);
         }
 
+        // Extract emails from response
         const extracted = extractJsonFromText(data.response);
 
-        chatHistory.value.push({
+        // Append bot response
+        await chatStore.appendMessage(currentChatId, {
           role: "bot",
           text: extracted.textBefore,
-          emails: extracted.json,
+          emails: extracted.json
         });
 
-        persistChatState();
+        scrollToBottom();
       } catch (error) {
         console.error("Error:", error);
-        chatHistory.value.push({
+        await chatStore.appendMessage(currentChatId, {
           role: "bot",
           text: "Sorry, an error occurred connecting to the server. Please ensure the backend is running.",
-          emails: null,
+          emails: null
         });
-        persistChatState();
+        scrollToBottom();
       } finally {
         isLoading.value = false;
-        scrollToBottom();
       }
     };
 
-    // New function for dot animation
     const startDotAnimation = () => {
       listeningDots.value = "";
       dotInterval = setInterval(() => {
         listeningDots.value =
           listeningDots.value.length < 3 ? listeningDots.value + "." : "";
-      }, 500); // Change dot every 0.5 seconds
+      }, 500);
     };
 
-    // New function to clear the dot animation
     const stopDotAnimation = () => {
       if (dotInterval) {
         clearInterval(dotInterval);
@@ -307,34 +368,38 @@ export default {
       listeningDots.value = "";
     };
 
-    // New function to toggle the voice input state
     const toggleVoiceInput = () => {
-      if (isLoading.value) return; // Prevent toggling if a message is being processed
+      if (isLoading.value) return;
 
       isListening.value = !isListening.value;
 
       if (isListening.value) {
         startDotAnimation();
-        // Here you would typically start the Web Speech API recognition
-        // console.log("Starting voice recognition...");
       } else {
         stopDotAnimation();
-        // Here you would typically stop the Web Speech API recognition
-        // console.log("Stopping voice recognition...");
       }
     };
 
-    // Clear interval when component is destroyed
+    const handleNewChat = async () => {
+      await chatStore.createChat();
+      sidebarOpen.value = false; // Close sidebar on mobile
+    };
+
+    const handleDeleteChat = async (chatId) => {
+      if (chats.value.length <= 1) return;
+
+      if (confirm('Delete this chat?')) {
+        await chatStore.deleteChat(chatId);
+      }
+    };
+
+    const handleChatSwitch = async (chatId) => {
+      await chatStore.setActiveChat(chatId);
+    };
+
     onUnmounted(() => {
       stopDotAnimation();
     });
-
-    const clearChat = () => {
-      chatHistory.value = [initialBotMessage];
-      sessionId.value = null;
-      sessionStorage.removeItem(STORAGE_KEY_HISTORY);
-      sessionStorage.removeItem(STORAGE_KEY_SESSION);
-    };
 
     return {
       userPrompt,
@@ -346,7 +411,13 @@ export default {
       formatBody,
       historyContainer,
       toggleVoiceInput,
-      clearChat,
+      sidebarOpen,
+      chats,
+      activeChatId,
+      handleNewChat,
+      handleDeleteChat,
+      handleChatSwitch,
+      formatChatTime
     };
   },
 };
@@ -357,7 +428,228 @@ export default {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 0 1.5rem 1.5rem 0;
+  padding: 0;
+}
+
+/* Chat Split Layout */
+.chat-split {
+  display: flex;
+  height: 100%;
+  position: relative;
+}
+
+/* ===== OVERLAY ===== */
+.chat-sidebar-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 999;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.chat-sidebar-overlay.visible {
+  display: block;
+  opacity: 1;
+}
+
+/* ===== CHAT SIDEBAR (Left) ===== */
+.chat-sidebar {
+  width: 260px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%);
+  border-right: 1px solid #e0e6ed;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.05);
+}
+
+.chat-sidebar-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.chat-sidebar-header {
+  padding: 1.25rem 1rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
+}
+
+.chat-sidebar-header h3 {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: white;
+  letter-spacing: 0.5px;
+}
+
+.btn-new-chat {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.5rem 0.9rem;
+  background: rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(10px);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: all 0.2s;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.btn-new-chat:hover {
+  background: rgba(255, 255, 255, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.btn-new-chat .material-symbols-outlined {
+  font-size: 18px;
+}
+
+/* Chat List */
+.chat-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+.chat-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem;
+  margin-bottom: 0.4rem;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+  border: 1px solid transparent;
+}
+
+.chat-list-item:hover {
+  background: linear-gradient(135deg, #f8f9ff 0%, #f0f2ff 100%);
+  border-color: #e0e6ff;
+  transform: translateX(2px);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.08);
+}
+
+.chat-list-item.active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-color: #667eea;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.chat-list-item-content {
+  flex: 1;
+  overflow: hidden;
+}
+
+.chat-list-item-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #2d3748;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 0.25rem;
+  transition: color 0.2s;
+}
+
+.chat-list-item.active .chat-list-item-title {
+  color: white;
+  font-weight: 700;
+}
+
+.chat-list-item-time {
+  font-size: 0.75rem;
+  color: #718096;
+  transition: color 0.2s;
+}
+
+.chat-list-item.active .chat-list-item-time {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.chat-delete-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: #a0aec0;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.chat-list-item:hover .chat-delete-btn {
+  opacity: 1;
+}
+
+.chat-list-item.active .chat-delete-btn {
+  color: rgba(255, 255, 255, 0.8);
+  opacity: 1;
+}
+
+.chat-delete-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  transform: scale(1.1);
+}
+
+.chat-list-item.active .chat-delete-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.chat-list-empty {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: var(--text-secondary, #666);
+}
+
+.btn-create-first {
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  background: var(--primary-color, #6c63ff);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+/* ===== CHAT MAIN (Right) ===== */
+.chat-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.btn-toggle-sidebar {
+  display: none; /* Hidden on desktop */
 }
 
 .chat-container {
@@ -368,6 +660,7 @@ export default {
   border-radius: 12px;
   overflow: hidden;
   background-color: var(--content-bg);
+  margin: 0 1.5rem 1.5rem 0;
 }
 
 /* Scrollable messages */
@@ -410,7 +703,7 @@ export default {
   margin: 0;
 }
 
-/* Email cards inside AI messages */
+/* Email cards */
 .emails-list {
   margin-top: 10px;
   display: flex;
@@ -516,7 +809,6 @@ export default {
   flex-grow: 1;
 }
 
-/* Input field */
 .input-wrapper input {
   width: 100%;
   padding: 10px 90px 10px 14px;
@@ -533,7 +825,6 @@ export default {
   box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.15);
 }
 
-/* Send & voice buttons */
 .inner-send,
 .inner-voice {
   position: absolute;
@@ -552,7 +843,7 @@ export default {
   background-color: var(--primary-color);
   color: #fff;
   padding: 10px 15px;
-  margin: 0.75rem 1rem 0; /* Align above input area */
+  margin: 0.75rem 1rem 0;
   border-radius: 8px;
   font-weight: 500;
   font-size: 1rem;
@@ -565,15 +856,14 @@ export default {
 
 .dot-animation {
   display: inline-block;
-  min-width: 15px; /* Ensure space for three dots */
+  min-width: 15px;
   margin-left: 5px;
-  font-family: monospace; /* Monospace for consistent dot spacing */
+  font-family: monospace;
   overflow: hidden;
 }
 
-/* Style for voice button when active */
 .inner-voice.listening-active {
-  background-color: #fdd835; /* A noticeable color when active (e.g., yellow) */
+  background-color: #fdd835;
   color: #333;
 }
 
@@ -600,5 +890,95 @@ export default {
 .mic-icon.material-symbols-outlined {
   font-size: 20px;
   font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+/* ===== MOBILE RESPONSIVE ===== */
+@media (max-width: 768px) {
+  .chat-split {
+    flex-direction: row;
+  }
+
+  /* Sidebar: Full-screen overlay on mobile */
+  .chat-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 85%;
+    max-width: 320px;
+    height: 100vh;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: 4px 0 24px rgba(102, 126, 234, 0.15);
+  }
+
+  .chat-sidebar.open {
+    transform: translateX(0);
+  }
+
+  /* Show hamburger button on mobile */
+  .btn-toggle-sidebar {
+    display: flex;
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    z-index: 10;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+    transition: all 0.2s;
+  }
+
+  .btn-toggle-sidebar:active {
+    transform: scale(0.95);
+  }
+
+  .btn-toggle-sidebar .material-symbols-outlined {
+    font-size: 24px;
+  }
+
+  .chat-main {
+    width: 100%;
+    flex: 1;
+  }
+
+  .chat-container {
+    margin: 0;
+    border-radius: 0;
+    border: none;
+  }
+
+  .message {
+    max-width: 85%;
+  }
+}
+
+@media (max-width: 480px) {
+  .chat-sidebar {
+    width: 90%;
+  }
+
+  .btn-toggle-sidebar {
+    top: 0.75rem;
+    left: 0.75rem;
+    width: 40px;
+    height: 40px;
+  }
+
+  .chat-history {
+    padding: 0.75rem;
+  }
+
+  .message {
+    font-size: 0.9rem;
+    max-width: 90%;
+  }
 }
 </style>

@@ -828,12 +828,18 @@ export default {
   gap: 0.5rem;
   flex: 1;
   min-width: 0;
+  flex-wrap: nowrap;
 }
 
 .email-sender {
   font-weight: 500;
   color: var(--text-secondary);
   font-size: 1.05rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Account Badge */
@@ -1241,7 +1247,6 @@ export default {
     padding-right: 5rem;
   }
 
-  /* Larger font for mobile readability */
   .email-sender {
     font-size: 1rem;
   }
@@ -1323,6 +1328,16 @@ export default {
   .ml-label {
     font-size: 0.65rem;
     padding: 0.1rem 0.4rem;
+  }
+
+  .sender-with-label {
+    gap: 0.35rem;
+    row-gap: 0.25rem;
+  }
+
+  .account-badge {
+    font-size: 0.65rem;
+    padding: 0.15rem 0.35rem;
   }
 }
 </style>
