@@ -95,7 +95,6 @@
               </p>
             </label>
           </div>
-          <a class="forgot-password-link" href="#">Forgot Password?</a>
           <button
             @click="login"
             class="primary-button"
