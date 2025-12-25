@@ -66,7 +66,7 @@ export default {
       },
       {
         view: "accounts",
-        label: "Hesaplar",
+        label: "Accounts",
         icon: "manage_accounts",
         to: "/app/accounts",
       },

@@ -44,7 +44,7 @@
     </div>
 
     <div
-      v-else-if="displayedEmails.length > 0"
+      v-else
       class="email-container"
       :class="{ 'has-detail': selectedEmail && !isTrash }"
     >
@@ -76,6 +76,9 @@
           </span>
         </div>
         <div class="email-list">
+          <div v-if="displayedEmails.length === 0 && !loading && !searchLoading" class="no-emails">
+            <p>No emails found.</p>
+          </div>
           <div
             v-for="(email, index) in displayedEmails"
             :key="index"
@@ -92,10 +95,12 @@
                 <span v-if="email.account_email" class="account-badge" :title="email.account_email">
                   {{ email.account_email }}
                 </span>
-                <span v-if="email.ml_prediction"
-                      class="ml-label"
-                      :class="'ml-label-' + email.ml_prediction">
-                  {{ getLabelText(email.ml_prediction) }}
+                <span
+                  v-if="getLabelValue(email)"
+                  class="ml-label"
+                  :class="'ml-label-' + getLabelValue(email)"
+                >
+                  {{ getLabelText(getLabelValue(email)) }}
                 </span>
               </div>
               <span class="email-date">{{ formatDate(email.date) }}</span>
@@ -269,13 +274,6 @@
           ></div>
         </div>
       </div>
-    </div>
-
-    <div
-      v-if="!loading && !authUrl && !errorMessage && !searchLoading && displayedEmails.length === 0"
-      class="no-emails"
-    >
-      <p>No emails found.</p>
     </div>
   </div>
 </template>
@@ -673,6 +671,16 @@ export default {
       return labels[prediction] || prediction;
     };
 
+    const getLabelValue = (email) => {
+      if (!email || typeof email !== "object") return null;
+      if (email.is_important) return "important";
+      const labels = Array.isArray(email.label_ids) ? email.label_ids : [];
+      if (labels.some((label) => String(label).toUpperCase() === "IMPORTANT")) {
+        return "important";
+      }
+      return email.ml_prediction || null;
+    };
+
     // ===== Email Search Functionality =====
     const isSearchMode = ref(false);
     const searchResults = ref([]);
@@ -858,6 +866,7 @@ export default {
       formatFullDate,
       getPreview,
       getLabelText,
+      getLabelValue,
       sanitizeHtml,
       loadEmails,
       refreshEmails,

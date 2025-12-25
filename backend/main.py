@@ -11,7 +11,7 @@ from supabase import create_client, Client
 
 from fastapi import FastAPI, Depends, HTTPException, Request, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from dotenv import load_dotenv
 from urllib.parse import urlsplit
 from google_auth_oauthlib.flow import Flow
@@ -62,7 +62,6 @@ from gmail_service import (
     # Multi-provider functions (Gmail + Outlook)
     fetch_sent_multi_provider,
     fetch_trash_multi_provider,
-    fetch_important_multi_provider,
     trash_message_multi_provider,
     untrash_message_multi_provider,
     modify_message_labels_multi_provider,
@@ -73,6 +72,8 @@ from gmail_service import (
 from chat_service import ChatService
 # Import ML Service
 from ml_service import get_classifier
+# Import email tool helpers
+from email_tools import fetch_mails
 # Import Gmail Account Service
 from gmail_account_service import gmail_account_service
 
@@ -124,6 +125,13 @@ def apply_ml_classification(emails: List[EmailOut]) -> List[EmailOut]:
         classifier = get_classifier()
         emails_dict = [email.model_dump(mode='json') for email in emails]
         classified_emails = classifier.classify_batch(emails_dict)
+        for email in classified_emails:
+            try:
+                labels = email.get("label_ids") or []
+                if any(str(label).upper() == "IMPORTANT" for label in labels):
+                    email["ml_prediction"] = "important"
+            except Exception:
+                continue
         logger.info(f"Successfully classified {len(classified_emails)} emails")
         return classified_emails
     except Exception as ml_error:
@@ -195,10 +203,18 @@ _add_loopback_variant(FRONTEND_ORIGIN)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tüm origin'ler
-    allow_credentials=False,  # ← Credentials kapat
+    allow_origins=origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "X-Session-Id",
+        "X-Transcript",
+        "X-User-Transcript",
+        "X-Assistant-Reply",
+        "X-Assistant-Tts",
+        "X-Voice-Response-Id",
+    ],
 )
 
 # Session management for ChatService instances
@@ -337,12 +353,10 @@ async def auth_callback(code: str, state: Optional[str] = None):
 
         # Check if this is a multi-account flow (state contains user_id)
         user_id = None
-        platform = "web"
         if state:
             try:
                 state_data = json.loads(state)
                 user_id = state_data.get("user_id")
-                platform = state_data.get("platform", "web")
             except:
                 pass
 
@@ -364,51 +378,7 @@ async def auth_callback(code: str, state: Optional[str] = None):
             )
 
             logger.info(f"Connected Gmail account {email_address} for user {user_id}")
-
-            if platform == "mobile":
-                return HTMLResponse(content=f"""
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="UTF-8">
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <title>Gmail Connected</title>
-                        <style>
-                            body {{
-                                font-family: system-ui, -apple-system, sans-serif;
-                                display: flex;
-                                justify-content: center;
-                                align-items: center;
-                                height: 100vh;
-                                margin: 0;
-                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                                color: white;
-                                text-align: center;
-                            }}
-                            .container {{
-                                padding: 2rem;
-                            }}
-                            h1 {{ font-size: 3rem; margin: 0 0 1rem 0; }}
-                            p {{ font-size: 1.2rem; margin: 0.5rem 0; }}
-                        </style>
-                    </head>
-                    <body>
-                        <div class="container">
-                            <h1>✅</h1>
-                            <h2>Gmail Connected!</h2>
-                            <p>{email_address}</p>
-                            <p>Closing in 2 seconds...</p>
-                        </div>
-                        <script>
-                            setTimeout(() => {{
-                                window.close();
-                            }}, 2000);
-                        </script>
-                    </body>
-                    </html>
-                """, status_code=200)
-            else:
-                return RedirectResponse(url=f"{FRONTEND_APP_URL}/accounts?connected={email_address}&provider=gmail")
+            return RedirectResponse(url=f"{FRONTEND_APP_URL}/accounts?connected={email_address}&provider=gmail")
         else:
             # Legacy flow: save to token.json (backward compatibility)
             with open("token.json", "w") as token:
@@ -640,7 +610,17 @@ async def list_starred(user_id: str = Header(..., alias="X-User-Id")):
 @app.get("/emails/important", response_model=List[EmailOut])
 async def list_important(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        emails = await fetch_important_multi_provider(user_id, max_per_account=50)
+        emails = await asyncio.to_thread(
+            fetch_mails,
+            importance=True,
+            folder="inbox",
+            max_results=50,
+            user_id=user_id,
+        )
+        if isinstance(emails, list) and emails and isinstance(emails[0], dict):
+            error = emails[0].get("error")
+            if error:
+                raise HTTPException(status_code=500, detail=error)
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -926,10 +906,7 @@ async def delete_gmail_account(
 
 
 @app.get("/gmail/auth/connect")
-async def initiate_gmail_connect(
-    user_id: str = Header(..., alias="X-User-Id"),
-    x_app_platform: Optional[str] = Header(None, alias="X-App-Platform")
-):
+async def initiate_gmail_connect(user_id: str = Header(..., alias="X-User-Id")):
     """
     Initiate Gmail OAuth flow for connecting a new account.
     Returns auth URL that includes user_id in state parameter.
@@ -940,12 +917,7 @@ async def initiate_gmail_connect(
         flow.redirect_uri = REDIRECT_URI
 
         # Include user_id in state to identify user after OAuth callback
-        platform = x_app_platform if x_app_platform else "web"
-        state = json.dumps({
-            "user_id": user_id,
-            "platform": platform
-        })
-        
+        state = json.dumps({"user_id": user_id})
         auth_url, _ = flow.authorization_url(prompt='consent', state=state)
 
         return {"auth_url": auth_url}
@@ -996,16 +968,21 @@ async def get_unified_emails(
         for account in accounts:
             try:
                 provider = account.get("provider")
+                logger.info(f"[UNIFIED_INBOX] Processing account {account['id']} ({account['email_address']}) - provider: {provider}")
 
                 if provider == "gmail":
+                    logger.info(f"[UNIFIED_INBOX] Getting Gmail service for account {account['id']}")
                     service = await get_user_gmail_service(user_id, account["id"])
+                    logger.info(f"[UNIFIED_INBOX] Gmail service obtained successfully")
 
                     # Use existing fetch logic but with specific service
+                    logger.info(f"[UNIFIED_INBOX] Fetching messages with query: {gmail_query}, max: {max_per_account}")
                     emails = fetch_messages_with_service(
                         service=service,
                         query=gmail_query,
                         max_results=max_per_account
                     )
+                    logger.info(f"[UNIFIED_INBOX] Fetched {len(emails)} emails from Gmail account {account['id']}")
 
                     # Add account information to each email
                     for email in emails:
@@ -1030,6 +1007,8 @@ async def get_unified_emails(
                         label_ids = list(e.get("label_ids", []) or [])
                         if not e.get("is_read", True) and "UNREAD" not in label_ids:
                             label_ids.append("UNREAD")
+                        if e.get("is_important") and "IMPORTANT" not in label_ids:
+                            label_ids.append("IMPORTANT")
                         all_emails.append(
                             EmailOut(
                                 message_id=e.get("message_id", ""),
