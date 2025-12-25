@@ -93,18 +93,29 @@ async def get_user_gmail_service(user_id: str, account_id: str):
     """
     from gmail_account_service import gmail_account_service
 
+    logger.info(f"[GMAIL_SERVICE] Getting Gmail service for user {user_id}, account {account_id}")
+
     credentials = await gmail_account_service.get_credentials(user_id, account_id)
     if not credentials:
+        logger.error(f"[GMAIL_SERVICE] No credentials returned for account {account_id}")
         raise Exception("ACCOUNT_NOT_FOUND")
 
+    logger.info(f"[GMAIL_SERVICE] Credentials obtained, checking validity...")
+    logger.info(f"[GMAIL_SERVICE] Credentials valid: {credentials.valid}, expired: {credentials.expired}, has_refresh: {bool(credentials.refresh_token)}")
+
     if not credentials.valid:
+        logger.warning(f"[GMAIL_SERVICE] Credentials not valid for account {account_id}")
         if credentials.expired and credentials.refresh_token:
+            logger.info(f"[GMAIL_SERVICE] Token expired, attempting refresh...")
             try:
                 credentials.refresh(Request())
+                logger.info(f"[GMAIL_SERVICE] Token refreshed successfully")
+
                 # Get email address from token info or Gmail profile
                 service_temp = build("gmail", "v1", credentials=credentials)
                 profile = service_temp.users().getProfile(userId="me").execute()
                 email_address = profile.get("emailAddress")
+                logger.info(f"[GMAIL_SERVICE] Got email address from profile: {email_address}")
 
                 # Save refreshed token back to database
                 await gmail_account_service.save_account(
@@ -112,13 +123,18 @@ async def get_user_gmail_service(user_id: str, account_id: str):
                     email_address=email_address,
                     credentials=credentials
                 )
+                logger.info(f"[GMAIL_SERVICE] Refreshed token saved to database")
             except Exception as e:
-                logger.error(f"Token refresh failed: {e}")
+                logger.error(f"[GMAIL_SERVICE] Token refresh failed: {type(e).__name__}: {e}", exc_info=True)
                 raise Exception("AUTH_REQUIRED")
         else:
+            logger.error(f"[GMAIL_SERVICE] Credentials expired/invalid and no refresh token available")
             raise Exception("AUTH_REQUIRED")
 
-    return build("gmail", "v1", credentials=credentials)
+    logger.info(f"[GMAIL_SERVICE] Building Gmail API service...")
+    service = build("gmail", "v1", credentials=credentials)
+    logger.info(f"[GMAIL_SERVICE] Gmail service built successfully for account {account_id}")
+    return service
 
 
 async def get_primary_account_service(user_id: str):

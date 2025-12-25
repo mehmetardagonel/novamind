@@ -95,16 +95,45 @@ class GmailAccountService:
 
     async def get_credentials(self, user_id: str, account_id: str) -> Optional[Credentials]:
         """Get decrypted credentials for an account"""
+        logger.info(f"[DECRYPT] Getting credentials for account {account_id}, user {user_id}")
         account = await self.get_account(user_id, account_id)
         if not account:
+            logger.error(f"[DECRYPT] Account {account_id} not found in database")
             return None
+
+        logger.info(f"[DECRYPT] Account found: {account['email_address']}, has access_token: {bool(account.get('access_token'))}, has refresh_token: {bool(account.get('refresh_token'))}")
+
+        if account.get("access_token"):
+            logger.info(f"[DECRYPT] Access token length: {len(account['access_token'])} chars, first 20: {account['access_token'][:20]}...")
+        if account.get("refresh_token"):
+            logger.info(f"[DECRYPT] Refresh token length: {len(account['refresh_token'])} chars, first 20: {account['refresh_token'][:20]}...")
 
         try:
             # Decrypt tokens
-            access_token = decrypt_token(account["access_token"]) if account.get("access_token") else None
-            refresh_token = decrypt_token(account["refresh_token"]) if account.get("refresh_token") else None
+            logger.info(f"[DECRYPT] Starting decryption for account {account_id}")
+
+            access_token = None
+            if account.get("access_token"):
+                logger.info(f"[DECRYPT] Attempting to decrypt access_token...")
+                try:
+                    access_token = decrypt_token(account["access_token"])
+                    logger.info(f"[DECRYPT] Access token decrypted successfully, length: {len(access_token) if access_token else 0}")
+                except Exception as decrypt_err:
+                    logger.error(f"[DECRYPT] Failed to decrypt access_token: {type(decrypt_err).__name__}: {decrypt_err}")
+                    raise
+
+            refresh_token = None
+            if account.get("refresh_token"):
+                logger.info(f"[DECRYPT] Attempting to decrypt refresh_token...")
+                try:
+                    refresh_token = decrypt_token(account["refresh_token"])
+                    logger.info(f"[DECRYPT] Refresh token decrypted successfully, length: {len(refresh_token) if refresh_token else 0}")
+                except Exception as decrypt_err:
+                    logger.error(f"[DECRYPT] Failed to decrypt refresh_token: {type(decrypt_err).__name__}: {decrypt_err}")
+                    raise
 
             # Build credential info dict
+            logger.info(f"[DECRYPT] Building credential info dict...")
             token_info = {
                 "token": access_token,
                 "refresh_token": refresh_token,
@@ -114,11 +143,36 @@ class GmailAccountService:
                 "scopes": account.get("scopes", [])
             }
 
+            logger.info(f"[DECRYPT] Creating Credentials object from token_info...")
             creds = Credentials.from_authorized_user_info(token_info)
+            logger.info(f"[DECRYPT] Credentials created successfully for {account_id}")
             return creds
 
         except Exception as e:
-            logger.error(f"Failed to decrypt token for account {account_id}: {e}")
+            logger.error(f"[DECRYPT] FATAL: Failed to decrypt token for account {account_id}: {type(e).__name__}: {e}", exc_info=True)
+            import traceback
+            logger.error(f"[DECRYPT] Traceback: {traceback.format_exc()}")
+
+            # Check if this is an InvalidToken error (encryption key mismatch)
+            if "InvalidToken" in str(type(e).__name__):
+                logger.error(f"[DECRYPT] This appears to be an encryption key mismatch!")
+                logger.error(f"[DECRYPT] The token was encrypted with a different TOKEN_ENCRYPTION_KEY than the current one.")
+                logger.error(f"[DECRYPT] Solution: User needs to re-authenticate this account.")
+
+                # Clear the invalid tokens from the database
+                try:
+                    self.supabase.table("email_accounts")\
+                        .update({
+                            "access_token": "",
+                            "refresh_token": "",
+                            "token_expiry": None
+                        })\
+                        .eq("id", account_id)\
+                        .execute()
+                    logger.info(f"[DECRYPT] Cleared invalid tokens for account {account_id}")
+                except Exception as clear_err:
+                    logger.error(f"[DECRYPT] Failed to clear invalid tokens: {clear_err}")
+
             return None
 
     async def delete_account(self, user_id: str, account_id: str) -> bool:

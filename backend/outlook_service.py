@@ -261,11 +261,16 @@ def _parse_outlook_message(msg: Dict) -> Dict:
 
     # Map importance
     importance = msg.get("importance", "normal")
-    is_important = importance == "high"
+    categories = msg.get("categories", []) or []
+    category_labels = [str(cat) for cat in categories if cat]
+    category_lower = {cat.lower() for cat in category_labels}
+    category_is_important = "important" in category_lower
+    is_important = importance == "high" or category_is_important
 
     # Get label IDs (categories in Outlook)
-    categories = msg.get("categories", [])
-    label_ids = categories + (["STARRED"] if msg.get("flag", {}).get("flagStatus") == "flagged" else [])
+    label_ids = list(category_labels)
+    if msg.get("flag", {}).get("flagStatus") == "flagged":
+        label_ids.append("STARRED")
 
     return {
         "message_id": msg.get("id", ""),

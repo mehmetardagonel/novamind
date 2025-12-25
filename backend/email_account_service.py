@@ -273,20 +273,53 @@ class EmailAccountService:
         Returns:
             Dictionary with access_token, refresh_token, provider
         """
+        logger.info(f"[DECRYPT_TOKENS] Getting tokens for account {account_id}, user {user_id}")
         account = await self.get_account(user_id, account_id)
         if not account:
+            logger.error(f"[DECRYPT_TOKENS] Account {account_id} not found")
             return None
 
+        logger.info(f"[DECRYPT_TOKENS] Account found: {account['email_address']}, provider: {account.get('provider')}")
+
         try:
+            logger.info(f"[DECRYPT_TOKENS] Decrypting access token...")
+            access_token = decrypt_token(account["access_token"])
+            logger.info(f"[DECRYPT_TOKENS] Access token decrypted successfully")
+
+            logger.info(f"[DECRYPT_TOKENS] Decrypting refresh token...")
+            refresh_token = decrypt_token(account["refresh_token"])
+            logger.info(f"[DECRYPT_TOKENS] Refresh token decrypted successfully")
+
             return {
-                "access_token": decrypt_token(account["access_token"]),
-                "refresh_token": decrypt_token(account["refresh_token"]),
+                "access_token": access_token,
+                "refresh_token": refresh_token,
                 "provider": account["provider"],
                 "token_expiry": account.get("token_expiry"),
                 "scopes": account.get("scopes", []),
             }
         except Exception as e:
-            logger.error(f"Error decrypting tokens for account {account_id}: {e}")
+            logger.error(f"[DECRYPT_TOKENS] Error decrypting tokens for account {account_id}: {type(e).__name__}: {e}", exc_info=True)
+
+            # Check if this is an InvalidToken error (encryption key mismatch)
+            if "InvalidToken" in str(type(e).__name__):
+                logger.error(f"[DECRYPT_TOKENS] This appears to be an encryption key mismatch!")
+                logger.error(f"[DECRYPT_TOKENS] The token was encrypted with a different TOKEN_ENCRYPTION_KEY than the current one.")
+                logger.error(f"[DECRYPT_TOKENS] Solution: User needs to re-authenticate this account.")
+
+                # Clear the invalid tokens from the database
+                try:
+                    self.supabase.table("email_accounts")\
+                        .update({
+                            "access_token": "",
+                            "refresh_token": "",
+                            "token_expiry": None
+                        })\
+                        .eq("id", account_id)\
+                        .execute()
+                    logger.info(f"[DECRYPT_TOKENS] Cleared invalid tokens for account {account_id}")
+                except Exception as clear_err:
+                    logger.error(f"[DECRYPT_TOKENS] Failed to clear invalid tokens: {clear_err}")
+
             return None
 
     async def get_gmail_credentials(self, user_id: str, account_id: str) -> Optional[GoogleCredentials]:
