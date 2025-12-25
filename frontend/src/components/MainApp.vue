@@ -44,7 +44,7 @@
             v-model="selectedAccountId"
             class="account-dropdown"
           >
-            <option :value="null">Tüm Hesaplar</option>
+            <option :value="null">All Accounts</option>
             <option
               v-for="account in accounts"
               :key="account.id"

@@ -218,6 +218,53 @@ def _build_voice_summary(text: str) -> str:
         return f"I found some emails{provider_phrase}. They're shown on the screen."
     return f"Here are your emails{provider_phrase} on the screen."
 
+def _compact_text(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+def _strip_sender_name(sender: str) -> str:
+    if not sender:
+        return ""
+    sender = str(sender).strip()
+    match = re.match(r'^\s*"?([^"<]*)"?\s*<([^>]+)>\s*$', sender)
+    if match:
+        name_part = match.group(1).strip()
+        email_part = match.group(2).strip()
+        return name_part or email_part
+    sender = re.sub(r"\s*<[^>]+>\s*$", "", sender).strip()
+    if sender.startswith('"') and sender.endswith('"') and len(sender) > 1:
+        sender = sender[1:-1].strip()
+    return sender
+
+def _extract_email_field(email: dict, keys: list[str]) -> str:
+    if not isinstance(email, dict):
+        return ""
+    for key in keys:
+        value = email.get(key)
+        if value:
+            return str(value)
+    return ""
+
+def _build_spoken_email_summary(emails: list, max_items: int = 5) -> str:
+    if not emails:
+        return ""
+    summary_lines = []
+    for email in emails[:max_items]:
+        sender_raw = _extract_email_field(
+            email,
+            ["sender_name", "from_name", "from", "sender", "sender_email", "senderEmail"],
+        )
+        sender = _strip_sender_name(sender_raw) or "Someone"
+        subject_raw = _extract_email_field(email, ["subject", "title"])
+        subject = _compact_text(subject_raw).rstrip(".") or "an email"
+        summary_lines.append(f"{sender} sent {subject}.")
+    summary = " ".join(summary_lines)
+    remaining = len(emails) - max_items
+    if remaining > 0:
+        summary = f"{summary} And {remaining} more emails."
+    return summary
+
 async def deepgram_stt(audio_bytes: bytes, content_type: str) -> str:
     if not DEEPGRAM_API_KEY:
         raise HTTPException(status_code=500, detail="DEEPGRAM_API_KEY is not set")
@@ -401,7 +448,16 @@ async def voice_chat(
         logger.error(f"Failed to schedule voice chat memory embeddings: {e}")
 
     tts_text = response_text or ""
-    if _is_email_heavy_response(response_text):
+    payload = _extract_emails_payload(response_text or "")
+    emails = payload.get("emails")
+    if isinstance(emails, list) and emails:
+        base_text = _compact_text(payload.get("text_before") or "")
+        summary = _build_spoken_email_summary(emails)
+        if base_text:
+            tts_text = f"{base_text} {summary}"
+        else:
+            tts_text = summary
+    elif _is_email_heavy_response(response_text):
         first_line = ""
         for line in (response_text or "").splitlines():
             if line.strip():
