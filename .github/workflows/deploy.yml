@@ -1,0 +1,38 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Deploy to EC2
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USER }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          cd ~/novamind
+          
+          git checkout main
+          git pull origin main
+          
+          cp backend/.env ~/backup-backend.env || true
+          cp frontend/.env ~/backup-frontend.env || true
+          
+          cp ~/backup-backend.env backend/.env || true
+          cp ~/backup-frontend.env frontend/.env || true
+          
+          docker-compose down
+          docker-compose build --no-cache
+          docker-compose up -d
+          
+          docker-compose ps
+          
+          echo "✅ Deployment completed!"
