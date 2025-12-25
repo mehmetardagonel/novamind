@@ -62,7 +62,6 @@ from gmail_service import (
     # Multi-provider functions (Gmail + Outlook)
     fetch_sent_multi_provider,
     fetch_trash_multi_provider,
-    fetch_important_multi_provider,
     trash_message_multi_provider,
     untrash_message_multi_provider,
     modify_message_labels_multi_provider,
@@ -73,6 +72,8 @@ from gmail_service import (
 from chat_service import ChatService
 # Import ML Service
 from ml_service import get_classifier
+# Import email tool helpers
+from email_tools import fetch_mails
 # Import Gmail Account Service
 from gmail_account_service import gmail_account_service
 
@@ -124,6 +125,13 @@ def apply_ml_classification(emails: List[EmailOut]) -> List[EmailOut]:
         classifier = get_classifier()
         emails_dict = [email.model_dump(mode='json') for email in emails]
         classified_emails = classifier.classify_batch(emails_dict)
+        for email in classified_emails:
+            try:
+                labels = email.get("label_ids") or []
+                if any(str(label).upper() == "IMPORTANT" for label in labels):
+                    email["ml_prediction"] = "important"
+            except Exception:
+                continue
         logger.info(f"Successfully classified {len(classified_emails)} emails")
         return classified_emails
     except Exception as ml_error:
@@ -602,7 +610,17 @@ async def list_starred(user_id: str = Header(..., alias="X-User-Id")):
 @app.get("/emails/important", response_model=List[EmailOut])
 async def list_important(user_id: str = Header(..., alias="X-User-Id")):
     try:
-        emails = await fetch_important_multi_provider(user_id, max_per_account=50)
+        emails = await asyncio.to_thread(
+            fetch_mails,
+            importance=True,
+            folder="inbox",
+            max_results=50,
+            user_id=user_id,
+        )
+        if isinstance(emails, list) and emails and isinstance(emails[0], dict):
+            error = emails[0].get("error")
+            if error:
+                raise HTTPException(status_code=500, detail=error)
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -950,16 +968,21 @@ async def get_unified_emails(
         for account in accounts:
             try:
                 provider = account.get("provider")
+                logger.info(f"[UNIFIED_INBOX] Processing account {account['id']} ({account['email_address']}) - provider: {provider}")
 
                 if provider == "gmail":
+                    logger.info(f"[UNIFIED_INBOX] Getting Gmail service for account {account['id']}")
                     service = await get_user_gmail_service(user_id, account["id"])
+                    logger.info(f"[UNIFIED_INBOX] Gmail service obtained successfully")
 
                     # Use existing fetch logic but with specific service
+                    logger.info(f"[UNIFIED_INBOX] Fetching messages with query: {gmail_query}, max: {max_per_account}")
                     emails = fetch_messages_with_service(
                         service=service,
                         query=gmail_query,
                         max_results=max_per_account
                     )
+                    logger.info(f"[UNIFIED_INBOX] Fetched {len(emails)} emails from Gmail account {account['id']}")
 
                     # Add account information to each email
                     for email in emails:
@@ -984,6 +1007,8 @@ async def get_unified_emails(
                         label_ids = list(e.get("label_ids", []) or [])
                         if not e.get("is_read", True) and "UNREAD" not in label_ids:
                             label_ids.append("UNREAD")
+                        if e.get("is_important") and "IMPORTANT" not in label_ids:
+                            label_ids.append("IMPORTANT")
                         all_emails.append(
                             EmailOut(
                                 message_id=e.get("message_id", ""),

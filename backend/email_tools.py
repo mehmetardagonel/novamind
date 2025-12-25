@@ -963,13 +963,46 @@ def fetch_mails(
     - subject_keyword: Search keyword in subject line
     - folder: Filter by folder (e.g., 'inbox', 'sent', 'drafts')
     - max_results: Maximum number of emails to return (default: 50)
+    - account_id: Specific account ID to fetch from
+    - user_id: User ID for multi-account support
 
     All filters are optional and can be combined together.
     """
     try:
+        logger.info(f"[FETCH_MAILS] ===== START FETCH =====")
+        logger.info(f"[FETCH_MAILS] Parameters:")
+        logger.info(f"  label={label}, sender={sender}, importance={importance}")
+        logger.info(f"  time_period={time_period}, since_date={since_date}, until_date={until_date}")
+        logger.info(f"  subject_keyword={subject_keyword}, folder={folder}")
+        logger.info(f"  max_results={max_results}, provider={provider}")
+        logger.info(f"  account_id={account_id}, user_id={user_id}")
         provider_normalized = provider.lower().strip() if isinstance(provider, str) and provider.strip() else None
         if provider_normalized and provider_normalized not in {"gmail", "outlook"}:
             return [{"error": f"Invalid provider '{provider}'. Use 'gmail' or 'outlook'."}]
+
+        # If the sender looks like a connected account email, treat it as an account filter.
+        if user_id and sender and not account_id and "@" in sender:
+            try:
+                accounts = list_email_accounts(user_id)
+                sender_lower = sender.lower().strip()
+                matched = next(
+                    (
+                        acc
+                        for acc in accounts
+                        if (acc.get("email_address") or "").lower() == sender_lower
+                    ),
+                    None,
+                )
+                if matched:
+                    account_id = matched.get("id")
+                    sender = None
+                    logger.info(
+                        f"[FETCH_MAILS] Resolved sender email to account_id={account_id}"
+                    )
+            except Exception as account_err:
+                logger.warning(
+                    f"[FETCH_MAILS] Failed to resolve sender to account: {account_err}"
+                )
 
         # Build date filter if time_period is specified
         calculated_since = None
@@ -1025,11 +1058,13 @@ def fetch_mails(
         if label:
             query += f' label:{label}'
 
-        # Add importance filter
-        if importance is True:
-            query += ' is:important'
-        elif importance is False:
-            query += ' -is:important'
+        # NOTE: We do NOT add 'is:important' to the Gmail query here anymore
+        # because we want to filter by ML prediction, not Gmail's importance label.
+        # The importance filtering will be done AFTER fetching, based on ml_prediction field.
+        # if importance is True:
+        #     query += ' is:important'
+        # elif importance is False:
+        #     query += ' -is:important'
 
         # Add folder filter
         if folder:
@@ -1070,10 +1105,6 @@ def fetch_mails(
                 if subject_keyword:
                     if subject_keyword.lower() not in (msg.get("subject") or "").lower():
                         return False
-                if importance is True and not msg.get("is_important", False):
-                    return False
-                if importance is False and msg.get("is_important", False):
-                    return False
                 if label:
                     label_lower = label.lower()
                     label_ids = [str(x).lower() for x in (msg.get("label_ids") or [])]
@@ -1095,6 +1126,17 @@ def fetch_mails(
                 return True
             except Exception:
                 return False
+
+        def is_important_email(email: Dict) -> bool:
+            if not isinstance(email, dict):
+                return False
+            if email.get("is_important") is True:
+                return True
+            prediction = str(email.get("ml_prediction") or "").lower()
+            if prediction == "important":
+                return True
+            labels = email.get("label_ids") or []
+            return any(str(label).upper() == "IMPORTANT" for label in labels)
 
         # Multi-account unified (Gmail + Outlook)
         if user_id:
@@ -1119,7 +1161,10 @@ def fetch_mails(
                 all_emails: List[EmailOut] = []
                 gmail_query = query or "in:inbox"
                 outlook_folder = outlook_folder_to_graph(folder)
+                gmail_fetch_limit = max_results
                 outlook_fetch_limit = max(1, min(max_results * 3, 100))
+                if importance is not None:
+                    gmail_fetch_limit = max(1, min(max_results * 3, 100))
 
                 for account in accounts:
                     acc_provider = account.get("provider")
@@ -1128,7 +1173,7 @@ def fetch_mails(
                         emails = fetch_messages_with_service(
                             service=service,
                             query=gmail_query,
-                            max_results=max_results,
+                            max_results=gmail_fetch_limit,
                         )
                         for email in emails:
                             email.account_id = account["id"]
@@ -1157,6 +1202,8 @@ def fetch_mails(
                             label_ids = list(msg.get("label_ids", []) or [])
                             if not msg.get("is_read", True) and "UNREAD" not in label_ids:
                                 label_ids.append("UNREAD")
+                            if msg.get("is_important") and "IMPORTANT" not in label_ids:
+                                label_ids.append("IMPORTANT")
 
                             all_emails.append(
                                 EmailOut(
@@ -1181,16 +1228,71 @@ def fetch_mails(
                     max_n = int(max_results) if max_results is not None else 0
                 except (TypeError, ValueError):
                     max_n = 0
-                if max_n > 0:
+                if max_n > 0 and importance is None:
                     all_emails = all_emails[:max_n]
                 return all_emails
 
             try:
                 emails = asyncio.run(fetch_all())
+                logger.info(f"[FETCH_MAILS] Fetched {len(emails)} emails from accounts (BEFORE importance filter)")
+                if emails:
+                    for i, email in enumerate(emails[:3]):
+                        logger.info(f"[FETCH_MAILS] Email {i+1}: sender={email.sender}, subject={email.subject[:50]}, account_email={email.account_email}, provider={email.provider}, label_ids={email.label_ids}")
             except ValueError:
+                logger.error(f"[FETCH_MAILS] Account not found error")
                 return [{"error": "Account not found"}]
 
-            return [email.model_dump(mode="json") for email in emails]
+            # Convert to dicts for filtering
+            result = [email.model_dump(mode="json") for email in emails]
+
+            # Ensure ML predictions exist when importance filtering is requested.
+            if importance is not None and any(email.get("ml_prediction") is None for email in result):
+                try:
+                    from ml_service import get_classifier
+
+                    classifier = get_classifier()
+                    result = classifier.classify_batch(result)
+                except Exception as ml_error:
+                    logger.warning(
+                        f"[FETCH_MAILS] ML classification skipped/failed: {ml_error}"
+                    )
+
+            # Promote ML-important emails into label_ids for consistent downstream filtering.
+            for email in result:
+                try:
+                    prediction = str(email.get("ml_prediction") or "").lower()
+                    if prediction == "important":
+                        labels = list(email.get("label_ids") or [])
+                        if not any(str(label).upper() == "IMPORTANT" for label in labels):
+                            labels.append("IMPORTANT")
+                            email["label_ids"] = labels
+                except Exception:
+                    continue
+
+            # CRITICAL: Apply ML-based importance filtering AFTER fetching
+            # This is because we classify emails with ML, but we also honor provider "IMPORTANT" labels.
+            if importance is True:
+                logger.info(
+                    "[FETCH_MAILS] Filtering for important emails (ml_prediction or IMPORTANT label)"
+                )
+                result = [email for email in result if is_important_email(email)]
+                logger.info(f"[FETCH_MAILS] After importance filter: {len(result)} emails")
+            elif importance is False:
+                logger.info(
+                    "[FETCH_MAILS] Filtering for non-important emails (not ml_prediction/IMPORTANT)"
+                )
+                result = [email for email in result if not is_important_email(email)]
+                logger.info(f"[FETCH_MAILS] After importance filter: {len(result)} emails")
+
+            try:
+                max_n = int(max_results) if max_results is not None else 0
+            except (TypeError, ValueError):
+                max_n = 0
+            if max_n > 0:
+                result = result[:max_n]
+
+            logger.info(f"[FETCH_MAILS] Returning {len(result)} emails")
+            return result
 
         # Legacy single-account Gmail (token.json)
         emails = fetch_messages(query=query or None, max_results=max_results)
@@ -1314,7 +1416,9 @@ def query_emails(query: str, user_id: str = None) -> Dict:
         import asyncio
         from rag_service import rag_service, EMAIL_EMBEDDINGS_ENABLED
 
-        logger.info(f"Query emails with: '{query}'")
+        logger.info(f"[QUERY_EMAILS] ===== START QUERY =====")
+        logger.info(f"[QUERY_EMAILS] Query: '{query}'")
+        logger.info(f"[QUERY_EMAILS] User ID: {user_id}")
 
         # Try RAG semantic search first if enabled
         if EMAIL_EMBEDDINGS_ENABLED and user_id:
@@ -1346,19 +1450,64 @@ def query_emails(query: str, user_id: str = None) -> Dict:
                 }
 
         # Fallback: Intelligent filtering based on query keywords
-        logger.info("Using intelligent filtering for query")
+        logger.info("[QUERY_EMAILS] Using intelligent filtering for query")
         filters = _extract_filters_from_query(query)
-        logger.info(f"Extracted filters: {filters}")
+        logger.info(f"[QUERY_EMAILS] Extracted filters: {filters}")
+
+        # Check if user_id is provided and resolve account_email to account_id
+        account_id_filter = filters.get('account_id')
+        account_email_filter = filters.get('account_email')
+
+        if user_id:
+            logger.info(f"[QUERY_EMAILS] Fetching all accounts for user {user_id}")
+            accounts = list_email_accounts(user_id)
+            logger.info(f"[QUERY_EMAILS] Found {len(accounts)} accounts: {[acc.get('email_address') for acc in accounts]}")
+
+            # If account_email is provided, resolve it to account_id
+            if account_email_filter and not account_id_filter:
+                logger.info(f"[QUERY_EMAILS] Resolving account_email '{account_email_filter}' to account_id")
+                matching_account = None
+                for acc in accounts:
+                    if acc.get('email_address', '').lower() == account_email_filter.lower():
+                        matching_account = acc
+                        break
+
+                if matching_account:
+                    filters['account_id'] = matching_account.get('id')
+                    logger.info(f"[QUERY_EMAILS] Resolved to account_id: {filters['account_id']}")
+                    # Remove account_email from filters since we resolved it
+                    filters.pop('account_email', None)
+                else:
+                    logger.warning(f"[QUERY_EMAILS] No account found matching email '{account_email_filter}'")
+                    # Maybe it's a sender after all? Let's treat it as sender
+                    logger.info(f"[QUERY_EMAILS] Treating '{account_email_filter}' as sender filter instead")
+                    filters['sender'] = account_email_filter
+                    filters.pop('account_email', None)
 
         # Fetch emails with extracted filters
+        logger.info(f"[QUERY_EMAILS] Calling fetch_mails with:")
+        logger.info(f"  - sender: {filters.get('sender')}")
+        logger.info(f"  - importance: {filters.get('importance')}")
+        logger.info(f"  - time_period: {filters.get('time_period')}")
+        logger.info(f"  - subject_keyword: {filters.get('subject_keyword')}")
+        logger.info(f"  - account_id: {filters.get('account_id')}")
+        logger.info(f"  - max_results: {filters.get('max_results', 25)}")
+        logger.info(f"  - user_id: {user_id}")
+
         emails = fetch_mails(
             sender=filters.get('sender'),
             importance=filters.get('importance'),
             time_period=filters.get('time_period'),
             subject_keyword=filters.get('subject_keyword'),
+            account_id=filters.get('account_id'),
             max_results=filters.get('max_results', 25),
             user_id=user_id
         )
+
+        logger.info(f"[QUERY_EMAILS] fetch_mails returned {len(emails) if emails else 0} emails")
+        if emails:
+            for i, email in enumerate(emails[:3]):  # Log first 3 emails
+                logger.info(f"[QUERY_EMAILS] Email {i+1}: from={email.get('sender')}, subject={email.get('subject')}, account_id={email.get('account_id')}, ml_prediction={email.get('ml_prediction')}")
 
         if not emails:
             return {
@@ -1413,15 +1562,19 @@ def _extract_filters_from_query(query: str) -> Dict:
     - "important emails from boss today" -> {'sender': 'boss', 'importance': True, 'time_period': 'today'}
     - "meetings tomorrow" -> {'subject_keyword': 'meeting', 'time_period': 'today'}
     - "what did I receive from Google jobs" -> {'subject_keyword': 'google jobs'}
+    - "important mails from mehmetardagonel@gmail.com" -> {'importance': True, 'account_email': 'mehmetardagonel@gmail.com'}
 
     IMPROVED LOGIC:
     - Company/service names (Google, Amazon, LinkedIn, etc.) are treated as subject keywords, not senders
     - Only use sender filter when it's clearly a person's name or specific email
     - Partial matching: "Google jobs" will match "Google Careers" emails
+    - Email addresses matching user's accounts are treated as account filters, not sender filters
     """
     query_lower = query.lower()
     filters = {}
     import re
+
+    logger.info(f"[EXTRACT_FILTERS] Processing query: '{query}'")
 
     # Common company/service names that should be searched in subject/body, not sender
     company_keywords = [
@@ -1461,22 +1614,30 @@ def _extract_filters_from_query(query: str) -> Dict:
             break
 
     if from_match:
+        logger.info(f"[EXTRACT_FILTERS] Found 'from' match: '{from_match}'")
+
         # Check if it's a company/service name
         is_company = any(company in from_match for company in company_keywords)
 
         if is_company or 'jobs' in from_match or 'careers' in from_match:
             # Treat as subject keyword for broader matching
+            logger.info(f"[EXTRACT_FILTERS] Treating as subject keyword (company/service)")
             filters['subject_keyword'] = from_match
         elif '@' in from_match:
-            # It's an email address
-            filters['sender'] = from_match
+            # It's an email address - could be account email or sender email
+            # We'll mark it as account_email for now, and the query_emails function
+            # will resolve it to account_id if it matches a user's account
+            logger.info(f"[EXTRACT_FILTERS] Found email address: '{from_match}' - marking as account_email")
+            filters['account_email'] = from_match
         else:
             # Check if it looks like a person's name (short, no special keywords)
             words = from_match.split()
             if len(words) <= 2 and not any(kw in from_match for kw in ['jobs', 'careers', 'team', 'support']):
+                logger.info(f"[EXTRACT_FILTERS] Treating as sender (person's name)")
                 filters['sender'] = from_match
             else:
                 # Treat as subject keyword for broader search
+                logger.info(f"[EXTRACT_FILTERS] Treating as subject keyword (generic)")
                 filters['subject_keyword'] = from_match
 
     # Extract "about X" or "regarding X"
@@ -1499,6 +1660,7 @@ def _extract_filters_from_query(query: str) -> Dict:
     # Set reasonable max results
     filters['max_results'] = 25
 
+    logger.info(f"[EXTRACT_FILTERS] Final extracted filters: {filters}")
     return filters
 
 
@@ -1548,4 +1710,3 @@ def _generate_insights(emails: List[Dict], query: str) -> str:
         insights.append(f"Most recent: '{first_meeting.get('subject')}' from {first_meeting.get('from')}")
 
     return "\n".join(insights)
-
