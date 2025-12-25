@@ -195,18 +195,10 @@ _add_loopback_variant(FRONTEND_ORIGIN)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=["*"],  # Tüm origin'ler
+    allow_credentials=False,  # ← Credentials kapat
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=[
-        "X-Session-Id",
-        "X-Transcript",
-        "X-User-Transcript",
-        "X-Assistant-Reply",
-        "X-Assistant-Tts",
-        "X-Voice-Response-Id",
-    ],
 )
 
 # Session management for ChatService instances
