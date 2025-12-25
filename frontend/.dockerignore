@@ -1,0 +1,46 @@
+# Frontend .dockerignore
+
+# Dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+.npm
+
+# Build
+dist
+build
+
+# Testing
+coverage
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+
+# Git
+.git
+.gitignore
+
+# Environment
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs
+
+# Documentation
+README.md
+*.md
+
+# Temporary files
+*.tmp
+temp
+tmp
+
+# Development
+.cache
+.parcel-cache
