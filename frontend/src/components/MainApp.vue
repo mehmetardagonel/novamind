@@ -4,36 +4,42 @@
     <div class="sidebar-overlay" :class="{ active: isSidebarOpen }" @click="toggleSidebar"></div>
 
     <div class="sidebar" :class="{ open: isSidebarOpen }">
-      <div class="sidebar-header">
-        <div class="logo-icon-container">
-          <div class="logo-svg novamind-logo">
-            <svg
-              fill="none"
-              viewBox="0 0 48 48"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
-                fill="currentColor"
-              ></path>
-            </svg>
+      <div class="sidebar-top">
+        <div class="sidebar-header">
+          <div class="logo-icon-container">
+            <div class="logo-svg novamind-logo">
+              <svg
+                fill="none"
+                viewBox="0 0 48 48"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
+                  fill="currentColor"
+                ></path>
+              </svg>
+            </div>
           </div>
+          <h2>Novamind.AI</h2>
         </div>
-        <h2>Novamind.AI</h2>
+        <p class="welcome-text">Welcome Back!</p>
+
+        <button class="compose-button" @click="goToCompose">
+          <span class="material-symbols-outlined">smart_toy</span>
+          AI Assistant
+        </button>
       </div>
-      <p class="welcome-text">Welcome Back!</p>
 
-      <button class="compose-button" @click="goToCompose">
-        <span class="material-symbols-outlined">smart_toy</span>
-        AI Assistant
-      </button>
+      <div class="sidebar-nav-wrapper">
+        <SidebarNav />
+      </div>
 
-      <SidebarNav />
-
-      <button class="logout-button" @click="exitApp">
-        <span class="material-symbols-outlined">logout</span>
-        Logout
-      </button>
+      <div class="sidebar-bottom">
+        <button class="logout-button" @click="exitApp">
+          <span class="material-symbols-outlined">logout</span>
+          Logout
+        </button>
+      </div>
     </div>
 
     <div class="main-content">
@@ -52,7 +58,7 @@
             v-model="selectedAccountId"
             class="account-dropdown"
           >
-            <option :value="null">Tüm Hesaplar</option>
+            <option :value="null">All Accounts</option>
             <option
               v-for="account in accounts"
               :key="account.id"
@@ -86,7 +92,7 @@ import { useAuthStore } from "../stores/auth";
 import { onMounted, computed, ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import SidebarNav from "../components/SidebarNav.vue";
-import { fetchGmailAccounts } from "../api/accounts";
+import { fetchEmailAccounts } from "../api/accounts";
 
 export default {
   name: "MainApp",
@@ -128,11 +134,11 @@ export default {
         return;
       }
 
-      // Load Gmail accounts for account selector
+      // Load email accounts for account selector (Gmail + Outlook)
       try {
-        accounts.value = await fetchGmailAccounts();
+        accounts.value = await fetchEmailAccounts();
       } catch (error) {
-        console.error("Failed to load Gmail accounts:", error);
+        console.error("Failed to load email accounts:", error);
       }
 
       // Check if user just completed OAuth
@@ -157,15 +163,15 @@ export default {
 
         sessionStorage.removeItem("chat_history");
         sessionStorage.removeItem("chat_session_id");
-        // Redirect to home page
-        router.push("/home");
+        // Redirect to login page
+        router.push("/login");
 
-        console.log("User logged out and redirected to home");
+        console.log("User logged out and redirected to login");
       } catch (err) {
         console.error("Logout error in MainApp:", err);
 
         // Always redirect even on error (graceful UX)
-        router.push("/home");
+        router.push("/login");
       }
     };
 
@@ -290,7 +296,47 @@ export default {
   flex-direction: column;
   border-right: 1px solid var(--border-color);
   z-index: 10;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sidebar-top {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
   gap: 1rem;
+}
+
+.sidebar-nav-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0.5rem 0 0 0;
+  min-height: 0;
+}
+
+/* Scrollbar styling for sidebar nav */
+.sidebar-nav-wrapper::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-nav-wrapper::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-nav-wrapper::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+
+.sidebar-nav-wrapper::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+.sidebar-bottom {
+  flex-shrink: 0;
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--border-color);
 }
 
 /* * SIDEBAR HEADER (was .user-info) */
@@ -371,7 +417,6 @@ export default {
 
 /* * LOGOUT BUTTON */
 .logout-button {
-  margin-top: auto;
   background-color: transparent;
   border: none;
   box-shadow: none;
@@ -455,7 +500,6 @@ export default {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-left: auto;
   margin-right: 1rem;
 }
 
@@ -477,7 +521,8 @@ export default {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.5rem center;
-  min-width: 200px;
+  min-width: 150px;
+  max-width: 200px;
 }
 
 .account-dropdown:hover {
@@ -598,9 +643,20 @@ export default {
     white-space: nowrap;
   }
 
-  /* Hide account selector on small mobile */
+  /* Make account selector smaller on mobile */
   .account-selector {
-    display: none;
+    margin-right: 0.5rem;
+  }
+
+  .selector-icon {
+    display: none; /* Hide icon on mobile to save space */
+  }
+
+  .account-dropdown {
+    padding: 0.4rem 1.5rem 0.4rem 0.6rem;
+    font-size: 0.8rem;
+    min-width: 120px;
+    max-width: 150px;
   }
 
   .theme-toggle-btn {
@@ -638,6 +694,14 @@ export default {
 
   .main-header h1 {
     font-size: 1.1rem;
+  }
+
+  /* Further reduce account dropdown on very small screens */
+  .account-dropdown {
+    padding: 0.35rem 1.2rem 0.35rem 0.5rem;
+    font-size: 0.75rem;
+    min-width: 100px;
+    max-width: 120px;
   }
 
   .hamburger-menu .material-symbols-outlined {

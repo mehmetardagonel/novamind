@@ -1,26 +1,16 @@
 <template>
   <div class="app-screen">
-    <div
-      class="background-image"
-      :style="{ backgroundImage: 'url(' + backgroundImageUrl + ')' }"
-    ></div>
+    <div class="background-image"></div>
     <div class="background-overlay"></div>
 
     <div class="content-wrapper">
       <main class="login-container">
         <div class="login-header">
-          <a
-            @click.prevent="goToHome"
-            class="header-logo-wrapper logo-link"
-            href="/"
-          >
+          <a class="header-logo-wrapper logo-link">
+
             <div class="logo-icon-container">
               <div class="logo-svg novamind-logo">
-                <svg
-                  fill="none"
-                  viewBox="0 0 48 48"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
+                <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
                   <path
                     d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
                     fill="currentColor"
@@ -28,21 +18,6 @@
                 </svg>
               </div>
 
-              <div class="logo-svg home-icon-overlay">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <path
-                    d="M10 20V14H14V20H19V12H22L12 3L2 12H5V20H10Z"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </div>
             </div>
 
             <h1 class="logo-text">Novamind.AI</h1>
@@ -153,38 +128,31 @@
 </template>
 
 <script>
-import BackgroundImage from "@/assets/background.png";
-import { supabase } from "@/database/supabaseClient";
+import { supabase } from '@/database/supabaseClient'
 
 export default {
   data() {
     return {
-      backgroundImageUrl: BackgroundImage,
-      email: "",
-      password: "",
-      confirmPassword: "",
+      email: '',
+      password: '',
+      confirmPassword: '',
 
-      successMessage: "",
+      successMessage: '',
       loading: false,
 
-      emailError: "",
-      passwordError: "",
-      confirmPasswordError: "",
+      emailError: '',
+      passwordError: '',
+      confirmPasswordError: '',
       passwordVisible: false,
       confirmPasswordVisible: false,
-    };
+    }
   },
   methods: {
-    // NEW: Home navigation method
-    goToHome() {
-      this.$router.push("/home");
-    },
-
     togglePasswordVisibility() {
-      this.passwordVisible = !this.passwordVisible;
+      this.passwordVisible = !this.passwordVisible
     },
     toggleConfirmPasswordVisibility() {
-      this.confirmPasswordVisible = !this.confirmPasswordVisible;
+      this.confirmPasswordVisible = !this.confirmPasswordVisible
     },
 
     async signup() {
@@ -347,7 +315,7 @@ body {
   position: absolute;
   inset: 0;
   z-index: 0;
-  background-color: rgba(19, 16, 34, 0.5);
+  background-color: rgba(207, 203, 255, 0.5);
 }
 
 /* --- 3. Main Content Wrapper --- */
@@ -382,81 +350,53 @@ body {
 
 /* The logo-link is the primary interactive area */
 .logo-link {
-  text-decoration: none;
-  cursor: pointer;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  transition: color 0.3s ease;
-  margin-bottom: 0.5rem;
+    text-decoration: none;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: color 0.3s ease;
+    margin-bottom: 0.5rem;
 }
 
 /* NEW: Container to manage the two layered icons */
 .logo-icon-container {
-  position: relative;
-  width: 2rem;
-  height: 2rem;
+    position: relative;
+    width: 2rem;
+    height: 2rem;
 }
 
 /* Base style for both icons inside the container */
 .logo-svg {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  color: var(--primary-color);
-  transition: opacity 0.3s ease, transform 0.3s ease;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    color: var(--primary-color);
+    transition: opacity 0.3s ease, transform 0.3s ease;
 }
 
 /* 1. Novamind Logo (Default State) */
 .novamind-logo {
-  opacity: 1;
-  transform: scale(1);
-  z-index: 2;
-}
-
-/* 2. Home Icon (Hidden State) */
-.home-icon-overlay {
-  opacity: 0;
-  transform: scale(0.5);
-  z-index: 1;
+    opacity: 1;
+    transform: scale(1);
+    z-index: 2;
 }
 
 /* The Novamind.AI Text Label (STATIC) */
 .logo-text {
-  font-size: 1.875rem;
-  line-height: 2.25rem;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  margin: 0;
-  transition: color 0.3s ease;
-  opacity: 1;
-  color: var(--text-primary);
+    font-size: 1.875rem;
+    line-height: 2.25rem;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    margin: 0;
+    transition: color 0.3s ease;
+    opacity: 1;
+    color: var(--text-primary);
 }
-
-/* --- HOVER EFFECT: The Icon Morph --- */
-
-.logo-link:hover .novamind-logo {
-  opacity: 0;
-  transform: scale(0.5) rotate(-90deg);
-}
-
-.logo-link:hover .home-icon-overlay {
-  opacity: 1;
-  transform: scale(1);
-  color: var(--primary-color);
-  filter: drop-shadow(0 0 5px var(--primary-color))
-    drop-shadow(0 0 10px var(--primary-shadow-30));
-  z-index: 3;
-}
-
-.logo-link:hover .logo-text {
-  color: var(--primary-color);
-}
-/* --- End of Hover Changes --- */
 
 .header-subtitle {
   text-align: center;

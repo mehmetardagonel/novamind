@@ -300,6 +300,25 @@ export const searchBySender = (sender, userId) =>
 export const searchBySubject = (subject, userId) =>
   fetchEmails("inbox", userId, { subject_contains: subject });
 
+export const searchEmails = async (query, userId, options = {}) => {
+  const resolvedUserId = await resolveUserId(userId);
+
+  const params = new URLSearchParams();
+  params.append("query", query);
+
+  if (options.provider) params.append("provider", options.provider);
+  if (options.accountId) params.append("account_id", options.accountId);
+  if (options.maxResults) params.append("max_results", String(options.maxResults));
+
+  const endpoint = `/search-emails?${params.toString()}`;
+
+  const res = await apiClient.get(endpoint, {
+    headers: { "X-User-Id": resolvedUserId },
+  });
+
+  return res.data;
+};
+
 // ============================================================
 //   LABEL MANAGEMENT
 // ============================================================
@@ -371,6 +390,7 @@ export default {
   getEmailsByLabel,
   searchBySender,
   searchBySubject,
+  searchEmails,
   logoutGmail,
   fetchLabels,
   createLabel,

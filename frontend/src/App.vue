@@ -11,10 +11,10 @@ import router from './router/index.js' // We might need to import the router for
 export default {
 
   setup() {
-    //Redirect / to /home if it's the very first load and no path is specified
+    //Redirect / to /login if it's the very first load and no path is specified
     onMounted(() => {
       if (router.currentRoute.value.path === '/') {
-        router.push('/home')
+        router.push('/login')
       }
     })
 

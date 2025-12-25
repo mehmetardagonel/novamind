@@ -1,6 +1,6 @@
 <template>
   <div class="email-list-view">
-    <div v-if="loading" class="loading">
+    <div v-if="isInitialLoading" class="loading">
       <p>Loading emails...</p>
     </div>
 
@@ -31,8 +31,41 @@
       </div>
     </div>
 
+    <!-- Search bar and refresh toolbar -->
+    <div v-if="folder === 'inbox' && !isInitialLoading && !authUrl && displayedEmails.length > 0" class="email-controls">
+      <EmailSearchBar
+        @search="handleSearch"
+        @clear="handleClearSearch"
+      />
+
+      <div class="email-toolbar">
+        <button
+          class="refresh-btn"
+          @click="refreshEmails"
+          :disabled="loading"
+          title="Refresh emails"
+        >
+          <span class="material-symbols-outlined">refresh</span>
+          Refresh
+        </button>
+        <div v-if="isBackgroundLoading" class="background-loading">
+          <span class="loading-spinner"></span>
+          Loading new emails...
+        </div>
+      </div>
+    </div>
+
+    <div v-if="searchLoading" class="loading">
+      <p>Searching emails...</p>
+    </div>
+
+    <div v-else-if="searchError" class="error-box">
+      <h3>Search Error</h3>
+      <p>{{ searchError }}</p>
+    </div>
+
     <div
-      v-else-if="emails.length > 0"
+      v-else-if="displayedEmails.length > 0"
       class="email-container"
       :class="{ 'has-detail': selectedEmail && !isTrash }"
     >
@@ -45,7 +78,7 @@
       >
         <div class="email-list">
           <div
-            v-for="(email, index) in emails"
+            v-for="(email, index) in displayedEmails"
             :key="index"
             class="email-item"
             :class="{
@@ -225,10 +258,10 @@
     </div>
 
     <div
-      v-if="!loading && !authUrl && !errorMessage && emails.length === 0"
+      v-if="!isInitialLoading && !searchLoading && !authUrl && !errorMessage && !searchError && displayedEmails.length === 0"
       class="no-emails"
     >
-      <p>No emails found.</p>
+      <p>{{ isSearchMode ? 'No emails found for this search.' : 'No emails found.' }}</p>
     </div>
   </div>
 </template>
@@ -245,10 +278,16 @@ import {
   fetchLabels,
   updateEmailLabels,
   getEmailsByLabel,
+  searchEmails,
 } from "../api/emails";
+import { useEmailCacheStore } from "../stores/emailCache";
+import EmailSearchBar from "./EmailSearchBar.vue";
 
 export default {
   name: "EmailListView",
+  components: {
+    EmailSearchBar,
+  },
   props: {
     folder: {
       type: String,
@@ -269,8 +308,26 @@ export default {
     const authUrl = ref("");
     const isTrash = computed(() => props.folder === "trash");
 
+    // Search state
+    const isSearchMode = ref(false);
+    const searchResults = ref([]);
+    const searchLoading = ref(false);
+    const searchError = ref('');
+
+    // Email cache store
+    const emailCache = useEmailCacheStore();
+
     const route = useRoute();
     const activeLabelId = computed(() => route.query.label || null);
+
+    // Loading states
+    const isInitialLoading = computed(() => {
+      return loading.value && emails.value.length === 0 && !isSearchMode.value;
+    });
+
+    const isBackgroundLoading = computed(() => {
+      return loading.value && emails.value.length > 0 && !isSearchMode.value;
+    });
 
     // 🔹 label popup state
     const showLabelMenu = ref(false);
@@ -294,16 +351,51 @@ export default {
       });
     };
 
-    const loadEmails = async () => {
-      loading.value = true;
+    const loadEmails = async (options = {}) => {
+      const { force = false } = options;
+
       errorMessage.value = "";
-      emails.value = [];
-      selectedEmail.value = null;
       authUrl.value = "";
 
+      // Ensure cache is loaded from storage first
+      await emailCache.loadFromStorage();
+
+      // Generate cache key based on folder and account
+      const labelId = route.query.label;
+      let cacheKey;
+      if (labelId) {
+        cacheKey = `label:${labelId}`;
+      } else if (props.folder === "inbox") {
+        cacheKey = props.selectedAccountId
+          ? `inbox:account:${props.selectedAccountId}`
+          : 'inbox:unified';
+      } else {
+        cacheKey = `folder:${props.folder}`;
+      }
+
+      const STALE_TIME = 2 * 60 * 1000; // 2 minutes
+
+      // Check cache first (skip if force refresh)
+      if (!force && emailCache.isFresh(cacheKey, STALE_TIME)) {
+        const cached = emailCache.getEntry(cacheKey);
+        if (cached) {
+          emails.value = decorateEmails(cached.value);
+          return;
+        }
+      }
+
+      // Start loading after cache check
+      loading.value = true;
+
+      // Only clear emails on initial load, not on refresh
+      if (!force) {
+        emails.value = [];
+        selectedEmail.value = null;
+      }
+
       try {
+
         let data;
-        const labelId = route.query.label; // e.g. "Label_20"
 
         if (labelId) {
           // We are in a label view: /app/email/inbox?label=Label_20&labelName=Work
@@ -318,6 +410,8 @@ export default {
           data = await fetchEmails(props.folder);
         }
 
+        // Update cache
+        emailCache.setEntry(cacheKey, data);
         emails.value = decorateEmails(data);
       } catch (error) {
         console.error(`Error fetching ${props.folder} emails:`, error);
@@ -341,6 +435,10 @@ export default {
       } finally {
         loading.value = false;
       }
+    };
+
+    const refreshEmails = async () => {
+      await loadEmails({ force: true });
     };
 
     const authenticate = () => {
@@ -640,18 +738,78 @@ export default {
       }
     };
 
+    // Computed property to switch between normal and search results
+    const displayedEmails = computed(() => {
+      return isSearchMode.value ? searchResults.value : emails.value;
+    });
+
+    // Handle search
+    const handleSearch = async (query) => {
+      if (!query || !query.trim()) {
+        return;
+      }
+
+      isSearchMode.value = true;
+      searchLoading.value = true;
+      searchError.value = '';
+      selectedEmail.value = null;
+
+      // Ensure cache is loaded from storage first
+      await emailCache.loadFromStorage();
+
+      const cacheKey = `search:${query}`;
+      const STALE_TIME = 5 * 60 * 1000; // 5 minutes
+
+      try {
+        // Check cache first
+        if (emailCache.isFresh(cacheKey, STALE_TIME)) {
+          const cached = emailCache.getEntry(cacheKey);
+          if (cached) {
+            searchResults.value = decorateEmails(cached.value);
+            searchLoading.value = false;
+            return;
+          }
+        }
+
+        // Fetch from API
+        const data = await searchEmails(query);
+        const decorated = decorateEmails(data);
+
+        // Update cache and state
+        emailCache.setEntry(cacheKey, data);
+        searchResults.value = decorated;
+      } catch (error) {
+        console.error('Search error:', error);
+        searchError.value = error.response?.data?.detail || error.message || 'Search failed. Please try again.';
+        searchResults.value = [];
+      } finally {
+        searchLoading.value = false;
+      }
+    };
+
+    // Handle clear search
+    const handleClearSearch = () => {
+      isSearchMode.value = false;
+      searchResults.value = [];
+      searchError.value = '';
+      selectedEmail.value = null;
+    };
+
     return {
       emails,
       loading,
       errorMessage,
       selectedEmail,
       authUrl,
+      isInitialLoading,
+      isBackgroundLoading,
       selectEmail,
       closeEmail,
       handleFavorite,
       handleDelete,
       handleRestore,
       isTrash,
+      refreshEmails,
       formatDate,
       formatFullDate,
       getPreview,
@@ -659,6 +817,14 @@ export default {
       sanitizeHtml,
       loadEmails,
       authenticate,
+      // Search
+      isSearchMode,
+      searchResults,
+      searchLoading,
+      searchError,
+      displayedEmails,
+      handleSearch,
+      handleClearSearch,
       // Label menu
       showLabelMenu,
       availableLabels,
@@ -723,6 +889,116 @@ export default {
 }
 .btn-primary:hover {
   background-color: #337ae2;
+}
+
+/* === EMAIL CONTROLS WRAPPER === */
+.email-controls {
+  background-color: var(--content-bg);
+  border-bottom: 2px solid var(--border-color);
+}
+
+/* === EMAIL TOOLBAR === */
+.email-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background-color: var(--content-bg);
+}
+
+.refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.25rem;
+  background-color: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(108, 99, 255, 0.2);
+}
+
+.refresh-btn:hover:not(:disabled) {
+  background-color: var(--primary-hover-color);
+  box-shadow: 0 3px 6px rgba(108, 99, 255, 0.3);
+  transform: translateY(-1px);
+}
+
+.refresh-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.refresh-btn .material-symbols-outlined {
+  font-size: 20px;
+}
+
+.background-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-left: auto;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--primary-color);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Mobile optimization for toolbar */
+@media (max-width: 768px) {
+  .email-toolbar {
+    padding: 0.6rem 0.75rem;
+    gap: 0.5rem;
+  }
+
+  .refresh-btn {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+  }
+
+  .refresh-btn .material-symbols-outlined {
+    font-size: 18px;
+  }
+
+  .background-loading {
+    font-size: 0.75rem;
+  }
+
+  .loading-spinner {
+    width: 12px;
+    height: 12px;
+  }
 }
 
 .error-box h3 {

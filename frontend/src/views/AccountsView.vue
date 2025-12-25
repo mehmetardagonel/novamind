@@ -1,6 +1,6 @@
 <template>
   <div class="accounts-container">
-    <h2>Email Hesapları</h2>
+    <h2>Email Accounts</h2>
 
     <!-- Connection Buttons -->
     <div class="connect-buttons">
@@ -8,18 +8,18 @@
         <svg class="provider-icon" viewBox="0 0 24 24" width="20" height="20">
           <path fill="currentColor" d="M20,18H18V9.25L12,13L6,9.25V18H4V6H5.2L12,10.25L18.8,6H20M20,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V6C22,4.89 21.1,4 20,4Z"/>
         </svg>
-        Gmail Hesabı Bağla
+        Connect Gmail Account
       </button>
 
       <button @click="connectOutlook" class="btn-outlook">
         <svg class="provider-icon" viewBox="0 0 24 24" width="20" height="20">
           <path fill="currentColor" d="M22,4H14V7H22V4M22,8H14V11H22V8M22,12H14V15H22V12M22,16H14V19H22V16M12,4A2,2 0 0,0 10,6V18A2,2 0 0,0 12,20H13V4H12M4,4A2,2 0 0,0 2,6V18A2,2 0 0,0 4,20H11V4H4M8.5,10.5L9.5,8.5L10.5,10.5L12.5,11.5L10.5,12.5L9.5,14.5L8.5,12.5L6.5,11.5L8.5,10.5Z"/>
         </svg>
-        Outlook Hesabı Bağla
+        Connect Outlook Account
       </button>
     </div>
 
-    <div v-if="loading" class="loading">Yükleniyor...</div>
+    <div v-if="loading" class="loading">Loading...</div>
 
     <div v-else-if="error" class="error">{{ error }}</div>
 
@@ -31,10 +31,10 @@
               {{ (account.provider || 'gmail') === 'gmail' ? 'GMAIL' : 'OUTLOOK' }}
             </span>
             {{ account.email_address }}
-            <span v-if="account.is_primary" class="primary-badge">Birincil</span>
+            <span v-if="account.is_primary" class="primary-badge">Primary</span>
           </div>
           <div class="account-name">{{ account.display_name }}</div>
-          <div class="account-date">Bağlandı: {{ formatDate(account.created_at) }}</div>
+          <div class="account-date">Connected: {{ formatDate(account.created_at) }}</div>
         </div>
 
         <div class="account-actions">
@@ -43,7 +43,7 @@
             @click="setPrimary(account.id)"
             class="btn-secondary"
           >
-            Birincil Yap
+            Set as Primary
           </button>
 
           <button
@@ -51,15 +51,15 @@
             class="btn-danger"
           >
             <i class="pi pi-trash"></i>
-            Bağlantıyı Kes
+            Disconnect
           </button>
         </div>
       </div>
 
       <div v-if="accounts.length === 0" class="empty-state">
         <i class="pi pi-inbox" style="font-size: 3rem; color: #ccc;"></i>
-        <p>Henüz bağlı email hesabı yok</p>
-        <p class="empty-hint">Gmail veya Outlook hesabınızı bağlayarak başlayın</p>
+        <p>No connected email accounts yet</p>
+        <p class="empty-hint">Connect your Gmail or Outlook account to get started</p>
       </div>
     </div>
   </div>
