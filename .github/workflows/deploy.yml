@@ -33,7 +33,7 @@ jobs:
           cp ~/backup-frontend.env frontend/.env || true
           
           docker-compose down
-          docker-compose build --no-cache
+          docker-compose build
           docker-compose up -d
           
           docker-compose ps
