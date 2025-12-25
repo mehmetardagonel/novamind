@@ -487,7 +487,7 @@ export default {
 /* * CONTENT VIEW WRAPPER */
 .content-view-wrapper {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: hidden;
   /* Removed the conditional padding logic as the header is now always present */
 }
 </style>

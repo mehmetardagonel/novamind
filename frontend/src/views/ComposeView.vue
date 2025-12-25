@@ -451,8 +451,10 @@ export default {
     const scrollToBottom = () => {
       nextTick(() => {
         if (historyContainer.value) {
-          historyContainer.value.scrollTop =
-            historyContainer.value.scrollHeight;
+          historyContainer.value.scrollTo({
+            top: historyContainer.value.scrollHeight,
+            behavior: 'smooth'
+          });
         }
       });
     };
@@ -929,6 +931,7 @@ export default {
   overflow: hidden;
   background: rgba(255, 255, 255, 0.78);
   backdrop-filter: blur(12px);
+  height: 100%;
 }
 
 /* Scrollable messages */
@@ -939,6 +942,7 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 /* Message bubbles */

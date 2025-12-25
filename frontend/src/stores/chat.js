@@ -184,6 +184,7 @@ export const useChatStore = defineStore('chat', () => {
 
   // Delete a chat session
   const deleteChat = async (chatId) => {
+    const wasActive = activeChatId.value === chatId
     const remaining = chats.value.filter((c) => c.id !== chatId)
     chats.value = remaining
 
@@ -197,13 +198,10 @@ export const useChatStore = defineStore('chat', () => {
       console.error('[chat store] deleteChat API call failed:', e)
     }
 
-    if (!remaining.length) {
+    // Always create a new chat if the active chat was deleted
+    if (wasActive) {
       await createChat()
       return
-    }
-
-    if (activeChatId.value === chatId) {
-      activeChatId.value = remaining[0].id
     }
   }
 
