@@ -50,7 +50,8 @@ def _patch_langchain_google_genai_finish_reason() -> None:
             return str(name)
         return str(fr)
 
-    def patched(response, stream: bool = False):  # type: ignore[no-untyped-def]
+    def patched(response, stream: bool = False, **kwargs):  # type: ignore[no-untyped-def]
+        # Accept **kwargs for compatibility with langchain-google-genai 2.x (includes prev_usage)
         try:
             llm_output = {
                 "prompt_feedback": genai_chat_models.proto.Message.to_dict(response.prompt_feedback)
@@ -169,10 +170,21 @@ class ChatService:
         masked_key = f"{api_key[:10]}...{api_key[-4:]}" if len(api_key) > 14 else "***"
         logger.info(f"🔑 Using GEMINI_API_KEY: {masked_key}")
 
-        # Use configured Gemini model (defaults to gemini-3-flash).
-        # Note: Avoid 2.5 for now due to tool-calling instability with LangChain agents.
+        requested_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        allow_thought_signatures = os.getenv("GEMINI_ALLOW_THOUGHT_SIGNATURES", "0") == "1"
+        model = requested_model
+
+        if not allow_thought_signatures and requested_model.startswith(("gemini-2.5", "gemini-3")):
+            fallback_model = os.getenv("GEMINI_TOOL_MODEL_FALLBACK", "gemini-2.0-flash")
+            logger.warning(
+                "Model %s requires thought signatures; falling back to %s for tool calls.",
+                requested_model,
+                fallback_model,
+            )
+            model = fallback_model
+
         self.llm = ChatGoogleGenerativeAI(
-            model=os.getenv("GEMINI_MODEL", "gemini-3-flash"),
+            model=model,
             google_api_key=api_key,
             temperature=0.7,
         )
@@ -256,9 +268,9 @@ class ChatService:
                     "CRITICAL RULES:\n"
                     "1. ALWAYS use pipe | character to separate the three parts: email|subject|body\n"
                     "2. Generate intelligent subject and body from user's context (e.g., 'about the grocery list' -> create subject: 'Grocery List' and body with grocery list content)\n"
-                    "3. NEVER ask user for subject/body after they provide context - generate them automatically\n"
+                    "3. Ask whether the user wants to provide the subject/body or wants you to generate both\n"
                     "4. If user doesn't provide recipient email, the tool will ask for it\n"
-                    "5. If user says 'about X', create subject and body related to X\n\n"
+                    "5. If user says 'about X' and wants you to generate, create subject and body related to X\n\n"
                     "WRONG: calling this tool with 3 separate arguments\n"
                     "RIGHT: calling this tool with ONE string argument like 'email@test.com|Subject|Body'\n"
                 ),
@@ -383,12 +395,11 @@ MANDATORY REQUIREMENT FOR DRAFTS:
 - Recipient email address is REQUIRED for all drafts
 - You MUST NOT generate or assume email addresses
 - You MUST ALWAYS ask user for email if not provided
-- If user doesn't provide a recipient email, you MUST:
-  1. Compose the email content based on their request
-  2. Use the draft_email tool (which will return requires_recipient: true)
-  3. When the system indicates recipient is needed, ASK THE USER for the recipient email
-  4. Wait for user to provide the email address
-  5. Then retry draft creation with the provided email
+- Before creating any draft, ask the user whether they want to write the subject/body
+  themselves or want you to generate both. Wait for their reply before calling draft_email.
+- If the user wants to write it themselves, ask them to provide subject/body (and recipient
+  if missing) in a clear, structured format.
+- If the user wants you to generate it, create both subject and body based on their request.
 - If user provides only a name (e.g., "John"), politely ask for the full email address
 - Never create "body-only" drafts
 
@@ -687,6 +698,12 @@ Would you like me to show more details about any of these?"
                     return acc.get("id")
 
         return None
+
+    def _extract_email_from_text(self, message: str) -> str | None:
+        import re
+
+        match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", message or "")
+        return match.group(0) if match else None
 
     def _prompt_for_account_choice(self, provider: str, accounts: list, payload: dict, mode: str) -> str:
         provider_label = "Gmail" if provider == "gmail" else "Outlook"
@@ -1034,6 +1051,234 @@ Would you like me to show more details about any of these?"
             intro = "Here are your Gmail inbox emails:"
 
         return f"{intro}\n\n{emails_block}"
+
+    def _is_draft_creation_request(self, message: str) -> bool:
+        msg = (message or "").strip().lower()
+        if not msg:
+            return False
+
+        if any(
+            k in msg
+            for k in [
+                "update draft",
+                "edit draft",
+                "modify draft",
+                "change draft",
+                "delete draft",
+                "send draft",
+            ]
+        ):
+            return False
+
+        return any(
+            k in msg
+            for k in [
+                "draft",
+                "compose",
+                "create a draft",
+                "create draft",
+                "write an email",
+                "write email",
+            ]
+        )
+
+    def _prompt_for_draft_content_choice(self, raw_user_message: str) -> str:
+        self.pending_selection = {
+            "action": "draft_content_choice",
+            "draft_request": raw_user_message,
+        }
+        return (
+            "Do you want to write the subject and body yourself, or should I generate them? "
+            "Reply with \"I'll write it\" or \"You write it\"."
+        )
+
+    def _parse_draft_content_choice(self, message: str) -> bool | None:
+        msg = (message or "").strip().lower()
+        if not msg:
+            return None
+
+        user_write_keywords = [
+            "i'll write",
+            "i will write",
+            "i want to write",
+            "i'll provide",
+            "i will provide",
+            "let me write",
+            "write it myself",
+            "myself",
+        ]
+        assistant_write_keywords = [
+            "you write",
+            "you do it",
+            "you generate",
+            "generate it",
+            "auto",
+            "llm",
+            "create it",
+            "write it for me",
+        ]
+
+        if any(k in msg for k in user_write_keywords):
+            return True
+        if any(k in msg for k in assistant_write_keywords):
+            return False
+
+        return None
+
+    def _maybe_handle_direct_draft_operation(self, raw_user_message: str) -> str | None:
+        message = (raw_user_message or "").strip()
+        if not message:
+            return None
+
+        msg_lower = message.lower()
+        operation = None
+
+        if "draft" in msg_lower and any(k in msg_lower for k in ["delete", "remove", "discard"]):
+            operation = "delete"
+        elif "draft" in msg_lower and "send" in msg_lower:
+            operation = "send"
+        elif "draft" in msg_lower and any(k in msg_lower for k in ["update", "edit", "modify", "change"]):
+            operation = "update"
+
+        if not operation:
+            return None
+
+        to_email = self._extract_email_from_text(message)
+        if not to_email:
+            return None
+
+        if operation == "delete":
+            return self._delete_draft_for_recipient(to_email)
+
+        if operation == "send":
+            return self._send_draft_for_recipient(to_email)
+
+        instruction = message.split(to_email, 1)[1].strip() if to_email in message else ""
+        if not instruction:
+            self.pending_selection = {
+                "action": "draft_update_instruction",
+                "recipient": to_email,
+            }
+            return f"What should I change in the draft for {to_email}?"
+
+        return self._update_draft_for_recipient(to_email, instruction)
+
+    def _build_fallback_draft_content(self, raw_user_message: str) -> tuple[str, str]:
+        import re
+
+        message = (raw_user_message or "").strip()
+        topic = None
+
+        match = re.search(r"\b(?:about|regarding)\s+(.+)", message, re.IGNORECASE)
+        if match:
+            topic = match.group(1).strip().rstrip(".!?")
+
+        if topic:
+            topic_title = topic.title()
+            subject = f"Regarding {topic_title}"
+            body = (
+                "Hi,\n\n"
+                f"I wanted to follow up about {topic}. "
+                "Let me know if you have any questions or if you'd like to discuss further.\n\n"
+                "Best,\n"
+            )
+        else:
+            subject = "Quick Note"
+            body = (
+                "Hi,\n\n"
+                "I wanted to reach out with a quick update.\n\n"
+                "Best,\n"
+            )
+
+        return subject, body
+
+    def _generate_draft_content_with_llm(self, raw_user_message: str) -> tuple[str, str]:
+        prompt = (
+            "You are an email assistant. Create a subject line and full email body based on the user "
+            "request below. Return JSON only with keys 'subject' and 'body'.\n\n"
+            f"User request: {raw_user_message}"
+        )
+
+        try:
+            response = self.llm.invoke(prompt)
+            content = response.content if hasattr(response, "content") else str(response)
+        except Exception as e:
+            logger.warning(f"Draft content generation failed: {e}")
+            return self._build_fallback_draft_content(raw_user_message)
+
+        import re
+
+        content = (content or "").strip()
+        if not content:
+            return self._build_fallback_draft_content(raw_user_message)
+
+        json_match = re.search(r"\{[\s\S]*\}", content)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(0))
+                subject = str(parsed.get("subject", "")).strip()
+                body = str(parsed.get("body", "")).strip()
+                if subject and body:
+                    return subject, body
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+
+        return self._build_fallback_draft_content(raw_user_message)
+
+    def _format_draft_creation_result(self, result: dict, to_email: str, subject: str) -> str:
+        if not isinstance(result, dict):
+            return "❌ Draft creation failed."
+
+        if result.get("success"):
+            display_subject = subject or result.get("draft", {}).get("subject") or "(No subject)"
+            return f"✅ Draft created to {to_email} with subject '{display_subject}'"
+
+        if result.get("requires_recipient"):
+            message_text = result.get("message") or "Recipient email address is required."
+            hint = result.get("hint") or "Please provide the recipient email address."
+            return f"{message_text} {hint}".strip()
+
+        message_text = result.get("message") or "Draft creation failed."
+        return f"❌ {message_text}"
+
+    def _handle_manual_draft_content_input(self, message: str) -> str:
+        pending = self.pending_selection or {}
+        recipient = pending.get("recipient")
+        expected_parts = pending.get("expected_parts", 3)
+
+        parts = message.split("|", expected_parts - 1)
+        parts = [p.strip() for p in parts if p is not None]
+
+        if len(parts) < expected_parts:
+            if expected_parts == 2:
+                return "Please reply in this format: subject | body"
+            return "Please reply in this format: recipient email | subject | body"
+
+        if expected_parts == 2:
+            to_email = recipient or ""
+            subject, body = parts[0], parts[1]
+        else:
+            to_email, subject, body = parts[0], parts[1], parts[2]
+
+        result = self._parse_draft_email(f"{to_email}|{subject}|{body}")
+
+        if isinstance(result, dict) and not result.get("requires_recipient"):
+            self.pending_selection = None
+
+        return self._format_draft_creation_result(result, to_email, subject)
+
+    def _maybe_handle_draft_fallback(self, raw_user_message: str) -> str | None:
+        message = (raw_user_message or "").strip()
+        if not message:
+            return None
+
+        if not self._is_draft_creation_request(message):
+            return None
+
+        if self.pending_selection:
+            return None
+
+        return self._prompt_for_draft_content_choice(message)
 
     def _parse_fetch_mails(self, input_str) -> dict:
         # LangChain tool calling may pass non-string inputs (dict/float/etc).
@@ -1792,6 +2037,45 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                     self._append_to_history(message_stripped, response_text)
                     return response_text
 
+                if action == "draft_content_choice":
+                    choice = self._parse_draft_content_choice(message_stripped)
+                    if choice is None:
+                        return (
+                            "Please reply with \"I'll write it\" if you want to provide the subject/body, "
+                            "or \"You write it\" if you want me to generate them."
+                        )
+
+                    draft_request = self.pending_selection.get("draft_request", "")
+                    recipient = self._extract_email_from_text(draft_request)
+
+                    if choice:
+                        expected_parts = 2 if recipient else 3
+                        self.pending_selection = {
+                            "action": "draft_manual_content",
+                            "recipient": recipient,
+                            "expected_parts": expected_parts,
+                        }
+                        if recipient:
+                            return "Got it. Please reply in this format: subject | body"
+                        return "Got it. Please reply in this format: recipient email | subject | body"
+
+                    self.pending_selection = None
+                    subject, body = self._generate_draft_content_with_llm(draft_request)
+                    to_email = recipient or ""
+                    result = self._parse_draft_email(f"{to_email}|{subject}|{body}")
+                    return self._format_draft_creation_result(result, to_email, subject)
+
+                if action == "draft_manual_content":
+                    return self._handle_manual_draft_content_input(message_stripped)
+
+                if action == "draft_update_instruction":
+                    to_email = self.pending_selection.get("recipient", "")
+                    instruction = message_stripped.strip()
+                    self.pending_selection = None
+                    if not instruction:
+                        return "Please provide the update instruction."
+                    return self._update_draft_for_recipient(to_email, instruction)
+
                 if action == "draft_awaiting_recipient":
                     return self._handle_draft_recipient_input(message_stripped)
 
@@ -1822,6 +2106,17 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
 
             if self.pending_selection and message_stripped.isdigit():
                 return self._handle_draft_selection(int(message_stripped))
+
+            if not self.pending_selection and self._is_draft_creation_request(message_stripped):
+                draft_prompt = self._prompt_for_draft_content_choice(message_stripped)
+                self._append_to_history(message_stripped, draft_prompt)
+                return draft_prompt
+
+            if not self.pending_selection:
+                draft_op_response = self._maybe_handle_direct_draft_operation(message_stripped)
+                if draft_op_response:
+                    self._append_to_history(message_stripped, draft_op_response)
+                    return draft_op_response
 
             draft_keywords = [
                 "update draft",
@@ -1904,23 +2199,28 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                 if email_match:
                     email = email_match.group()
                     instruction = message_stripped.split(email, 1)[1].strip()
-                    if instruction:
-                        if any(k in message_stripped.lower() for k in ["update", "edit", "modify"]):
-                            logger.info(
-                                f"[FALLBACK] Using direct invocation for update_draft_for_recipient: {email}"
-                            )
-                            fallback_result = self._parse_update_draft_for_recipient(f"{email}|{instruction}")
-                            return json.dumps(fallback_result, indent=2, cls=DateTimeEncoder)
-                        if "send" in message_stripped.lower():
-                            logger.info(
-                                f"[FALLBACK] Using direct invocation for send_draft_for_recipient: {email}"
-                            )
-                            return self._send_draft_for_recipient(email)
-                        if "delete" in message_stripped.lower():
-                            logger.info(
-                                f"[FALLBACK] Using direct invocation for delete_draft_for_recipient: {email}"
-                            )
-                            return self._delete_draft_for_recipient(email)
+                    if any(k in message_stripped.lower() for k in ["update", "edit", "modify"]):
+                        if not instruction:
+                            self.pending_selection = {
+                                "action": "draft_update_instruction",
+                                "recipient": email,
+                            }
+                            return f"What should I change in the draft for {email}?"
+                        logger.info(
+                            f"[FALLBACK] Using direct invocation for update_draft_for_recipient: {email}"
+                        )
+                        fallback_result = self._parse_update_draft_for_recipient(f"{email}|{instruction}")
+                        return json.dumps(fallback_result, indent=2, cls=DateTimeEncoder)
+                    if "send" in message_stripped.lower():
+                        logger.info(
+                            f"[FALLBACK] Using direct invocation for send_draft_for_recipient: {email}"
+                        )
+                        return self._send_draft_for_recipient(email)
+                    if "delete" in message_stripped.lower():
+                        logger.info(
+                            f"[FALLBACK] Using direct invocation for delete_draft_for_recipient: {email}"
+                        )
+                        return self._delete_draft_for_recipient(email)
 
             final_response = self._extract_json_from_response(output)
             logger.info(f"Final response length: {len(final_response) if final_response else 0}")
@@ -1934,6 +2234,11 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                     return output
 
                 # Agent/LLM returned nothing; try a deterministic fallback when possible.
+                draft_fallback = self._maybe_handle_draft_fallback(message_stripped)
+                if draft_fallback:
+                    self._append_to_history(message_stripped, draft_fallback)
+                    return draft_fallback
+
                 direct_fetch = self._maybe_handle_direct_inbox_fetch(message_stripped)
                 if direct_fetch:
                     self._append_to_history(message_stripped, direct_fetch)
