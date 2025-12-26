@@ -11,7 +11,7 @@ from supabase import create_client, Client
 
 from fastapi import FastAPI, Depends, HTTPException, Request, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from dotenv import load_dotenv
 from urllib.parse import urlsplit
 from google_auth_oauthlib.flow import Flow
@@ -353,10 +353,12 @@ async def auth_callback(code: str, state: Optional[str] = None):
 
         # Check if this is a multi-account flow (state contains user_id)
         user_id = None
+        platform = "web"
         if state:
             try:
                 state_data = json.loads(state)
                 user_id = state_data.get("user_id")
+                platform = state_data.get("platform", "web")
             except:
                 pass
 
@@ -378,7 +380,51 @@ async def auth_callback(code: str, state: Optional[str] = None):
             )
 
             logger.info(f"Connected Gmail account {email_address} for user {user_id}")
-            return RedirectResponse(url=f"{FRONTEND_APP_URL}/accounts?connected={email_address}&provider=gmail")
+
+            if platform == "mobile":
+                return HTMLResponse(content=f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <title>Gmail Connected</title>
+                        <style>
+                            body {{
+                                font-family: system-ui, -apple-system, sans-serif;
+                                display: flex;
+                                justify-content: center;
+                                align-items: center;
+                                height: 100vh;
+                                margin: 0;
+                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                color: white;
+                                text-align: center;
+                            }}
+                            .container {{
+                                padding: 2rem;
+                            }}
+                            h1 {{ font-size: 3rem; margin: 0 0 1rem 0; }}
+                            p {{ font-size: 1.2rem; margin: 0.5rem 0; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <h1>✅</h1>
+                            <h2>Gmail Connected!</h2>
+                            <p>{email_address}</p>
+                            <p>Closing in 2 seconds...</p>
+                        </div>
+                        <script>
+                            setTimeout(() => {{
+                                window.close();
+                            }}, 2000);
+                        </script>
+                    </body>
+                    </html>
+                """, status_code=200)
+            else:
+                return RedirectResponse(url=f"{FRONTEND_APP_URL}/accounts?connected={email_address}&provider=gmail")
         else:
             # Legacy flow: save to token.json (backward compatibility)
             with open("token.json", "w") as token:
@@ -906,7 +952,10 @@ async def delete_gmail_account(
 
 
 @app.get("/gmail/auth/connect")
-async def initiate_gmail_connect(user_id: str = Header(..., alias="X-User-Id")):
+async def initiate_gmail_connect(
+    user_id: str = Header(..., alias="X-User-Id"),
+    x_app_platform: Optional[str] = Header(None, alias="X-App-Platform")
+):
     """
     Initiate Gmail OAuth flow for connecting a new account.
     Returns auth URL that includes user_id in state parameter.
@@ -917,7 +966,12 @@ async def initiate_gmail_connect(user_id: str = Header(..., alias="X-User-Id")):
         flow.redirect_uri = REDIRECT_URI
 
         # Include user_id in state to identify user after OAuth callback
-        state = json.dumps({"user_id": user_id})
+        platform = x_app_platform if x_app_platform else "web"
+        state = json.dumps({
+            "user_id": user_id,
+            "platform": platform
+        })
+        
         auth_url, _ = flow.authorization_url(prompt='consent', state=state)
 
         return {"auth_url": auth_url}

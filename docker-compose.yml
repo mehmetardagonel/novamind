@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # Backend - FastAPI + ML
+  backend:
+    build: ./backend
+    container_name: novamind-backend
+    restart: always
+    ports:
+      - "8002:8001"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/ml_model:/app/ml_mode
+    networks:
+      - novamind-network
+
+
+  frontend:
+    build: ./frontend
+    container_name: novamind-frontend
+    restart: always
+    ports:
+      - "8080:80"
+    env_file:
+      - ./frontend/.env
+    depends_on:
+      - backend
+    networks:
+      - novamind-network
+
+
+networks:
+  novamind-network:
+    driver: bridge
+
+# Notlar:
+# 1. .env dosyasını root dizinde oluşturun
+# 2. ML modellerinin (spam_model.pkl, embedding_model.pkl) backend/ml_model/models/ içinde olduğundan emin olun
+# 3. Frontend http://YOUR_IP ile erişilebilir olacak
+# 4. Backend API http://YOUR_IP:8001/docs ile test edilebilir
+# 5. Google OAuth için redirect URL'i güncellemeyi unutmayın:
+#    https://console.cloud.google.com/apis/credentials
+#    Authorized redirect URIs: http://YOUR_ELASTIC_IP/api/auth/callback
