@@ -25,6 +25,7 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 VOICE_TTS_MODEL = os.getenv("VOICE_TTS_MODEL", "aura-asteria-en")
 VOICE_TTS_ENCODING = os.getenv("VOICE_TTS_ENCODING", "linear16")  # easiest for browser playback
 VOICE_TTS_SAMPLE_RATE = int(os.getenv("VOICE_TTS_SAMPLE_RATE", "24000"))
+VOICE_EMAIL_SUMMARY_MAX = int(os.getenv("VOICE_EMAIL_SUMMARY_MAX", "5"))
 
 VOICE_RESPONSE_CACHE: dict[str, dict] = {}
 VOICE_RESPONSE_CACHE_MAX = 200
@@ -218,6 +219,51 @@ def _build_voice_summary(text: str) -> str:
         return f"I found some emails{provider_phrase}. They're shown on the screen."
     return f"Here are your emails{provider_phrase} on the screen."
 
+def _clean_sender_name(value: Optional[str]) -> str:
+    if not value:
+        return "Someone"
+    name = str(value).strip().strip("\"'")
+    name = re.sub(r"\s*<[^>]+>", "", name).strip()
+    if not name and "@" in value:
+        name = value.split("@", 1)[0].strip()
+    return name or "Someone"
+
+def _clean_subject(value: Optional[str]) -> str:
+    if not value:
+        return "an email"
+    subject = re.sub(r"\s+", " ", str(value)).strip()
+    return subject or "an email"
+
+def _ensure_sentence(text: str) -> str:
+    if not text:
+        return ""
+    if text[-1] in ".!?":
+        return text
+    return f"{text}."
+
+def _build_spoken_email_summary(emails: list, max_items: int) -> str:
+    if not emails:
+        return ""
+    summary_lines = []
+    for email in emails[:max_items]:
+        if not isinstance(email, dict):
+            continue
+        sender_name = _clean_sender_name(
+            email.get("sender_name")
+            or email.get("from_name")
+            or email.get("from")
+            or email.get("sender")
+        )
+        subject = _clean_subject(email.get("subject") or email.get("title"))
+        summary_lines.append(_ensure_sentence(f"{sender_name} sent {subject}"))
+
+    spoken_summary = " ".join(line for line in summary_lines if line).strip()
+    remaining = len(emails) - max_items
+    if remaining > 0:
+        tail = f"And {remaining} more emails."
+        spoken_summary = f"{spoken_summary} {tail}" if spoken_summary else tail
+    return spoken_summary
+
 async def deepgram_stt(audio_bytes: bytes, content_type: str) -> str:
     if not DEEPGRAM_API_KEY:
         raise HTTPException(status_code=500, detail="DEEPGRAM_API_KEY is not set")
@@ -328,82 +374,96 @@ async def voice_chat(
         raise HTTPException(status_code=400, detail="Empty audio file")
 
     transcript = await deepgram_stt(audio_bytes, file.content_type or "application/octet-stream")
-    if not transcript:
-        return JSONResponse({"transcript": "", "response_text": "", "session_id": session_id})
-
+    transcript = (transcript or "").strip()
     normalized_transcript = _normalize_transcript(transcript)
-    if normalized_transcript != transcript:
-        logger.info(
-            "Voice STT normalized transcript (%s chars): %s",
-            len(normalized_transcript),
-            normalized_transcript[:200],
-        )
-    else:
-        logger.info("Voice STT transcript (%s chars): %s", len(transcript), transcript[:200])
 
     # Reuse the SAME session mechanism as /chat
     sid = session_id or str(uuid.uuid4())
-    session_key = f"{user_id}:{sid}"
-    if session_key not in chat_sessions:
-        chat_sessions[session_key] = ChatService(user_id=user_id)
 
-    # Pull RAG context just like /chat
-    context = ""
-    try:
-        context = await rag_service.get_combined_context(
-            user_id=user_id,
-            query=transcript,
-            session_id=sid,
-        )
-    except Exception as e:
-        logger.error(f"Failed to build RAG context for voice chat: {e}")
+    if not transcript:
+        logger.info("Voice STT returned empty transcript.")
+        response_text = "I didn't catch that. Please try speaking again."
+    else:
+        if normalized_transcript != transcript:
+            logger.info(
+                "Voice STT normalized transcript (%s chars): %s",
+                len(normalized_transcript),
+                normalized_transcript[:200],
+            )
+        else:
+            logger.info("Voice STT transcript (%s chars): %s", len(transcript), transcript[:200])
 
-    context_message = ""
-    if context:
-        context_message = (
-            f"{context}\n\n"
-            f"Use the context above if it is relevant. "
-            f"Do not mention it explicitly unless asked."
-        )
+        session_key = f"{user_id}:{sid}"
+        if session_key not in chat_sessions:
+            chat_sessions[session_key] = ChatService(user_id=user_id)
 
-    lock = chat_session_locks.get(session_key)
-    if lock is None:
-        lock = asyncio.Lock()
-        chat_session_locks[session_key] = lock
+        # Pull RAG context just like /chat
+        context = ""
+        try:
+            context = await rag_service.get_combined_context(
+                user_id=user_id,
+                query=transcript,
+                session_id=sid,
+            )
+        except Exception as e:
+            logger.error(f"Failed to build RAG context for voice chat: {e}")
 
-    async with lock:
-        response_text = await asyncio.to_thread(
-            chat_sessions[session_key].chat,
-            normalized_transcript,
-            context_message,
-        )
-    logger.info("Voice response (%s chars).", len(response_text or ""))
+        context_message = ""
+        if context:
+            context_message = (
+                f"{context}\n\n"
+                f"Use the context above if it is relevant. "
+                f"Do not mention it explicitly unless asked."
+            )
+
+        lock = chat_session_locks.get(session_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            chat_session_locks[session_key] = lock
+
+        async with lock:
+            response_text = await asyncio.to_thread(
+                chat_sessions[session_key].chat,
+                normalized_transcript,
+                context_message,
+            )
+        logger.info("Voice response (%s chars).", len(response_text or ""))
 
     # Store chat memory for RAG (best-effort)
-    try:
-        user_msg_id = str(uuid.uuid4())
-        assistant_msg_id = str(uuid.uuid4())
-        _schedule_store_chat_embedding(
-            user_id=user_id,
-            session_id=sid,
-            role="user",
-            content=transcript,
-            message_id=user_msg_id,
-        )
+    if transcript:
+        try:
+            user_msg_id = str(uuid.uuid4())
+            assistant_msg_id = str(uuid.uuid4())
+            _schedule_store_chat_embedding(
+                user_id=user_id,
+                session_id=sid,
+                role="user",
+                content=transcript,
+                message_id=user_msg_id,
+            )
 
-        assistant_clean = re.sub(r"```[\\s\\S]*?```", "", response_text or "").strip()
-        _schedule_store_chat_embedding(
-            user_id=user_id,
-            session_id=sid,
-            role="assistant",
-            content=assistant_clean[:2000],
-            message_id=assistant_msg_id,
-        )
-    except Exception as e:
-        logger.error(f"Failed to schedule voice chat memory embeddings: {e}")
+            assistant_clean = re.sub(r"```[\\s\\S]*?```", "", response_text or "").strip()
+            _schedule_store_chat_embedding(
+                user_id=user_id,
+                session_id=sid,
+                role="assistant",
+                content=assistant_clean[:2000],
+                message_id=assistant_msg_id,
+            )
+        except Exception as e:
+            logger.error(f"Failed to schedule voice chat memory embeddings: {e}")
 
     tts_text = response_text or ""
-    if _is_email_heavy_response(response_text):
+    payload = _extract_emails_payload(response_text or "")
+    emails = payload.get("emails")
+    base_text = (payload.get("text_before") or "").strip()
+    if isinstance(emails, list) and emails:
+        spoken_summary = _build_spoken_email_summary(emails, VOICE_EMAIL_SUMMARY_MAX)
+        if spoken_summary:
+            tts_text = f"{base_text} {spoken_summary}".strip() if base_text else spoken_summary
+        else:
+            tts_text = base_text or _build_voice_summary(response_text)
+    elif _is_email_heavy_response(response_text):
         first_line = ""
         for line in (response_text or "").splitlines():
             if line.strip():
@@ -417,22 +477,13 @@ async def voice_chat(
 
     response_id = _store_voice_response(user_id, response_text)
 
-    if not tts_text:
-        return JSONResponse(
-            {
-                "transcript": transcript,
-                "response_text": response_text or "",
-                "session_id": sid,
-            }
-        )
-
     audio_out, mime = await deepgram_tts(tts_text)
     logger.info("Voice TTS audio bytes: %s", len(audio_out))
 
     # Return audio for immediate playback + useful metadata in headers
     safe_transcript = _safe_header_value(normalized_transcript, max_len=200)
     safe_full_transcript = _safe_header_value(normalized_transcript, max_len=2000)
-    safe_reply = _safe_header_value(response_text, max_len=2000)
+    safe_reply = _safe_header_value(tts_text, max_len=2000)
     safe_tts = _safe_header_value(tts_text, max_len=2000)
 
     return Response(
