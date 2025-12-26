@@ -628,13 +628,6 @@ export default {
             emails: null,
           });
         }
-        if (!userTranscript && !assistantReply && !replyAudio) {
-          chatStore.appendMessage(chatId, {
-            role: "bot",
-            text: "I didn't catch that. Please try again.",
-            emails: null,
-          });
-        }
         if (assistantReply || responseId) {
           let responseText = assistantReply || "";
           let extracted = extractJsonFromText(responseText);
