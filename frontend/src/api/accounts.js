@@ -85,12 +85,12 @@ export const connectGmailAccount = async (userId) => {
 };
 
 /**
- * Set an account as primary
+ * Set an account as primary (works for both Gmail and Outlook)
  */
 export const setPrimaryAccount = async (accountId, userId) => {
   const resolvedUserId = await resolveUserId(userId);
   const response = await apiClient.post(
-    `/gmail/accounts/${accountId}/set-primary`,
+    `/email/accounts/${accountId}/set-primary`,
     {},
     {
       headers: { "X-User-Id": resolvedUserId },
