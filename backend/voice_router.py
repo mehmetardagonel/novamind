@@ -244,6 +244,7 @@ async def deepgram_stt(audio_bytes: bytes, content_type: str) -> str:
     except Exception:
         transcript = ""
 
+    logger.info("STT transcript=%r", transcript)
     return transcript.strip()
 
 logger = logging.getLogger(__name__)
@@ -313,6 +314,7 @@ async def deepgram_tts(text: str) -> tuple[bytes, str]:
         raise HTTPException(status_code=502, detail=f"Deepgram TTS failed: {r.text}")
 
     wav_bytes = pcm16_to_wav(r.content, VOICE_TTS_SAMPLE_RATE)
+    logger.info("TTS reply_text=%r, bytes=%d", text, len(wav_bytes))
     return wav_bytes, "audio/wav"
 
 @router.post("/chat")
