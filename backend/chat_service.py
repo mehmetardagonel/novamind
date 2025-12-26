@@ -50,7 +50,8 @@ def _patch_langchain_google_genai_finish_reason() -> None:
             return str(name)
         return str(fr)
 
-    def patched(response, stream: bool = False):  # type: ignore[no-untyped-def]
+    def patched(response, stream: bool = False, **kwargs):  # type: ignore[no-untyped-def]
+        # Accept **kwargs for compatibility with langchain-google-genai 2.x (includes prev_usage)
         try:
             llm_output = {
                 "prompt_feedback": genai_chat_models.proto.Message.to_dict(response.prompt_feedback)

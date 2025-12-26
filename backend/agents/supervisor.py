@@ -130,22 +130,20 @@ Be careful - sending is irreversible!
 # =============================================================================
 
 def get_llm(model_name: Optional[str] = None, temperature: float = 0.3):
-    """Get configured LLM instance with proper settings for Gemini 3."""
+    """
+    Get configured LLM instance with proper settings.
+
+    Now supports Gemini 3 models with thought_signature handling via langchain-google-genai 2.x.
+    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY not found!")
 
-    # Use gemini-2.0-flash-lite or gemini-1.5-flash for better tool calling stability
-    # Gemini 3 Flash has thought_signature requirements that langchain-google-genai 1.x doesn't support
-    model = model_name or os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
+    # Use environment variable or default to gemini-2.5-flash
+    # Gemini 3 models (gemini-3-pro-preview) are supported with the updated SDK
+    model = model_name or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-    # If model is gemini-3-flash, downgrade to stable version
-    if "gemini-3" in model.lower():
-        logger.warning(
-            f"Model {model} requires thought_signature support. "
-            "Falling back to gemini-2.0-flash-lite for stability."
-        )
-        model = "gemini-2.0-flash-lite"
+    logger.info(f"[LLM] Initializing model: {model}")
 
     return ChatGoogleGenerativeAI(
         model=model,
