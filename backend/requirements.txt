@@ -56,9 +56,14 @@ python-dotenv==1.0.0
 supabase>=2.23.3
 
 # AI & LangChain
-langchain==0.2.16
-langchain-google-genai==1.0.10
-google-generativeai==0.7.2
+langchain==0.3.25
+langchain-core==0.3.61
+langchain-google-genai==2.1.5
+google-generativeai>=0.8.0
+
+# LangGraph for Multi-Agent Architecture
+langgraph>=0.4.0
+langgraph-checkpoint>=2.0.0
 
 # ML Classification
 scikit-learn==1.6.1

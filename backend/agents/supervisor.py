@@ -1,0 +1,832 @@
+"""
+LangGraph Supervisor for Email Agent.
+
+This module implements the supervisor pattern that routes user requests to
+specialized agents (Inbox, Draft, Send, Organization) based on intent.
+
+Architecture:
+- Supervisor: Analyzes user intent and routes to appropriate agent
+- InboxAgent: Handles read operations (fetch, query, list)
+- DraftAgent: Handles draft composition and management
+- SendAgent: Handles immediate email sending
+- OrganizationAgent: Handles inbox organization (move, delete spam)
+"""
+
+import os
+import json
+import logging
+from typing import Literal, Optional, Any
+from datetime import datetime
+
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command, interrupt
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+from .state import EmailAgentState, create_initial_state, DraftPendingInfo
+from .tools import (
+    create_inbox_tools,
+    create_draft_tools,
+    create_send_tools,
+    create_organization_tools,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Agent Prompts
+# =============================================================================
+
+SUPERVISOR_PROMPT = """You are a supervisor routing email requests to specialized agents.
+
+Analyze the user's message and decide which agent should handle it:
+
+AGENTS:
+- "inbox": For reading/fetching/searching emails, listing accounts, viewing drafts
+  Keywords: show, list, fetch, get, read, search, query, find, check, inbox, emails from
+
+- "draft": For creating, editing, updating, or deleting email drafts
+  Keywords: draft, compose, write, create email, edit draft, update draft, delete draft
+
+- "send": For sending emails immediately (not drafts) or confirming draft sends
+  Keywords: send, send email now, send immediately, confirm send
+
+- "organization": For organizing inbox (moving emails, deleting spam)
+  Keywords: move, organize, delete spam, clean up, label, folder
+
+- "human": When you need clarification or the request is ambiguous
+
+- "__end__": For greetings, general questions, or when you can answer directly
+
+RULES:
+1. Route to ONE agent only
+2. If user is responding to a pending operation (yes/no, email address, number), check context
+3. For draft creation, ALWAYS route to "draft" agent first
+4. For "send the email" after draft creation, route to "send"
+
+Respond with ONLY the agent name: inbox, draft, send, organization, human, or __end__
+"""
+
+DRAFT_AGENT_PROMPT = """You are a specialized email drafting assistant.
+
+Your capabilities:
+1. Create new email drafts
+2. Update existing drafts with natural language instructions
+3. Delete drafts
+4. Help compose professional emails
+
+CRITICAL RULES FOR DRAFT CREATION:
+1. If user provides recipient email, subject, and body context - create the draft immediately
+2. If user only provides recipient - ask what the email should be about
+3. If user provides context but NO recipient - ask for recipient email address
+4. If user says "generate it yourself" or "auto" - create subject and body from context
+5. NEVER ask for confirmation before creating a draft
+6. ALWAYS confirm after creating: "Draft created to [email] with subject '[subject]'"
+
+For updating drafts:
+- Use the update_draft tool with the recipient email and instruction
+- The tool will use AI to intelligently modify the draft
+
+Always be professional and helpful.
+"""
+
+INBOX_AGENT_PROMPT = """You are a specialized email reading assistant.
+
+Your capabilities:
+1. Fetch emails with various filters (sender, date, label, importance)
+2. Search emails with natural language queries
+3. List connected email accounts
+4. View all drafts or drafts for specific recipients
+
+RESPONSE FORMAT:
+- For fetch_emails: The tool returns JSON in ```json``` blocks - include this in your response
+- For query_emails: Present results conversationally with key highlights
+- Always mention the count of emails found
+- Highlight important emails, meetings, and action items
+
+Be concise but informative.
+"""
+
+SEND_AGENT_PROMPT = """You are a specialized email sending assistant.
+
+Your capabilities:
+1. Send emails immediately (not as drafts)
+2. Confirm and send existing drafts
+
+CRITICAL RULES:
+1. ALWAYS ask for confirmation before sending: "Are you sure you want to send this email?"
+2. If user confirms with "yes" - proceed with sending
+3. If user says "no" - cancel the operation
+4. After sending, confirm success: "Email sent to [recipient]!"
+
+Be careful - sending is irreversible!
+"""
+
+
+# =============================================================================
+# LLM Initialization
+# =============================================================================
+
+def get_llm(model_name: Optional[str] = None, temperature: float = 0.3):
+    """Get configured LLM instance with proper settings for Gemini 3."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY not found!")
+
+    # Use gemini-2.0-flash-lite or gemini-1.5-flash for better tool calling stability
+    # Gemini 3 Flash has thought_signature requirements that langchain-google-genai 1.x doesn't support
+    model = model_name or os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
+
+    # If model is gemini-3-flash, downgrade to stable version
+    if "gemini-3" in model.lower():
+        logger.warning(
+            f"Model {model} requires thought_signature support. "
+            "Falling back to gemini-2.0-flash-lite for stability."
+        )
+        model = "gemini-2.0-flash-lite"
+
+    return ChatGoogleGenerativeAI(
+        model=model,
+        google_api_key=api_key,
+        temperature=temperature,
+        convert_system_message_to_human=True,  # Required for some models
+    )
+
+
+# =============================================================================
+# Node Functions
+# =============================================================================
+
+def supervisor_node(state: EmailAgentState) -> dict:
+    """
+    Supervisor node that analyzes intent and routes to appropriate agent.
+    """
+    logger.info(f"[SUPERVISOR] Processing: {state.get('current_input', '')[:100]}")
+
+    # Check for pending operations that need specific routing
+    if state.get("draft_pending"):
+        pending = state["draft_pending"]
+        awaiting = pending.get("awaiting")
+
+        # Handle pending draft operations
+        if awaiting == "recipient":
+            return {"next_agent": "draft"}
+        elif awaiting == "confirmation":
+            user_input = state.get("current_input", "").lower().strip()
+            if user_input in ["yes", "y"]:
+                return {"next_agent": "send"}
+            elif user_input in ["no", "n"]:
+                return {
+                    "next_agent": "__end__",
+                    "response": "Operation cancelled.",
+                    "draft_pending": None,
+                }
+        elif awaiting == "selection":
+            return {"next_agent": "draft"}
+
+    if state.get("account_selection"):
+        return {"next_agent": "inbox"}
+
+    # Use LLM to determine routing
+    try:
+        llm = get_llm(temperature=0.1)
+
+        # Build context from recent messages
+        recent_messages = state.get("messages", [])[-5:]
+        context_str = ""
+        if recent_messages:
+            context_str = "\n".join([
+                f"{m.get('role', 'user')}: {m.get('content', '')[:200]}"
+                for m in recent_messages
+            ])
+
+        routing_prompt = f"""{SUPERVISOR_PROMPT}
+
+Recent context:
+{context_str}
+
+Current message: {state.get('current_input', '')}
+
+Route to:"""
+
+        response = llm.invoke(routing_prompt)
+        route = response.content.strip().lower().replace('"', '').replace("'", "")
+
+        # Validate route
+        valid_routes = ["inbox", "draft", "send", "organization", "human", "__end__"]
+        if route not in valid_routes:
+            # Default routing based on keywords
+            current_input = state.get("current_input", "").lower()
+            if any(kw in current_input for kw in ["draft", "compose", "write email", "create email"]):
+                route = "draft"
+            elif any(kw in current_input for kw in ["send", "mail now"]):
+                route = "send"
+            elif any(kw in current_input for kw in ["show", "list", "fetch", "get", "inbox", "email"]):
+                route = "inbox"
+            elif any(kw in current_input for kw in ["move", "spam", "organize"]):
+                route = "organization"
+            else:
+                route = "__end__"
+
+        logger.info(f"[SUPERVISOR] Routing to: {route}")
+        return {"next_agent": route}
+
+    except Exception as e:
+        logger.error(f"[SUPERVISOR] Routing error: {e}")
+        # Fallback to keyword-based routing
+        current_input = state.get("current_input", "").lower()
+        if "draft" in current_input:
+            return {"next_agent": "draft"}
+        elif "send" in current_input:
+            return {"next_agent": "send"}
+        elif any(kw in current_input for kw in ["show", "list", "fetch", "inbox"]):
+            return {"next_agent": "inbox"}
+        return {"next_agent": "__end__"}
+
+
+def inbox_agent_node(state: EmailAgentState) -> dict:
+    """
+    Inbox Agent: Handles email reading/fetching operations.
+    """
+    logger.info("[INBOX_AGENT] Processing request")
+
+    try:
+        llm = get_llm()
+        tools = create_inbox_tools(user_id=state.get("user_id"))
+        llm_with_tools = llm.bind_tools(tools)
+
+        messages = [
+            SystemMessage(content=INBOX_AGENT_PROMPT),
+            HumanMessage(content=state.get("current_input", "")),
+        ]
+
+        response = llm_with_tools.invoke(messages)
+
+        # Handle tool calls
+        if response.tool_calls:
+            tool_results = []
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                logger.info(f"[INBOX_AGENT] Calling tool: {tool_name} with args: {tool_args}")
+
+                # Find and execute the tool
+                for tool in tools:
+                    if tool.name == tool_name:
+                        result = tool.invoke(tool_args)
+                        tool_results.append(result)
+                        break
+
+            # Generate response with tool results
+            if tool_results:
+                follow_up_messages = messages + [
+                    AIMessage(content=response.content or "", tool_calls=response.tool_calls),
+                    HumanMessage(content=f"Tool results: {tool_results[0]}")
+                ]
+                final_response = llm.invoke(follow_up_messages)
+
+                # Ensure JSON blocks are preserved for fetch_emails
+                response_content = final_response.content
+                for result in tool_results:
+                    if "```json" in result and "```json" not in response_content:
+                        response_content = f"{response_content}\n\n{result}"
+
+                return {
+                    "response": response_content,
+                    "next_agent": "supervisor",
+                    "last_tool_result": {"results": tool_results},
+                }
+
+        return {
+            "response": response.content or "I couldn't process that request.",
+            "next_agent": "supervisor",
+        }
+
+    except Exception as e:
+        logger.error(f"[INBOX_AGENT] Error: {e}")
+        return {
+            "response": f"Error processing inbox request: {str(e)}",
+            "next_agent": "__end__",
+            "error": str(e),
+        }
+
+
+def draft_agent_node(state: EmailAgentState) -> dict:
+    """
+    Draft Agent: Handles draft creation and management.
+
+    Implements interactive draft flow:
+    - If recipient missing -> ask for it
+    - If subject/body missing and user wants auto-generate -> create them
+    - Otherwise ask for missing info
+    """
+    logger.info("[DRAFT_AGENT] Processing request")
+
+    try:
+        llm = get_llm()
+        tools = create_draft_tools(user_id=state.get("user_id"), llm=llm)
+        llm_with_tools = llm.bind_tools(tools)
+
+        current_input = state.get("current_input", "")
+        pending = state.get("draft_pending")
+
+        # Handle pending draft completion
+        if pending:
+            awaiting = pending.get("awaiting")
+
+            if awaiting == "recipient":
+                # User provided recipient email
+                email_input = current_input.strip()
+                if "@" not in email_input or "." not in email_input.split("@")[-1]:
+                    return {
+                        "response": f"'{email_input}' doesn't look like a valid email address.\nPlease provide a valid email (e.g., john@example.com)",
+                        "next_agent": "supervisor",
+                    }
+
+                # Create the draft with the provided email
+                subject = pending.get("subject", "")
+                body = pending.get("body", "")
+                context_hint = pending.get("context_hint", "")
+
+                # If subject/body empty but have context, auto-generate
+                if (not subject or not body) and (context_hint or pending.get("auto_generate")):
+                    generation_prompt = f"""Generate an email subject and body based on this context:
+Context: {context_hint or 'General email'}
+
+Recipient: {email_input}
+
+Return JSON format:
+{{"subject": "...", "body": "..."}}
+
+Make it professional and appropriate."""
+                    try:
+                        gen_response = llm.invoke(generation_prompt)
+                        import re
+                        json_match = re.search(r'\{[^}]+\}', gen_response.content, re.DOTALL)
+                        if json_match:
+                            generated = json.loads(json_match.group())
+                            subject = generated.get("subject", subject)
+                            body = generated.get("body", body)
+                    except Exception as e:
+                        logger.warning(f"Auto-generation failed: {e}")
+
+                # Call create_draft tool
+                for tool in tools:
+                    if tool.name == "create_draft":
+                        result = tool.invoke({
+                            "recipient": email_input,
+                            "subject": subject,
+                            "body": body,
+                        })
+                        result_dict = json.loads(result)
+
+                        if result_dict.get("success"):
+                            return {
+                                "response": f"Draft created to {email_input} with subject '{subject}'",
+                                "next_agent": "__end__",
+                                "draft_pending": None,
+                            }
+                        else:
+                            return {
+                                "response": f"Failed to create draft: {result_dict.get('message', 'Unknown error')}",
+                                "next_agent": "__end__",
+                                "draft_pending": None,
+                            }
+
+            elif awaiting == "selection":
+                # User selected a draft number
+                if current_input.strip().isdigit():
+                    selection = int(current_input.strip())
+                    drafts = pending.get("drafts_list", [])
+                    if 1 <= selection <= len(drafts):
+                        selected = drafts[selection - 1]
+                        operation = pending.get("operation")
+
+                        if operation == "send":
+                            return {
+                                "response": f"Are you sure you want to send '{selected.get('subject', '(No subject)')}'?\n\nReply with 'Yes' or 'No'",
+                                "draft_pending": DraftPendingInfo(
+                                    awaiting="confirmation",
+                                    recipient=selected.get("recipient"),
+                                    drafts_list=[selected],
+                                    operation="send",
+                                ),
+                                "next_agent": "supervisor",
+                            }
+                        # Handle other operations...
+
+        # Regular draft request - use LLM with tools
+        messages = [
+            SystemMessage(content=DRAFT_AGENT_PROMPT),
+            HumanMessage(content=current_input),
+        ]
+
+        response = llm_with_tools.invoke(messages)
+
+        # Handle tool calls
+        if response.tool_calls:
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                logger.info(f"[DRAFT_AGENT] Tool call: {tool_name} with {tool_args}")
+
+                for tool in tools:
+                    if tool.name == tool_name:
+                        result = tool.invoke(tool_args)
+                        result_dict = json.loads(result)
+
+                        # Check if we need more info
+                        if result_dict.get("requires_recipient") or (
+                            tool_name == "create_draft" and not tool_args.get("recipient")
+                        ):
+                            # Extract context for auto-generation
+                            context_hint = ""
+                            import re
+                            context_patterns = [
+                                r"about\s+(.+?)(?:\s+to|\s*$)",
+                                r"regarding\s+(.+?)(?:\s+to|\s*$)",
+                                r"for\s+(.+?)(?:\s+to|\s*$)",
+                            ]
+                            for pattern in context_patterns:
+                                match = re.search(pattern, current_input.lower())
+                                if match:
+                                    context_hint = match.group(1)
+                                    break
+
+                            return {
+                                "response": "I'd be happy to create that draft! What email address should I send it to?",
+                                "draft_pending": DraftPendingInfo(
+                                    awaiting="recipient",
+                                    subject=tool_args.get("subject", ""),
+                                    body=tool_args.get("body", ""),
+                                    context_hint=context_hint or current_input,
+                                    auto_generate=any(kw in current_input.lower() for kw in [
+                                        "auto", "generate", "yourself", "create it"
+                                    ]),
+                                ),
+                                "next_agent": "supervisor",
+                            }
+
+                        if result_dict.get("requires_selection"):
+                            return {
+                                "response": result_dict.get("message", "Please select a draft."),
+                                "draft_pending": DraftPendingInfo(
+                                    awaiting="selection",
+                                    drafts_list=result_dict.get("drafts", []),
+                                    operation=result_dict.get("operation", "update"),
+                                ),
+                                "next_agent": "supervisor",
+                            }
+
+                        if result_dict.get("requires_confirmation"):
+                            return {
+                                "response": result_dict.get("message", "Please confirm."),
+                                "draft_pending": DraftPendingInfo(
+                                    awaiting="confirmation",
+                                    drafts_list=result_dict.get("drafts", [{"id": result_dict.get("draft_id")}]),
+                                    operation="send",
+                                    recipient=result_dict.get("recipient"),
+                                ),
+                                "next_agent": "supervisor",
+                            }
+
+                        if result_dict.get("success"):
+                            return {
+                                "response": result_dict.get("message", "Operation completed."),
+                                "next_agent": "__end__",
+                                "draft_pending": None,
+                            }
+
+                        return {
+                            "response": result_dict.get("message", result),
+                            "next_agent": "supervisor",
+                        }
+
+        # No tool call - return LLM response
+        return {
+            "response": response.content or "I couldn't process that draft request.",
+            "next_agent": "supervisor",
+        }
+
+    except Exception as e:
+        logger.error(f"[DRAFT_AGENT] Error: {e}", exc_info=True)
+        return {
+            "response": f"Error processing draft request: {str(e)}",
+            "next_agent": "__end__",
+            "error": str(e),
+            "draft_pending": None,
+        }
+
+
+def send_agent_node(state: EmailAgentState) -> dict:
+    """
+    Send Agent: Handles email sending operations.
+    """
+    logger.info("[SEND_AGENT] Processing request")
+
+    try:
+        llm = get_llm()
+        tools = create_send_tools(user_id=state.get("user_id"))
+        llm_with_tools = llm.bind_tools(tools)
+
+        current_input = state.get("current_input", "").lower().strip()
+        pending = state.get("draft_pending")
+
+        # Handle confirmation for draft send
+        if pending and pending.get("awaiting") == "confirmation":
+            if current_input in ["yes", "y"]:
+                drafts = pending.get("drafts_list", [])
+                if drafts:
+                    draft = drafts[0]
+                    draft_id = draft.get("id")
+
+                    for tool in tools:
+                        if tool.name == "confirm_and_send_draft":
+                            result = tool.invoke({"draft_id": draft_id})
+                            result_dict = json.loads(result)
+
+                            if result_dict.get("success"):
+                                recipient = pending.get("recipient", "recipient")
+                                return {
+                                    "response": f"Email sent to {recipient}!",
+                                    "next_agent": "__end__",
+                                    "draft_pending": None,
+                                }
+                            else:
+                                return {
+                                    "response": f"Failed to send: {result_dict.get('message', 'Unknown error')}",
+                                    "next_agent": "__end__",
+                                    "draft_pending": None,
+                                }
+
+            elif current_input in ["no", "n"]:
+                return {
+                    "response": "Operation cancelled. Draft not sent.",
+                    "next_agent": "__end__",
+                    "draft_pending": None,
+                }
+
+        # Regular send request
+        messages = [
+            SystemMessage(content=SEND_AGENT_PROMPT),
+            HumanMessage(content=state.get("current_input", "")),
+        ]
+
+        response = llm_with_tools.invoke(messages)
+
+        if response.tool_calls:
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+
+                for tool in tools:
+                    if tool.name == tool_name:
+                        result = tool.invoke(tool_args)
+                        result_dict = json.loads(result)
+
+                        if result_dict.get("success"):
+                            return {
+                                "response": f"Email sent to {tool_args.get('recipient', 'recipient')}!",
+                                "next_agent": "__end__",
+                            }
+                        else:
+                            return {
+                                "response": f"Failed to send: {result_dict.get('message', 'Unknown error')}",
+                                "next_agent": "__end__",
+                            }
+
+        return {
+            "response": response.content or "I couldn't process that send request.",
+            "next_agent": "supervisor",
+        }
+
+    except Exception as e:
+        logger.error(f"[SEND_AGENT] Error: {e}")
+        return {
+            "response": f"Error sending email: {str(e)}",
+            "next_agent": "__end__",
+            "error": str(e),
+        }
+
+
+def organization_agent_node(state: EmailAgentState) -> dict:
+    """
+    Organization Agent: Handles inbox organization operations.
+    """
+    logger.info("[ORGANIZATION_AGENT] Processing request")
+
+    try:
+        llm = get_llm()
+        tools = create_organization_tools(user_id=state.get("user_id"))
+        llm_with_tools = llm.bind_tools(tools)
+
+        messages = [
+            SystemMessage(content="You help organize emails. You can move emails by sender or delete spam."),
+            HumanMessage(content=state.get("current_input", "")),
+        ]
+
+        response = llm_with_tools.invoke(messages)
+
+        if response.tool_calls:
+            for tool_call in response.tool_calls:
+                for tool in tools:
+                    if tool.name == tool_call["name"]:
+                        result = tool.invoke(tool_call["args"])
+                        return {
+                            "response": result,
+                            "next_agent": "__end__",
+                        }
+
+        return {
+            "response": response.content or "I couldn't process that organization request.",
+            "next_agent": "supervisor",
+        }
+
+    except Exception as e:
+        logger.error(f"[ORGANIZATION_AGENT] Error: {e}")
+        return {
+            "response": f"Error: {str(e)}",
+            "next_agent": "__end__",
+            "error": str(e),
+        }
+
+
+def human_node(state: EmailAgentState) -> dict:
+    """
+    Human node: Handles requests that need clarification.
+    """
+    return {
+        "response": "I'm not sure what you'd like me to do. Could you please clarify your request?\n\nI can help you:\n- Read and search emails\n- Create and manage drafts\n- Send emails\n- Organize your inbox",
+        "next_agent": "__end__",
+        "requires_human_input": True,
+    }
+
+
+def end_node(state: EmailAgentState) -> dict:
+    """
+    End node: Generates final response for direct answers.
+    """
+    # If we already have a response, return it
+    if state.get("response"):
+        return state
+
+    # Generate a greeting or direct answer
+    try:
+        llm = get_llm()
+        response = llm.invoke([
+            SystemMessage(content="You are a friendly email assistant. Respond helpfully to the user's message."),
+            HumanMessage(content=state.get("current_input", "")),
+        ])
+        return {
+            "response": response.content,
+            "next_agent": "__end__",
+        }
+    except Exception as e:
+        return {
+            "response": "Hello! I'm your email assistant. How can I help you today?",
+            "next_agent": "__end__",
+        }
+
+
+# =============================================================================
+# Graph Builder
+# =============================================================================
+
+def route_from_supervisor(state: EmailAgentState) -> str:
+    """Conditional edge: route based on supervisor decision."""
+    next_agent = state.get("next_agent", "__end__")
+    logger.info(f"[ROUTER] Routing to: {next_agent}")
+    return next_agent
+
+
+def create_email_assistant_graph(checkpointer=None):
+    """
+    Create the complete email assistant graph with all agents.
+
+    Args:
+        checkpointer: Optional memory saver for state persistence
+
+    Returns:
+        Compiled LangGraph
+    """
+    # Build the graph
+    builder = StateGraph(EmailAgentState)
+
+    # Add nodes
+    builder.add_node("supervisor", supervisor_node)
+    builder.add_node("inbox", inbox_agent_node)
+    builder.add_node("draft", draft_agent_node)
+    builder.add_node("send", send_agent_node)
+    builder.add_node("organization", organization_agent_node)
+    builder.add_node("human", human_node)
+    builder.add_node("end", end_node)
+
+    # Set entry point
+    builder.add_edge(START, "supervisor")
+
+    # Add conditional edges from supervisor
+    builder.add_conditional_edges(
+        "supervisor",
+        route_from_supervisor,
+        {
+            "inbox": "inbox",
+            "draft": "draft",
+            "send": "send",
+            "organization": "organization",
+            "human": "human",
+            "__end__": "end",
+        }
+    )
+
+    # All agents return to supervisor for multi-turn handling
+    builder.add_edge("inbox", END)
+    builder.add_edge("draft", END)
+    builder.add_edge("send", END)
+    builder.add_edge("organization", END)
+    builder.add_edge("human", END)
+    builder.add_edge("end", END)
+
+    # Compile with optional checkpointer
+    if checkpointer is None:
+        checkpointer = MemorySaver()
+
+    return builder.compile(checkpointer=checkpointer)
+
+
+# =============================================================================
+# High-Level Interface
+# =============================================================================
+
+class EmailAssistant:
+    """
+    High-level interface for the multi-agent email assistant.
+
+    Usage:
+        assistant = EmailAssistant(user_id="user123")
+        response = assistant.chat("Show me my latest emails")
+    """
+
+    def __init__(self, user_id: Optional[str] = None):
+        self.user_id = user_id
+        self.graph = create_email_assistant_graph()
+        self.thread_id = f"thread_{user_id or 'default'}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        self.conversation_history = []
+
+    def chat(self, message: str, context: str = "") -> str:
+        """
+        Process a user message and return the assistant's response.
+
+        Args:
+            message: User's message
+            context: Optional additional context
+
+        Returns:
+            Assistant's response string
+        """
+        if not message or not message.strip():
+            return "Please provide a message to get started."
+
+        try:
+            # Create initial state
+            state = create_initial_state(
+                user_message=message,
+                user_id=self.user_id,
+                context=context,
+                existing_messages=self.conversation_history,
+            )
+
+            # Run the graph
+            config = {"configurable": {"thread_id": self.thread_id}}
+            result = self.graph.invoke(state, config)
+
+            # Extract response
+            response = result.get("response", "I couldn't process that request.")
+
+            # Update conversation history
+            self.conversation_history.append({
+                "role": "user",
+                "content": message,
+                "timestamp": datetime.now().isoformat(),
+            })
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": response,
+                "timestamp": datetime.now().isoformat(),
+            })
+
+            # Keep history manageable
+            if len(self.conversation_history) > 20:
+                self.conversation_history = self.conversation_history[-20:]
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Chat error: {e}", exc_info=True)
+            return f"Sorry, I encountered an error: {str(e)}"
+
+    def clear_history(self):
+        """Clear conversation history."""
+        self.conversation_history = []
+        self.thread_id = f"thread_{self.user_id or 'default'}_{datetime.now().strftime('%Y%m%d%H%M%S')}"

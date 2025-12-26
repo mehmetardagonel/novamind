@@ -1,0 +1,469 @@
+"""
+Tool definitions for specialized email agents.
+
+These tools use Pydantic schemas for structured inputs, eliminating the
+fragile pipe-separated string parsing that caused LLM hallucinations.
+"""
+
+import json
+import logging
+from typing import Optional
+from datetime import datetime
+
+from langchain_core.tools import tool, StructuredTool
+from pydantic import BaseModel, Field
+
+# Import from parent directory
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from email_tools import (
+    list_email_accounts as _list_accounts,
+    fetch_mails as _fetch_mails,
+    delete_all_spam as _delete_spam,
+    move_mails_by_sender as _move_mails,
+    send_email as _send_email,
+    draft_email as _draft_email,
+    get_drafts as _get_drafts,
+    get_drafts_for_recipient as _get_drafts_for_recipient,
+    send_draft as _send_draft,
+    delete_draft as _delete_draft,
+    update_draft as _update_draft,
+    get_draft_body as _get_draft_body,
+    query_emails as _query_emails,
+)
+from schemas import (
+    DraftEmailInput,
+    SendEmailInput,
+    UpdateDraftInput,
+    FetchMailsInput,
+    QueryEmailsInput,
+    MoveMailsInput,
+    DraftOperationInput,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+# =============================================================================
+# INBOX AGENT TOOLS (Read-only operations)
+# =============================================================================
+
+def create_inbox_tools(user_id: Optional[str] = None):
+    """Create tools for the Inbox Agent (read-only operations)."""
+
+    @tool
+    def list_email_accounts() -> str:
+        """List all connected email accounts (Gmail and Outlook) for the current user."""
+        try:
+            result = _list_accounts(user_id=user_id)
+            return json.dumps(result, indent=2, cls=DateTimeEncoder)
+        except Exception as e:
+            logger.error(f"Error listing accounts: {e}")
+            return json.dumps({"error": str(e)})
+
+    @tool
+    def fetch_emails(
+        label: Optional[str] = None,
+        sender: Optional[str] = None,
+        importance: Optional[bool] = None,
+        subject_keyword: Optional[str] = None,
+        folder: str = "inbox",
+        max_results: int = 25,
+        provider: Optional[str] = None,
+        account_id: Optional[str] = None,
+        time_period: Optional[str] = None,
+        since_date: Optional[str] = None,
+        until_date: Optional[str] = None,
+    ) -> str:
+        """
+        Fetch emails with optional filters.
+
+        Args:
+            label: Filter by email label (e.g., 'Work', 'Personal')
+            sender: Filter by sender name or email (partial match)
+            importance: True to filter important emails only
+            subject_keyword: Filter by keyword in subject
+            folder: Email folder (default: 'inbox')
+            max_results: Max emails to return (1-50, default: 25)
+            provider: 'gmail' or 'outlook'
+            account_id: Specific account ID
+            time_period: 'today', 'yesterday', 'last_week', 'last_month', 'last_3_months'
+            since_date: Filter since date (YYYY-MM-DD)
+            until_date: Filter until date (YYYY-MM-DD)
+        """
+        try:
+            # Clamp max_results
+            max_results = max(1, min(50, max_results))
+
+            result = _fetch_mails(
+                label=label,
+                sender=sender,
+                importance=importance,
+                subject_keyword=subject_keyword,
+                folder=folder,
+                max_results=max_results,
+                provider=provider,
+                account_id=account_id,
+                time_period=time_period,
+                since_date=since_date,
+                until_date=until_date,
+                user_id=user_id,
+            )
+
+            # Format for UI rendering
+            if isinstance(result, list):
+                # Truncate long bodies for display
+                emails_for_json = []
+                for email in result:
+                    e_copy = email.copy() if isinstance(email, dict) else email
+                    if isinstance(e_copy, dict) and "body" in e_copy:
+                        if e_copy["body"] and len(e_copy["body"]) > 200:
+                            e_copy["body"] = e_copy["body"][:200] + "..."
+                    emails_for_json.append(e_copy)
+
+                json_str = json.dumps(emails_for_json, indent=2, cls=DateTimeEncoder)
+                return f"```json\n{json_str}\n```"
+
+            return json.dumps(result, indent=2, cls=DateTimeEncoder)
+        except Exception as e:
+            logger.error(f"Error fetching emails: {e}")
+            return json.dumps({"error": str(e)})
+
+    @tool
+    def query_emails(query: str) -> str:
+        """
+        Search emails using natural language query.
+
+        Args:
+            query: Natural language search query (e.g., 'emails from Google about jobs')
+        """
+        try:
+            result = _query_emails(query=query, user_id=user_id)
+            return json.dumps(result, indent=2, cls=DateTimeEncoder)
+        except Exception as e:
+            logger.error(f"Error querying emails: {e}")
+            return json.dumps({"error": str(e)})
+
+    @tool
+    def get_all_drafts() -> str:
+        """Get all draft emails from the user's account."""
+        try:
+            result = _get_drafts(user_id=user_id)
+            return json.dumps(result, indent=2, cls=DateTimeEncoder)
+        except Exception as e:
+            logger.error(f"Error getting drafts: {e}")
+            return json.dumps({"error": str(e)})
+
+    @tool
+    def get_drafts_for_recipient(recipient_email: str) -> str:
+        """
+        Get all draft emails for a specific recipient.
+
+        Args:
+            recipient_email: The email address of the recipient
+        """
+        try:
+            result = _get_drafts_for_recipient(recipient_email, user_id=user_id)
+            return json.dumps(result, indent=2, cls=DateTimeEncoder)
+        except Exception as e:
+            logger.error(f"Error getting drafts for {recipient_email}: {e}")
+            return json.dumps({"error": str(e)})
+
+    return [list_email_accounts, fetch_emails, query_emails, get_all_drafts, get_drafts_for_recipient]
+
+
+# =============================================================================
+# DRAFT AGENT TOOLS (Draft composition and management)
+# =============================================================================
+
+def create_draft_tools(user_id: Optional[str] = None, llm=None):
+    """Create tools for the Draft Agent (composition operations)."""
+
+    @tool
+    def create_draft(
+        recipient: Optional[str] = None,
+        subject: Optional[str] = None,
+        body: Optional[str] = None,
+    ) -> str:
+        """
+        Create a new email draft.
+
+        IMPORTANT: If recipient is not provided, the tool will indicate that
+        the user needs to provide the recipient email address.
+
+        Args:
+            recipient: Email address of the recipient (optional - will ask if missing)
+            subject: Subject line of the email (optional - can be auto-generated)
+            body: Body content of the email (optional - can be auto-generated)
+        """
+        try:
+            result = _draft_email(
+                to=recipient or "",
+                subject=subject or "",
+                body=body or "",
+                user_id=user_id,
+            )
+            return json.dumps(result, indent=2, cls=DateTimeEncoder)
+        except Exception as e:
+            logger.error(f"Error creating draft: {e}")
+            return json.dumps({"error": str(e)})
+
+    @tool
+    def update_draft(
+        recipient_email: str,
+        instruction: str,
+    ) -> str:
+        """
+        Update an existing draft using natural language instruction.
+
+        Args:
+            recipient_email: Email address to identify the draft
+            instruction: What to change (e.g., 'make it more formal', 'add a greeting')
+        """
+        try:
+            # Get drafts for this recipient
+            drafts = _get_drafts_for_recipient(recipient_email, user_id=user_id)
+
+            if not drafts:
+                return json.dumps({
+                    "success": False,
+                    "message": f"No drafts found for {recipient_email}"
+                })
+
+            if len(drafts) > 1:
+                # Need selection
+                draft_list = "\n".join([
+                    f"{i+1}. {d.get('subject', '(No subject)')[:40]}... ({d.get('date', 'Unknown')[:10]})"
+                    for i, d in enumerate(drafts)
+                ])
+                return json.dumps({
+                    "success": False,
+                    "requires_selection": True,
+                    "drafts": drafts,
+                    "message": f"Found {len(drafts)} drafts for {recipient_email}:\n{draft_list}\nWhich one would you like to update?"
+                })
+
+            # Single draft - update it
+            draft = drafts[0]
+            draft_id = draft.get("id")
+            current_body = _get_draft_body(draft_id, user_id=user_id) or ""
+
+            # Use LLM to enhance the body if available
+            if llm and current_body.strip():
+                enhancement_prompt = f"""Update this email draft based on the instruction.
+
+Current draft body:
+{current_body}
+
+Instruction: {instruction}
+
+Return the COMPLETE updated email body (greeting + content + closing).
+Maintain professional tone and structure."""
+
+                try:
+                    response = llm.invoke(enhancement_prompt)
+                    new_body = response.content.strip() if hasattr(response, "content") else str(response).strip()
+                except Exception as e:
+                    logger.warning(f"LLM enhancement failed: {e}")
+                    new_body = instruction
+            else:
+                new_body = instruction
+
+            result = _update_draft(draft_id=draft_id, body=new_body, user_id=user_id)
+
+            if result.get("success"):
+                return json.dumps({
+                    "success": True,
+                    "message": f"Draft updated: '{draft.get('subject', '(No subject)')}'",
+                    "new_body": new_body[:200] + "..." if len(new_body) > 200 else new_body
+                })
+
+            return json.dumps(result)
+
+        except Exception as e:
+            logger.error(f"Error updating draft: {e}")
+            return json.dumps({"error": str(e)})
+
+    @tool
+    def send_draft_to_recipient(recipient_email: str) -> str:
+        """
+        Send an existing draft to a recipient.
+
+        Args:
+            recipient_email: Email address to identify the draft to send
+        """
+        try:
+            drafts = _get_drafts_for_recipient(recipient_email, user_id=user_id)
+
+            if not drafts:
+                return json.dumps({
+                    "success": False,
+                    "message": f"No drafts found for {recipient_email}"
+                })
+
+            if len(drafts) > 1:
+                draft_list = "\n".join([
+                    f"{i+1}. {d.get('subject', '(No subject)')[:40]}... ({d.get('date', 'Unknown')[:10]})"
+                    for i, d in enumerate(drafts)
+                ])
+                return json.dumps({
+                    "success": False,
+                    "requires_selection": True,
+                    "requires_confirmation": True,
+                    "drafts": drafts,
+                    "message": f"Found {len(drafts)} drafts for {recipient_email}:\n{draft_list}\nWhich one would you like to send?"
+                })
+
+            # Single draft - ask for confirmation
+            draft = drafts[0]
+            return json.dumps({
+                "success": False,
+                "requires_confirmation": True,
+                "draft_id": draft.get("id"),
+                "recipient": recipient_email,
+                "subject": draft.get("subject", "(No subject)"),
+                "message": f"Are you sure you want to send the draft '{draft.get('subject', '(No subject)')}' to {recipient_email}?\n\nReply with 'Yes' or 'No'"
+            })
+
+        except Exception as e:
+            logger.error(f"Error preparing to send draft: {e}")
+            return json.dumps({"error": str(e)})
+
+    @tool
+    def delete_draft_for_recipient(recipient_email: str) -> str:
+        """
+        Delete a draft for a specific recipient.
+
+        Args:
+            recipient_email: Email address to identify the draft to delete
+        """
+        try:
+            drafts = _get_drafts_for_recipient(recipient_email, user_id=user_id)
+
+            if not drafts:
+                return json.dumps({
+                    "success": False,
+                    "message": f"No drafts found for {recipient_email}"
+                })
+
+            if len(drafts) > 1:
+                draft_list = "\n".join([
+                    f"{i+1}. {d.get('subject', '(No subject)')[:40]}... ({d.get('date', 'Unknown')[:10]})"
+                    for i, d in enumerate(drafts)
+                ])
+                return json.dumps({
+                    "success": False,
+                    "requires_selection": True,
+                    "drafts": drafts,
+                    "message": f"Found {len(drafts)} drafts for {recipient_email}:\n{draft_list}\nWhich one would you like to delete?"
+                })
+
+            # Single draft - delete it
+            draft = drafts[0]
+            _delete_draft(draft.get("id"), user_id=user_id)
+            return json.dumps({
+                "success": True,
+                "message": f"Draft deleted: '{draft.get('subject', '(No subject)')}'"
+            })
+
+        except Exception as e:
+            logger.error(f"Error deleting draft: {e}")
+            return json.dumps({"error": str(e)})
+
+    return [create_draft, update_draft, send_draft_to_recipient, delete_draft_for_recipient]
+
+
+# =============================================================================
+# SEND AGENT TOOLS (Immediate send operations)
+# =============================================================================
+
+def create_send_tools(user_id: Optional[str] = None):
+    """Create tools for the Send Agent (immediate send operations)."""
+
+    @tool
+    def send_email_now(
+        recipient: str,
+        subject: str,
+        body: str,
+    ) -> str:
+        """
+        Send an email immediately (not as draft).
+
+        Args:
+            recipient: Email address of the recipient (required)
+            subject: Subject line (required)
+            body: Email body content (required)
+        """
+        try:
+            result = _send_email(
+                to=recipient,
+                subject=subject,
+                body=body,
+                user_id=user_id,
+            )
+            return json.dumps(result, indent=2, cls=DateTimeEncoder)
+        except Exception as e:
+            logger.error(f"Error sending email: {e}")
+            return json.dumps({"error": str(e)})
+
+    @tool
+    def confirm_and_send_draft(draft_id: str) -> str:
+        """
+        Confirm and send a specific draft by ID.
+
+        Args:
+            draft_id: The ID of the draft to send
+        """
+        try:
+            result = _send_draft(draft_id, user_id=user_id)
+            return json.dumps(result, indent=2, cls=DateTimeEncoder)
+        except Exception as e:
+            logger.error(f"Error sending draft: {e}")
+            return json.dumps({"error": str(e)})
+
+    return [send_email_now, confirm_and_send_draft]
+
+
+# =============================================================================
+# ORGANIZATION AGENT TOOLS (Inbox management)
+# =============================================================================
+
+def create_organization_tools(user_id: Optional[str] = None):
+    """Create tools for inbox organization operations."""
+
+    @tool
+    def move_emails_by_sender(sender: str, target_folder: str) -> str:
+        """
+        Move all emails from a specific sender to a folder.
+
+        Args:
+            sender: Sender name or email to match (partial match)
+            target_folder: Target folder/label name (created if doesn't exist)
+        """
+        try:
+            result = _move_mails(sender, target_folder, user_id=user_id)
+            return json.dumps(result, indent=2, cls=DateTimeEncoder)
+        except Exception as e:
+            logger.error(f"Error moving emails: {e}")
+            return json.dumps({"error": str(e)})
+
+    @tool
+    def delete_spam_emails() -> str:
+        """Delete all emails in the spam folder."""
+        try:
+            result = _delete_spam(user_id=user_id)
+            return json.dumps(result, indent=2, cls=DateTimeEncoder)
+        except Exception as e:
+            logger.error(f"Error deleting spam: {e}")
+            return json.dumps({"error": str(e)})
+
+    return [move_emails_by_sender, delete_spam_emails]
