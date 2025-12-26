@@ -1125,6 +1125,44 @@ Would you like me to show more details about any of these?"
 
         return None
 
+    def _maybe_handle_direct_draft_operation(self, raw_user_message: str) -> str | None:
+        message = (raw_user_message or "").strip()
+        if not message:
+            return None
+
+        msg_lower = message.lower()
+        operation = None
+
+        if "draft" in msg_lower and any(k in msg_lower for k in ["delete", "remove", "discard"]):
+            operation = "delete"
+        elif "draft" in msg_lower and "send" in msg_lower:
+            operation = "send"
+        elif "draft" in msg_lower and any(k in msg_lower for k in ["update", "edit", "modify", "change"]):
+            operation = "update"
+
+        if not operation:
+            return None
+
+        to_email = self._extract_email_from_text(message)
+        if not to_email:
+            return None
+
+        if operation == "delete":
+            return self._delete_draft_for_recipient(to_email)
+
+        if operation == "send":
+            return self._send_draft_for_recipient(to_email)
+
+        instruction = message.split(to_email, 1)[1].strip() if to_email in message else ""
+        if not instruction:
+            self.pending_selection = {
+                "action": "draft_update_instruction",
+                "recipient": to_email,
+            }
+            return f"What should I change in the draft for {to_email}?"
+
+        return self._update_draft_for_recipient(to_email, instruction)
+
     def _build_fallback_draft_content(self, raw_user_message: str) -> tuple[str, str]:
         import re
 
@@ -2030,6 +2068,14 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                 if action == "draft_manual_content":
                     return self._handle_manual_draft_content_input(message_stripped)
 
+                if action == "draft_update_instruction":
+                    to_email = self.pending_selection.get("recipient", "")
+                    instruction = message_stripped.strip()
+                    self.pending_selection = None
+                    if not instruction:
+                        return "Please provide the update instruction."
+                    return self._update_draft_for_recipient(to_email, instruction)
+
                 if action == "draft_awaiting_recipient":
                     return self._handle_draft_recipient_input(message_stripped)
 
@@ -2065,6 +2111,12 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                 draft_prompt = self._prompt_for_draft_content_choice(message_stripped)
                 self._append_to_history(message_stripped, draft_prompt)
                 return draft_prompt
+
+            if not self.pending_selection:
+                draft_op_response = self._maybe_handle_direct_draft_operation(message_stripped)
+                if draft_op_response:
+                    self._append_to_history(message_stripped, draft_op_response)
+                    return draft_op_response
 
             draft_keywords = [
                 "update draft",
@@ -2147,23 +2199,28 @@ IMPORTANT: Return the FULL email body (greeting + content + closing), not just t
                 if email_match:
                     email = email_match.group()
                     instruction = message_stripped.split(email, 1)[1].strip()
-                    if instruction:
-                        if any(k in message_stripped.lower() for k in ["update", "edit", "modify"]):
-                            logger.info(
-                                f"[FALLBACK] Using direct invocation for update_draft_for_recipient: {email}"
-                            )
-                            fallback_result = self._parse_update_draft_for_recipient(f"{email}|{instruction}")
-                            return json.dumps(fallback_result, indent=2, cls=DateTimeEncoder)
-                        if "send" in message_stripped.lower():
-                            logger.info(
-                                f"[FALLBACK] Using direct invocation for send_draft_for_recipient: {email}"
-                            )
-                            return self._send_draft_for_recipient(email)
-                        if "delete" in message_stripped.lower():
-                            logger.info(
-                                f"[FALLBACK] Using direct invocation for delete_draft_for_recipient: {email}"
-                            )
-                            return self._delete_draft_for_recipient(email)
+                    if any(k in message_stripped.lower() for k in ["update", "edit", "modify"]):
+                        if not instruction:
+                            self.pending_selection = {
+                                "action": "draft_update_instruction",
+                                "recipient": email,
+                            }
+                            return f"What should I change in the draft for {email}?"
+                        logger.info(
+                            f"[FALLBACK] Using direct invocation for update_draft_for_recipient: {email}"
+                        )
+                        fallback_result = self._parse_update_draft_for_recipient(f"{email}|{instruction}")
+                        return json.dumps(fallback_result, indent=2, cls=DateTimeEncoder)
+                    if "send" in message_stripped.lower():
+                        logger.info(
+                            f"[FALLBACK] Using direct invocation for send_draft_for_recipient: {email}"
+                        )
+                        return self._send_draft_for_recipient(email)
+                    if "delete" in message_stripped.lower():
+                        logger.info(
+                            f"[FALLBACK] Using direct invocation for delete_draft_for_recipient: {email}"
+                        )
+                        return self._delete_draft_for_recipient(email)
 
             final_response = self._extract_json_from_response(output)
             logger.info(f"Final response length: {len(final_response) if final_response else 0}")
