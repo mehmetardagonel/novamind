@@ -403,47 +403,85 @@ def create_draft_tools(user_id: Optional[str] = None, llm=None):
 
     @tool
     def update_draft(
-        recipient_email: str,
-        instruction: str,
+        recipient_email: Optional[str] = None,
+        draft_id: Optional[str] = None,
+        subject: Optional[str] = None,
+        body: Optional[str] = None,
+        instruction: Optional[str] = None,
     ) -> str:
         """
-        Update an existing draft using natural language instruction.
+        Update an existing draft with direct subject/body OR natural language instruction.
+
+        MODES:
+        1. Direct Update: Provide subject and/or body to update specific fields
+        2. AI Enhancement: Provide instruction for LLM-based body modification
 
         Args:
-            recipient_email: Email address to identify the draft
-            instruction: What to change (e.g., 'make it more formal', 'add a greeting')
+            recipient_email: Email address to identify the draft (used when draft_id not provided)
+            draft_id: Direct draft ID (takes priority over recipient_email)
+            subject: New subject line (optional - only updates if provided)
+            body: New body content (optional - only updates if provided)
+            instruction: Natural language instruction for AI enhancement (ignored if body provided)
+
+        Examples:
+            - update_draft(recipient_email="test@example.com", subject="New Subject", body="New Body")
+            - update_draft(draft_id="12345", subject="Updated Subject")
+            - update_draft(recipient_email="test@example.com", instruction="make it more formal")
         """
         try:
-            # Get drafts for this recipient
-            drafts = _get_drafts_for_recipient(recipient_email, user_id=user_id)
+            # Determine which draft to update
+            target_draft = None
+            target_draft_id = draft_id
 
-            if not drafts:
+            if not target_draft_id and recipient_email:
+                # Get drafts for this recipient
+                drafts = _get_drafts_for_recipient(recipient_email, user_id=user_id)
+
+                if not drafts:
+                    return json.dumps({
+                        "success": False,
+                        "message": f"No drafts found for {recipient_email}"
+                    })
+
+                if len(drafts) > 1:
+                    # Need selection
+                    draft_list = "\n".join([
+                        f"{i+1}. {d.get('subject', '(No subject)')[:40]}... ({d.get('date', 'Unknown')[:10]})"
+                        for i, d in enumerate(drafts)
+                    ])
+                    return json.dumps({
+                        "success": False,
+                        "requires_selection": True,
+                        "drafts": drafts,
+                        "message": f"Found {len(drafts)} drafts for {recipient_email}:\n{draft_list}\nWhich one would you like to update?"
+                    })
+
+                # Single draft
+                target_draft = drafts[0]
+                target_draft_id = target_draft.get("id")
+
+            if not target_draft_id:
                 return json.dumps({
                     "success": False,
-                    "message": f"No drafts found for {recipient_email}"
+                    "message": "Please provide either draft_id or recipient_email to identify the draft"
                 })
 
-            if len(drafts) > 1:
-                # Need selection
-                draft_list = "\n".join([
-                    f"{i+1}. {d.get('subject', '(No subject)')[:40]}... ({d.get('date', 'Unknown')[:10]})"
-                    for i, d in enumerate(drafts)
-                ])
-                return json.dumps({
-                    "success": False,
-                    "requires_selection": True,
-                    "drafts": drafts,
-                    "message": f"Found {len(drafts)} drafts for {recipient_email}:\n{draft_list}\nWhich one would you like to update?"
-                })
+            # Determine update mode: Direct vs. AI Enhancement
+            update_subject = subject
+            update_body = body
 
-            # Single draft - update it
-            draft = drafts[0]
-            draft_id = draft.get("id")
-            current_body = _get_draft_body(draft_id, user_id=user_id) or ""
+            # MODE 1: Direct subject/body update
+            if subject is not None or body is not None:
+                # Direct update - use provided values as-is
+                pass
 
-            # Use LLM to enhance the body if available
-            if llm and current_body.strip():
-                enhancement_prompt = f"""Update this email draft based on the instruction.
+            # MODE 2: AI Enhancement via instruction
+            elif instruction is not None:
+                current_body = _get_draft_body(target_draft_id, user_id=user_id) or ""
+
+                # Use LLM to enhance the body
+                if llm and current_body.strip():
+                    enhancement_prompt = f"""Update this email draft based on the instruction.
 
 Current draft body:
 {current_body}
@@ -453,22 +491,43 @@ Instruction: {instruction}
 Return the COMPLETE updated email body (greeting + content + closing).
 Maintain professional tone and structure."""
 
-                try:
-                    response = llm.invoke(enhancement_prompt)
-                    new_body = response.content.strip() if hasattr(response, "content") else str(response).strip()
-                except Exception as e:
-                    logger.warning(f"LLM enhancement failed: {e}")
-                    new_body = instruction
-            else:
-                new_body = instruction
+                    try:
+                        response = llm.invoke(enhancement_prompt)
+                        update_body = response.content.strip() if hasattr(response, "content") else str(response).strip()
+                    except Exception as e:
+                        logger.warning(f"LLM enhancement failed: {e}")
+                        update_body = instruction
+                else:
+                    update_body = instruction
 
-            result = _update_draft(draft_id=draft_id, body=new_body, user_id=user_id)
+            else:
+                return json.dumps({
+                    "success": False,
+                    "message": "Please provide subject, body, or instruction to update the draft"
+                })
+
+            # Call the underlying update function
+            result = _update_draft(
+                draft_id=target_draft_id,
+                subject=update_subject,
+                body=update_body,
+                user_id=user_id
+            )
 
             if result.get("success"):
+                updated_fields = []
+                if update_subject is not None:
+                    updated_fields.append(f"subject: '{update_subject}'")
+                if update_body is not None:
+                    body_preview = update_body[:100] + "..." if len(update_body) > 100 else update_body
+                    updated_fields.append(f"body: {body_preview}")
+
                 return json.dumps({
                     "success": True,
-                    "message": f"Draft updated: '{draft.get('subject', '(No subject)')}'",
-                    "new_body": new_body[:200] + "..." if len(new_body) > 200 else new_body
+                    "message": f"Draft updated ({', '.join(updated_fields)})",
+                    "draft_id": target_draft_id,
+                    "updated_subject": update_subject,
+                    "updated_body": update_body[:200] + "..." if update_body and len(update_body) > 200 else update_body
                 })
 
             return json.dumps(result)

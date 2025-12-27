@@ -329,6 +329,28 @@ What would you like to reply?
             ),
         }
 
+    # NEW: Detect update draft intent and route to draft agent with context preservation
+    update_draft_match = re.search(r'\bupdate\b.*\b(draft|subject|body)\b', current_input, re.IGNORECASE)
+    if update_draft_match:
+        # Check if we have draft context from previous turn
+        if state.get("draft_pending"):
+            pending = state["draft_pending"]
+            # Preserve recipient if we know it
+            if pending.get("selected_draft_recipient") or pending.get("recipient"):
+                logger.info("[SUPERVISOR] Routing update to draft agent with preserved context")
+                return {"next_agent": "draft"}
+
+        # Check if recipient is in current input
+        import re as re_module
+        email_match = re_module.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", current_input or "")
+        if email_match:
+            logger.info("[SUPERVISOR] Routing update to draft agent (recipient in message)")
+            return {"next_agent": "draft"}
+
+        # No recipient context - let draft agent handle it (will interrupt for recipient)
+        logger.info("[SUPERVISOR] Routing update to draft agent (will request recipient)")
+        return {"next_agent": "draft"}
+
     # Check for pending operations that need specific routing
     if state.get("draft_pending"):
         pending = state["draft_pending"]
@@ -710,6 +732,91 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
         }
 
 
+def parse_update_instruction(user_input: str) -> dict:
+    """
+    Parse user input to detect direct subject/body updates vs natural language instructions.
+
+    Returns:
+        {
+            "mode": "direct" | "instruction",
+            "subject": str | None,
+            "body": str | None,
+            "instruction": str | None
+        }
+
+    Examples:
+        "subject: Meeting body: Let's meet tomorrow"
+            -> mode=direct, subject="Meeting", body="Let's meet tomorrow"
+
+        "update subject with: Final Exam Tomorrow and body: If you don't attend you fail"
+            -> mode=direct, subject="Final Exam Tomorrow", body="If you don't attend you fail"
+
+        "make it more formal"
+            -> mode=instruction, instruction="make it more formal"
+    """
+    import re
+
+    # Pattern 1: "subject: X body: Y" or "subject with: X and body: Y" or "subject: X and body with: Y"
+    pattern1 = re.search(
+        r'subject\s*(?:with)?\s*:\s*(.+?)\s+(?:and\s+)?body\s*(?:with)?\s*:\s*(.+)',
+        user_input,
+        re.IGNORECASE | re.DOTALL
+    )
+
+    # Pattern 2: Just "subject: X" or "subject with: X" (subject only)
+    pattern2 = re.search(
+        r'(?:update\s+)?subject\s*(?:with)?\s*:\s*(.+?)(?:\s+and\s+body|$)',
+        user_input,
+        re.IGNORECASE
+    )
+
+    # Pattern 3: Just "body: X" or "body with: X" (body only)
+    pattern3 = re.search(
+        r'(?:update\s+)?body\s*(?:with)?\s*:\s*(.+?)$',
+        user_input,
+        re.IGNORECASE
+    )
+
+    if pattern1:
+        # Both subject and body
+        subject = pattern1.group(1).strip()
+        body = pattern1.group(2).strip()
+        return {
+            "mode": "direct",
+            "subject": subject,
+            "body": body,
+            "instruction": None
+        }
+    elif pattern2:
+        # Subject only
+        subject = pattern2.group(1).strip()
+        # Remove trailing "and body" if it exists without actual body content
+        subject = re.sub(r'\s+and\s+body\s*$', '', subject, flags=re.IGNORECASE).strip()
+        return {
+            "mode": "direct",
+            "subject": subject,
+            "body": None,
+            "instruction": None
+        }
+    elif pattern3:
+        # Body only
+        body = pattern3.group(1).strip()
+        return {
+            "mode": "direct",
+            "subject": None,
+            "body": body,
+            "instruction": None
+        }
+    else:
+        # Natural language instruction
+        return {
+            "mode": "instruction",
+            "subject": None,
+            "body": None,
+            "instruction": user_input.strip()
+        }
+
+
 def draft_agent_node(state: EmailAgentState) -> dict:
     """
     Draft Agent: Handles draft creation and management.
@@ -777,6 +884,120 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                 return True
             return re.search(r"\bdraft\s+(me\s+)?(an|a|to)\b", lower) is not None
 
+        def _is_update_draft_intent(text: str) -> bool:
+            lower = (text or "").lower()
+            return "update" in lower and ("draft" in lower or "subject" in lower or "body" in lower)
+
+        # ========================================================================
+        # NEW: Update Draft Flow with interrupt()
+        # ========================================================================
+        if not pending and _is_update_draft_intent(current_input):
+            logger.info("[DRAFT_AGENT] Detected update draft intent")
+
+            # Parse the update instruction to extract direct subject/body
+            parsed = parse_update_instruction(current_input)
+            recipient = _extract_first_email(current_input)
+
+            # Try to preserve recipient from previous context
+            if not recipient and state.get("draft_pending"):
+                prev_pending = state["draft_pending"]
+                recipient = prev_pending.get("selected_draft_recipient") or prev_pending.get("recipient")
+
+            if not recipient:
+                # Need recipient to identify draft - interrupt
+                recipient_response = interrupt("Which draft would you like to update? Please provide the recipient's email address.")
+
+                # This code won't execute until resumed - validate email
+                if "@" not in recipient_response or "." not in recipient_response.split("@")[-1]:
+                    interrupt(f"'{recipient_response}' doesn't look like a valid email address. Please provide a valid email (e.g., john@example.com)")
+                    return {}
+
+                recipient = recipient_response.strip()
+
+            # Now we have recipient - try to update the draft
+            for tool in tools:
+                if tool.name == "update_draft":
+                    tool_args = {"recipient_email": recipient}
+
+                    if parsed["mode"] == "direct":
+                        # Direct subject/body update
+                        if parsed["subject"] is not None:
+                            tool_args["subject"] = parsed["subject"]
+                        if parsed["body"] is not None:
+                            tool_args["body"] = parsed["body"]
+                    else:
+                        # Natural language instruction
+                        tool_args["instruction"] = parsed["instruction"]
+
+                    logger.info(f"[DRAFT_AGENT] Calling update_draft with: {tool_args}")
+                    result = tool.invoke(tool_args)
+                    result_dict = json.loads(result)
+
+                    if result_dict.get("requires_selection"):
+                        # Multiple drafts - need selection
+                        draft_list = result_dict.get("drafts", [])
+                        message = result_dict.get("message", "Multiple drafts found")
+
+                        selection_input = interrupt(f"{message}\n\nPlease enter the number of the draft to update:")
+
+                        # Validate selection
+                        if not selection_input.strip().isdigit():
+                            interrupt(f"Invalid selection. Please enter a number between 1 and {len(draft_list)}.")
+                            return {}
+
+                        selection = int(selection_input.strip())
+                        if selection < 1 or selection > len(draft_list):
+                            interrupt(f"Invalid selection. Please enter a number between 1 and {len(draft_list)}.")
+                            return {}
+
+                        selected_draft = draft_list[selection - 1]
+                        draft_id = selected_draft.get("id")
+
+                        # Update with selected draft
+                        update_args = {"draft_id": draft_id}
+                        if parsed["mode"] == "direct":
+                            if parsed["subject"] is not None:
+                                update_args["subject"] = parsed["subject"]
+                            if parsed["body"] is not None:
+                                update_args["body"] = parsed["body"]
+                        else:
+                            update_args["instruction"] = parsed["instruction"]
+
+                        logger.info(f"[DRAFT_AGENT] Updating selected draft with: {update_args}")
+                        update_result = tool.invoke(update_args)
+                        update_result_dict = json.loads(update_result)
+
+                        if update_result_dict.get("success"):
+                            return {
+                                "response": update_result_dict.get("message", "Draft updated successfully"),
+                                "next_agent": "__end__",
+                                "draft_pending": None,
+                            }
+                        else:
+                            return {
+                                "response": update_result_dict.get("message", "Failed to update draft"),
+                                "next_agent": "__end__",
+                                "draft_pending": None,
+                            }
+
+                    elif result_dict.get("success"):
+                        # Single draft updated successfully
+                        return {
+                            "response": result_dict.get("message", "Draft updated successfully"),
+                            "next_agent": "__end__",
+                            "draft_pending": None,
+                        }
+                    else:
+                        # Error
+                        return {
+                            "response": result_dict.get("message", "Failed to update draft"),
+                            "next_agent": "__end__",
+                            "draft_pending": None,
+                        }
+
+        # ========================================================================
+        # Create Draft Flow (existing logic)
+        # ========================================================================
         if not pending and _is_create_draft_intent(current_input):
             recipient = _extract_first_email(current_input)
             subject, body = _extract_subject_body(current_input)
@@ -1731,6 +1952,8 @@ class EmailAssistant:
         """
         Process a user message and return the assistant's response.
 
+        Handles both normal messages and resuming from interrupts.
+
         Args:
             message: User's message
             context: Optional additional context
@@ -1742,19 +1965,33 @@ class EmailAssistant:
             return "Please provide a message to get started."
 
         try:
-            # Create initial state with persisted data
-            state = create_initial_state(
-                user_message=message,
-                user_id=self.user_id,
-                context=context,
-                existing_messages=self.conversation_history,
-                listed_emails=self.listed_emails,
-                draft_pending=self.draft_pending,
-            )
-
-            # Run the graph
+            # Create config with thread_id for checkpointer
             config = {"configurable": {"thread_id": self.thread_id}}
-            result = self.graph.invoke(state, config)
+
+            # Check if we have an interrupted state to resume
+            try:
+                state_snapshot = self.graph.get_state(config)
+                is_interrupted = state_snapshot and state_snapshot.next and len(state_snapshot.next) > 0
+            except Exception:
+                is_interrupted = False
+
+            if is_interrupted:
+                # We're in an interrupted state - resume with Command
+                logger.info(f"[ASSISTANT] Resuming from interrupt with: {message[:50]}")
+                result = self.graph.invoke(Command(resume=message), config)
+            else:
+                # Normal message flow
+                state = create_initial_state(
+                    user_message=message,
+                    user_id=self.user_id,
+                    context=context,
+                    existing_messages=self.conversation_history,
+                    listed_emails=self.listed_emails,
+                    draft_pending=self.draft_pending,
+                )
+
+                result = self.graph.invoke(state, config)
+
             self.last_result = result
 
             # Persist state for next turn (reply-by-number feature)

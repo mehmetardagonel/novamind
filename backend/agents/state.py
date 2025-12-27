@@ -46,7 +46,15 @@ class DraftPendingInfo(TypedDict, total=False):
     body: Optional[str]
     context_hint: Optional[str]
     auto_generate: bool
+
+    # DEPRECATED - will be phased out after full migration to interrupt()
     awaiting: Literal["recipient", "subject", "body", "confirmation", "selection", "ai_generation_choice", "subject_and_body", "update_instruction", "reply_content"]
+
+    # NEW: Interrupt-based state management (LangGraph best practices)
+    interrupt_reason: Optional[Literal["need_recipient", "need_subject_body", "need_ai_choice", "need_draft_selection", "need_update_details", "need_confirmation"]]
+    selected_draft_id: Optional[str]  # Preserve draft ID being updated/sent/deleted
+    selected_draft_recipient: Optional[str]  # Preserve recipient context across interrupts
+
     drafts_list: Optional[list]  # For multi-draft selection
     operation: Optional[Literal["send", "delete", "update"]]
     update_instruction: Optional[str]
