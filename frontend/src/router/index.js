@@ -24,6 +24,11 @@ const routes = [
     name: 'SignUp',
     component: () => import(/* webpackChunkName: "signup" */ '../components/SignUpScreen.vue')
   },
+  {
+    path: '/mailbox-loading',
+    name: 'MailboxLoading',
+    component: () => import(/* webpackChunkName: "mailbox-loading" */ '../views/MailboxLoading.vue')
+  },
 
   // --- /app layout with children ---
   {
@@ -87,11 +92,17 @@ const routes = [
         component: () => import(/* webpackChunkName: "email-view" */ '../views/LabelsView.vue'),
         props: true
       },
+      // AI Assistant
+      {
+        path: 'assistant',
+        name: 'Assistant',
+        component: () => import(/* webpackChunkName: "assistant-view" */ '../views/ComposeView.vue')
+      },
       // Compose
       {
         path: 'compose',
-        name: 'Compose',
-        component: () => import(/* webpackChunkName: "compose-view" */ '../views/ComposeView.vue')
+        name: 'ComposeEmail',
+        component: () => import(/* webpackChunkName: "compose-email" */ '../views/ComposeEmailView.vue')
       },
       // Accounts Management
       {
@@ -145,6 +156,10 @@ router.beforeEach(async (to, from, next) => {
 
   // Protect /app routes for unauthenticated users
   if (to.path.startsWith('/app') && !isAuthed) {
+    return next('/login')
+  }
+
+  if (to.path === '/mailbox-loading' && !isAuthed) {
     return next('/login')
   }
 

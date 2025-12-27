@@ -36,6 +36,7 @@ export default {
 
     // UPDATED: Added 'Favorites' and 'AI Assistant'
     const navItems = computed(() => [
+      { view: "compose", label: "Compose", icon: "edit", to: "/app/compose" },
       { view: "inbox", label: "Inbox", icon: "inbox", to: "/app/email/inbox" },
       { view: "sent", label: "Sent", icon: "send", to: "/app/email/sent" },
       {

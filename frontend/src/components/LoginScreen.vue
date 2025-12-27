@@ -122,6 +122,7 @@
 <script>
 import BackgroundImage from "@/assets/background.png";
 import { supabase } from "@/database/supabaseClient";
+import { useAccountsStore } from "@/stores/accounts";
 
 export default {
   data() {
@@ -191,7 +192,15 @@ export default {
         }
 
         console.log("Login successful:", data.user);
-        this.$router.push("/app");
+        const accountsStore = useAccountsStore();
+        await accountsStore.fetchAccounts({ force: true });
+
+        if (!accountsStore.hasConnectedAccounts) {
+          this.$router.replace("/app/accounts");
+          return;
+        }
+
+        this.$router.replace("/mailbox-loading");
       } catch (error) {
         console.error("Login error:", error);
 

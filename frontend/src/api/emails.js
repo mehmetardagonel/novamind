@@ -271,6 +271,50 @@ export const setEmailStar = async (messageId, starred, userId) => {
   return res.data;
 };
 
+export const sendEmail = async (
+  { to, subject, body, accountId = null, provider = "gmail" },
+  userId
+) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const payload = { to, subject, body };
+
+  if (provider === "outlook") {
+    const res = await apiClient.post("/outlook/send", payload, {
+      headers: {
+        "X-User-Id": resolvedUserId,
+        "X-Account-Id": accountId,
+      },
+    });
+    return res.data;
+  }
+
+  const res = await apiClient.post("/send-email", payload, {
+    headers: {
+      "X-User-Id": resolvedUserId,
+      ...(accountId ? { "X-Account-Id": accountId } : {}),
+    },
+  });
+  return res.data;
+};
+
+export const saveDraft = async (
+  { to, subject, body, accountId = null },
+  userId
+) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const res = await apiClient.post(
+    "/emails/drafts",
+    { to, subject, body },
+    {
+      headers: {
+        "X-User-Id": resolvedUserId,
+        ...(accountId ? { "X-Account-Id": accountId } : {}),
+      },
+    }
+  );
+  return res.data;
+};
+
 /**
  * ============================================================
  *   SEARCH PRESETS (Inbox Only)
@@ -404,6 +448,8 @@ export default {
   deleteEmail,
   restoreEmail,
   setEmailStar,
+  sendEmail,
+  saveDraft,
   getTodayEmails,
   getUnreadEmails,
   getEmailsByLabel,

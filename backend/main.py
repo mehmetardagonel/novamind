@@ -35,6 +35,7 @@ from gmail_service import (
     send_email,
     get_current_user_email,
     fetch_drafts,
+    create_draft,
     fetch_messages_by_label,
     trash_message,
     untrash_message,
@@ -75,7 +76,7 @@ from ml_service import get_classifier
 # Import Email Cache Service
 from email_cache import get_email_cache
 # Import email tool helpers
-from email_tools import fetch_mails
+from email_tools import fetch_mails, draft_email, send_email as send_email_multi
 # Import Gmail Account Service
 from gmail_account_service import gmail_account_service
 
@@ -400,7 +401,8 @@ async def auth_callback(code: str, state: Optional[str] = None):
 @app.post("/send-email")
 async def send_email_endpoint(
     req: EmailRequest,
-    user_id: str = Header(None, alias="X-User-Id")
+    user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    account_id: Optional[str] = Header(None, alias="X-Account-Id"),
 ):
     """
     Send an email using Gmail API.
@@ -408,6 +410,64 @@ async def send_email_endpoint(
     """
     logger.info(f"Endpoint called: /send-email with subject: '{req.subject}' to: '{req.to}'")
     try:
+        if user_id:
+            if account_id:
+                account = await email_account_service.get_account(user_id, account_id)
+                if not account:
+                    raise HTTPException(status_code=404, detail="Account not found")
+
+                provider = account.get("provider")
+                if provider == "outlook":
+                    access_token = await email_account_service.get_outlook_access_token(
+                        user_id, account_id
+                    )
+                    if not access_token:
+                        raise HTTPException(status_code=401, detail="Invalid or expired Outlook token")
+
+                    result = await outlook_service.send(access_token, req.to, req.subject, req.body)
+                    if not result.get("success"):
+                        raise HTTPException(
+                            status_code=500,
+                            detail=result.get("message", "Send failed"),
+                        )
+                    return {
+                        "status": "sent",
+                        "provider": "outlook",
+                        "account_id": account_id,
+                    }
+
+                service = await get_user_gmail_service(user_id, account_id)
+                profile = service.users().getProfile(userId="me").execute()
+                sender_email = profile.get("emailAddress", "me")
+                result = send_email(
+                    sender=sender_email or "me",
+                    to=req.to,
+                    subject=req.subject,
+                    body=req.body,
+                    service=service,
+                )
+                return {
+                    "status": "sent",
+                    "message_id": result.get("id"),
+                    "provider": "gmail",
+                    "account_id": account_id,
+                }
+
+            result = send_email_multi(
+                to=req.to, subject=req.subject, body=req.body, user_id=user_id
+            )
+            if not result.get("success"):
+                raise HTTPException(
+                    status_code=500,
+                    detail=result.get("message", "Send failed"),
+                )
+            return {
+                "status": "sent",
+                "message_id": result.get("message_id"),
+                "provider": result.get("provider"),
+                "account_id": result.get("account_id"),
+            }
+
         sender_email = get_current_user_email()
         result = send_email(
             sender=sender_email or "me",
@@ -434,6 +494,70 @@ async def send_email_endpoint(
             # This shouldn't happen if /read-email was called first,
             # but it's good practice.
              raise HTTPException(status_code=401, detail="Authentication required")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/emails/drafts")
+async def create_draft_endpoint(
+    req: EmailRequest,
+    user_id: str = Header(..., alias="X-User-Id"),
+    account_id: Optional[str] = Header(None, alias="X-Account-Id")
+):
+    """Create an email draft using a specific account if provided."""
+    try:
+        if account_id:
+            account = await email_account_service.get_account(user_id, account_id)
+            if not account:
+                raise HTTPException(status_code=404, detail="Account not found")
+
+            provider = account.get("provider")
+            if provider == "outlook":
+                access_token = await email_account_service.get_outlook_access_token(
+                    user_id, account_id
+                )
+                if not access_token:
+                    raise HTTPException(status_code=401, detail="Invalid or expired Outlook token")
+
+                result = await outlook_service.create_draft(
+                    access_token, req.to, req.subject, req.body
+                )
+                if not result.get("success"):
+                    raise HTTPException(
+                        status_code=500,
+                        detail=result.get("message", "Draft creation failed"),
+                    )
+                return {
+                    "status": "drafted",
+                    "provider": "outlook",
+                    "account_id": account_id,
+                    "draft": result.get("draft"),
+                }
+
+            service = await get_user_gmail_service(user_id, account_id)
+            draft = create_draft(to=req.to, subject=req.subject, body=req.body or "", service=service)
+            return {
+                "status": "drafted",
+                "provider": "gmail",
+                "account_id": account_id,
+                "draft_id": draft.get("id"),
+            }
+
+        result = draft_email(to=req.to, subject=req.subject, body=req.body, user_id=user_id)
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=500,
+                detail=result.get("message", "Draft creation failed"),
+            )
+        return {
+            "status": "drafted",
+            "provider": result.get("provider"),
+            "account_id": result.get("account_id"),
+            "draft_id": result.get("draft_id"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating draft: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

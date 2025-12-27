@@ -20,7 +20,7 @@
       </div>
       <p class="welcome-text">Welcome Back!</p>
 
-      <button class="compose-button" @click="goToCompose">
+      <button class="compose-button" @click="goToAssistant">
         <span class="material-symbols-outlined">smart_toy</span>
         AI Assistant
       </button>
@@ -75,11 +75,11 @@
 
 <script>
 import { useAuthStore } from "../stores/auth";
+import { useAccountsStore } from "../stores/accounts";
 import { onMounted, computed, ref } from "vue";
+import { storeToRefs } from "pinia";
 import { useRouter, useRoute } from "vue-router";
 import SidebarNav from "../components/SidebarNav.vue";
-import { fetchEmailAccounts } from "../api/accounts";
-
 export default {
   name: "MainApp",
   components: {
@@ -87,10 +87,11 @@ export default {
   },
   setup() {
     const authStore = useAuthStore();
+    const accountsStore = useAccountsStore();
+    const { accounts } = storeToRefs(accountsStore);
     const router = useRouter();
     const route = useRoute();
     const isDarkTheme = ref(false);
-    const accounts = ref([]);
     const selectedAccountId = ref(null);
 
     // Removed searchQuery and performSearch, as the search bar is deleted
@@ -116,11 +117,7 @@ export default {
       }
 
       // Load email accounts for account selector
-      try {
-        accounts.value = await fetchEmailAccounts();
-      } catch (error) {
-        console.error("Failed to load email accounts:", error);
-      }
+      await accountsStore.fetchAccounts();
 
       // Check if user just completed OAuth
       const storedPath = sessionStorage.getItem("oauth_redirect_path");
@@ -157,16 +154,18 @@ export default {
       }
     };
 
-    const goToCompose = () => {
-      router.push("/app/compose");
+    const goToAssistant = () => {
+      router.push("/app/assistant");
     };
 
     // NEW: Computed property for the header title
     const currentPageTitle = computed(() => {
       const path = route.path;
 
-      if (path.startsWith("/app/compose")) {
+      if (path.startsWith("/app/assistant")) {
         return "AI Email Assistant";
+      } else if (path.startsWith("/app/compose")) {
+        return "Compose";
       } else if (path.includes("/email/inbox")) {
         const labelName = route.query.labelName;
         if (labelName) {
@@ -207,7 +206,7 @@ export default {
 
     return {
       exitApp,
-      goToCompose,
+      goToAssistant,
       currentPageTitle, // Expose the new title to the template
       isDarkTheme,
       toggleTheme,
