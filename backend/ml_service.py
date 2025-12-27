@@ -40,7 +40,7 @@ class EmailClassifier:
     def classify_single_email(self, email_data: Dict) -> Dict:
         """
         Classify a single email and add ML predictions to it.
-        
+
         Args:
             email_data: Email dictionary with keys like:
                 {
@@ -51,7 +51,7 @@ class EmailClassifier:
                     "date": "2025-01-15T10:30:00",
                     ...
                 }
-        
+
         Returns:
             Same email data with added ML fields:
                 {
@@ -63,11 +63,34 @@ class EmailClassifier:
         """
         # Copy original data
         result = email_data.copy()
-        
+
         try:
             # Combine subject and body for classification
             subject = email_data.get('subject', '')
             body = email_data.get('body', '')
+
+            # NEW: Translation step for non-English emails
+            from translation_service import get_translation_service
+
+            translation_service = get_translation_service()
+            detected_lang = translation_service.detect_language(f"{subject} {body}")
+
+            # Store original language metadata
+            result['detected_language'] = detected_lang
+            result['was_translated'] = False
+
+            # Translate if not English
+            if detected_lang != 'en':
+                try:
+                    translated = translation_service.translate_email(subject, body)
+                    subject = translated['subject']
+                    body = translated['body']
+                    result['was_translated'] = True
+                    logger.info(f"Email {email_data.get('id')} translated from {detected_lang} to English")
+                except Exception as trans_error:
+                    logger.warning(f"Translation failed for email {email_data.get('id')}: {trans_error}")
+                    logger.warning("Using original text for classification")
+
             email_text = f"{subject} {body}".strip()
             
             if not email_text:

@@ -72,6 +72,8 @@ from gmail_service import (
 from chat_service import ChatService
 # Import ML Service
 from ml_service import get_classifier
+# Import Email Cache Service
+from email_cache import get_email_cache
 # Import email tool helpers
 from email_tools import fetch_mails
 # Import Gmail Account Service
@@ -153,6 +155,9 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
+
+# Initialize email cache
+email_cache = get_email_cache()
 
 from voice_router import router as voice_router
 app.include_router(voice_router)
@@ -393,9 +398,13 @@ async def auth_callback(code: str, state: Optional[str] = None):
 
 
 @app.post("/send-email")
-async def send_email_endpoint(req: EmailRequest):
+async def send_email_endpoint(
+    req: EmailRequest,
+    user_id: str = Header(None, alias="X-User-Id")
+):
     """
     Send an email using Gmail API.
+    Invalidates email cache after sending.
     """
     logger.info(f"Endpoint called: /send-email with subject: '{req.subject}' to: '{req.to}'")
     try:
@@ -407,6 +416,13 @@ async def send_email_endpoint(req: EmailRequest):
             body=req.body,
         )
         logger.info(f"Email sent successfully. Message ID: {result.get('id')}")
+
+        # Invalidate sent and inbox caches after sending
+        if user_id:
+            email_cache.invalidate(user_id, "sent")
+            email_cache.invalidate(user_id, "inbox")
+            logger.info(f"Cache invalidated after email send (user: {user_id})")
+
         return {
             "status": "sent",
             "message_id": result.get("id"),
@@ -579,37 +595,95 @@ async def chat(
         raise HTTPException(status_code=500, detail="Internal server error. Please try again later.")
     
 @app.get("/emails/drafts", response_model=List[EmailOut])
-async def list_drafts(user_id: str = Header(..., alias="X-User-Id")):
+async def list_drafts(
+    user_id: str = Header(..., alias="X-User-Id"),
+    force_refresh: bool = False
+):
     try:
-        # Use unified multi-provider draft fetching (Gmail + Outlook)
+        # Check cache first
+        if not force_refresh:
+            cached = email_cache.get(user_id, "drafts")
+            if cached:
+                logger.info(f"Cache hit for drafts (user: {user_id})")
+                return cached
+
+        # Cache miss - fetch fresh data
         emails = await fetch_drafts_multi_provider(user_id, max_per_account=50)
+
+        # Cache the result
+        email_cache.set(user_id, "drafts", emails)
+        logger.info(f"Drafts cached (user: {user_id})")
+
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/sent", response_model=List[EmailOut])
-async def list_sent(user_id: str = Header(..., alias="X-User-Id")):
+async def list_sent(
+    user_id: str = Header(..., alias="X-User-Id"),
+    force_refresh: bool = False
+):
     """
     Retrieve sent emails from all connected accounts (Gmail + Outlook).
+    Uses caching to improve performance.
     """
     try:
-        # Use unified multi-provider sent fetching (Gmail + Outlook)
+        # Check cache first
+        if not force_refresh:
+            cached = email_cache.get(user_id, "sent")
+            if cached:
+                logger.info(f"Cache hit for sent emails (user: {user_id})")
+                return cached
+
+        # Cache miss - fetch fresh data
         emails = await fetch_sent_multi_provider(user_id, max_per_account=50)
+
+        # Cache the result
+        email_cache.set(user_id, "sent", emails)
+        logger.info(f"Sent emails cached (user: {user_id})")
+
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/favorites", response_model=List[EmailOut])
-async def list_starred(user_id: str = Header(..., alias="X-User-Id")):
+async def list_starred(
+    user_id: str = Header(..., alias="X-User-Id"),
+    force_refresh: bool = False
+):
     try:
+        # Check cache first
+        if not force_refresh:
+            cached = email_cache.get(user_id, "favorites")
+            if cached:
+                logger.info(f"Cache hit for favorites (user: {user_id})")
+                return cached
+
+        # Cache miss - fetch fresh data
         emails = await fetch_messages_by_label_multi(user_id, "STARRED", max_per_account=50)
+
+        # Cache the result
+        email_cache.set(user_id, "favorites", emails)
+        logger.info(f"Favorites cached (user: {user_id})")
+
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/important", response_model=List[EmailOut])
-async def list_important(user_id: str = Header(..., alias="X-User-Id")):
+async def list_important(
+    user_id: str = Header(..., alias="X-User-Id"),
+    force_refresh: bool = False
+):
     try:
+        # Check cache first
+        if not force_refresh:
+            cached = email_cache.get(user_id, "important")
+            if cached:
+                logger.info(f"Cache hit for important emails (user: {user_id})")
+                return cached
+
+        # Cache miss - fetch fresh data
         emails = await asyncio.to_thread(
             fetch_mails,
             importance=True,
@@ -621,26 +695,71 @@ async def list_important(user_id: str = Header(..., alias="X-User-Id")):
             error = emails[0].get("error")
             if error:
                 raise HTTPException(status_code=500, detail=error)
+
+        # Cache the result
+        email_cache.set(user_id, "important", emails)
+        logger.info(f"Important emails cached (user: {user_id})")
+
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/spam", response_model=List[EmailOut])
-async def list_spam(user_id: str = Header(..., alias="X-User-Id")):
+async def list_spam(
+    user_id: str = Header(..., alias="X-User-Id"),
+    force_refresh: bool = False
+):
+    """
+    Retrieve spam emails from all connected accounts (Gmail + Outlook).
+    Applies ML classification with Turkish translation support.
+    Uses caching to improve performance.
+    """
     try:
+        # Check cache first
+        if not force_refresh:
+            cached = email_cache.get(user_id, "spam")
+            if cached:
+                logger.info(f"Cache hit for spam emails (user: {user_id})")
+                return cached
+
+        # Cache miss - fetch fresh data
         emails = await fetch_messages_by_label_multi(user_id, "SPAM", max_per_account=50, include_spam_trash=True)
-        return emails
+
+        # Apply ML classification with translation support
+        classified_emails = apply_ml_classification(emails)
+
+        # Cache the result
+        email_cache.set(user_id, "spam", classified_emails)
+
+        logger.info(f"Spam folder: {len(classified_emails)} emails classified and cached")
+        return classified_emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/trash", response_model=List[EmailOut])
-async def list_trash(user_id: str = Header(..., alias="X-User-Id")):
+async def list_trash(
+    user_id: str = Header(..., alias="X-User-Id"),
+    force_refresh: bool = False
+):
     """
     Retrieve deleted emails (Trash folder) from all connected accounts (Gmail + Outlook).
+    Uses caching to improve performance.
     """
     try:
-        # Use unified multi-provider trash fetching (Gmail + Outlook)
+        # Check cache first
+        if not force_refresh:
+            cached = email_cache.get(user_id, "trash")
+            if cached:
+                logger.info(f"Cache hit for trash (user: {user_id})")
+                return cached
+
+        # Cache miss - fetch fresh data
         emails = await fetch_trash_multi_provider(user_id, max_per_account=50)
+
+        # Cache the result
+        email_cache.set(user_id, "trash", emails)
+        logger.info(f"Trash cached (user: {user_id})")
+
         return emails
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -649,10 +768,16 @@ async def list_trash(user_id: str = Header(..., alias="X-User-Id")):
 async def delete_email(message_id: str, user_id: str = Header(..., alias="X-User-Id")):
     """
     Move an email to Trash. Works for both Gmail and Outlook messages.
+    Invalidates email cache after deletion.
     """
     try:
         # Use multi-provider function to handle both Gmail and Outlook
         resp = await trash_message_multi_provider(user_id, message_id)
+
+        # Invalidate all caches after delete
+        email_cache.invalidate(user_id)
+        logger.info(f"Cache invalidated after email delete (user: {user_id})")
+
         return {
             "status": "trashed",
             "message_id": resp.get("id", message_id),
@@ -664,13 +789,35 @@ async def delete_email(message_id: str, user_id: str = Header(..., alias="X-User
 async def restore_email(message_id: str, user_id: str = Header(..., alias="X-User-Id")):
     """
     Restore an email from Trash back to the mailbox (Inbox). Works for both Gmail and Outlook messages.
+    Invalidates email cache after restore.
     """
     try:
         # Use multi-provider function to handle both Gmail and Outlook
         resp = await untrash_message_multi_provider(user_id, message_id)
+
+        # Invalidate all caches after restore
+        email_cache.invalidate(user_id)
+        logger.info(f"Cache invalidated after email restore (user: {user_id})")
+
         return {
             "status": "restored",
             "message_id": resp.get("id", message_id),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/emails/refresh")
+async def refresh_emails(user_id: str = Header(..., alias="X-User-Id")):
+    """
+    Force refresh all email caches for user.
+    Useful for manual cache invalidation from the frontend.
+    """
+    try:
+        email_cache.invalidate(user_id)
+        logger.info(f"Manual cache refresh requested (user: {user_id})")
+        return {
+            "status": "cache_cleared",
+            "message": "Email cache refreshed successfully"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

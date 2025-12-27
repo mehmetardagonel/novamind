@@ -74,3 +74,7 @@ nest-asyncio==1.6.0
 
 # Microsoft Outlook (Graph API)
 msal>=1.24.0
+
+# Translation Service (for Turkish email classification)
+googletrans==4.0.0rc1
+langdetect==1.0.9

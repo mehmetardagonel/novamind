@@ -33,6 +33,9 @@ class EmailOut(BaseModel):
     body: str
     date: datetime
     ml_prediction: Optional[str] = None  # ML classification: spam, ham, or important
+    ml_confidence: Optional[float] = None  # ML prediction confidence score (0-1)
+    detected_language: Optional[str] = None  # Detected language code (e.g., 'tr', 'en')
+    was_translated: Optional[bool] = False  # Whether email was translated for ML classification
     label_ids: List[str] = []
     # Multi-account support
     account_id: Optional[str] = None
