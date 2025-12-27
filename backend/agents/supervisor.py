@@ -1889,7 +1889,11 @@ def end_node(state: EmailAgentState) -> dict:
     """
     # If we already have a response, return it
     if state.get("response"):
-        return state
+        return {
+            "response": state.get("response"),
+            "next_agent": "__end__",
+            "display_emails": None,  # Clear to prevent persistence from previous turns
+        }
 
     # Generate a greeting or direct answer
     try:
@@ -1901,11 +1905,13 @@ def end_node(state: EmailAgentState) -> dict:
         return {
             "response": response.content,
             "next_agent": "__end__",
+            "display_emails": None,  # Explicitly clear
         }
     except Exception as e:
         return {
             "response": "Hello! I'm your email assistant. How can I help you today?",
             "next_agent": "__end__",
+            "display_emails": None,  # Explicitly clear
         }
 
 
