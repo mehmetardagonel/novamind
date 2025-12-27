@@ -32,8 +32,9 @@
     </div>
 
     <!-- Search bar and refresh toolbar -->
-    <div v-if="folder === 'inbox' && !isInitialLoading && !authUrl && displayedEmails.length > 0" class="email-controls">
+    <div v-if="!isInitialLoading && !authUrl && displayedEmails.length > 0" class="email-controls">
       <EmailSearchBar
+        v-model="currentSearchQuery"
         @search="handleSearch"
         @clear="handleClearSearch"
       />
@@ -313,12 +314,31 @@ export default {
     const searchResults = ref([]);
     const searchLoading = ref(false);
     const searchError = ref('');
+    const currentSearchQuery = ref('');
 
     // Email cache store
     const emailCache = useEmailCacheStore();
 
     const route = useRoute();
     const activeLabelId = computed(() => route.query.label || null);
+
+    // Cache TTL - consistent 2 minutes for all caches
+    const CACHE_TTL = 2 * 60 * 1000;
+
+    // Standardized cache key computation
+    const computedCacheKey = computed(() => {
+      const labelId = route.query.label;
+
+      if (labelId) {
+        // Labels: folder:label:${labelId}:${accountId}
+        const accountPart = props.selectedAccountId || 'all';
+        return `folder:label:${labelId}:${accountPart}`;
+      }
+
+      // Regular folders: folder:${folder}:${accountId}
+      const accountPart = props.selectedAccountId || 'all';
+      return `folder:${props.folder}:${accountPart}`;
+    });
 
     // Loading states
     const isInitialLoading = computed(() => {
@@ -338,7 +358,13 @@ export default {
     const selectedLabelIds = ref([]);
 
     const decorateEmails = (list) => {
-      return (list || []).map((email) => {
+      // Ensure we have a valid array
+      if (!Array.isArray(list)) {
+        console.warn('[decorateEmails] Received non-array value:', typeof list, list);
+        return [];
+      }
+
+      return list.map((email) => {
         const labels = email.label_ids || [];
         const isStarred = Array.isArray(labels) && labels.includes("STARRED");
         const isUnread = Array.isArray(labels) && labels.includes("UNREAD");
@@ -360,26 +386,17 @@ export default {
       // Ensure cache is loaded from storage first
       await emailCache.loadFromStorage();
 
-      // Generate cache key based on folder and account
-      const labelId = route.query.label;
-      let cacheKey;
-      if (labelId) {
-        cacheKey = `label:${labelId}`;
-      } else if (props.folder === "inbox") {
-        cacheKey = props.selectedAccountId
-          ? `inbox:account:${props.selectedAccountId}`
-          : 'inbox:unified';
-      } else {
-        cacheKey = `folder:${props.folder}`;
-      }
-
-      const STALE_TIME = 2 * 60 * 1000; // 2 minutes
+      // Use standardized cache key
+      const cacheKey = computedCacheKey.value;
 
       // Check cache first (skip if force refresh)
-      if (!force && emailCache.isFresh(cacheKey, STALE_TIME)) {
+      if (!force && emailCache.isFresh(cacheKey, CACHE_TTL)) {
         const cached = emailCache.getEntry(cacheKey);
         if (cached) {
-          emails.value = decorateEmails(cached.value);
+          // Ensure cached value is an array
+          const cachedList = Array.isArray(cached.value) ? cached.value : [];
+          emails.value = decorateEmails(cachedList);
+          loading.value = false;
           return;
         }
       }
@@ -394,7 +411,7 @@ export default {
       }
 
       try {
-
+        const labelId = route.query.label;
         let data;
 
         if (labelId) {
@@ -410,9 +427,21 @@ export default {
           data = await fetchEmails(props.folder);
         }
 
+        // Normalize backend response - it can be an array or object with emails/items property
+        let emailList;
+        if (Array.isArray(data)) {
+          emailList = data;
+        } else if (data && Array.isArray(data.emails)) {
+          emailList = data.emails;
+        } else if (data && Array.isArray(data.items)) {
+          emailList = data.items;
+        } else {
+          emailList = [];
+        }
+
         // Update cache
-        emailCache.setEntry(cacheKey, data);
-        emails.value = decorateEmails(data);
+        emailCache.setEntry(cacheKey, emailList);
+        emails.value = decorateEmails(emailList);
       } catch (error) {
         console.error(`Error fetching ${props.folder} emails:`, error);
         const hasResponse = !!error.response;
@@ -438,6 +467,24 @@ export default {
     };
 
     const refreshEmails = async () => {
+      // Clear current folder cache
+      await emailCache.invalidate(computedCacheKey.value);
+
+      // Clear related search caches for this folder
+      const searchPrefix = `search:${props.folder}:`;
+      const allKeys = Object.keys(emailCache.entries);
+      for (const key of allKeys) {
+        if (key.startsWith(searchPrefix)) {
+          await emailCache.invalidate(key);
+        }
+      }
+
+      // If in search mode, clear search
+      if (isSearchMode.value) {
+        handleClearSearch();
+      }
+
+      // Force reload
       await loadEmails({ force: true });
     };
 
@@ -541,6 +588,10 @@ export default {
     watch(
       () => props.folder,
       () => {
+        // Clear search when folder changes
+        if (isSearchMode.value) {
+          handleClearSearch();
+        }
         loadEmails();
       }
     );
@@ -558,6 +609,10 @@ export default {
     watch(
       () => props.selectedAccountId,
       () => {
+        // Clear search when account changes
+        if (isSearchMode.value) {
+          handleClearSearch();
+        }
         if (props.folder === "inbox") {
           loadEmails();
         }
@@ -743,41 +798,101 @@ export default {
       return isSearchMode.value ? searchResults.value : emails.value;
     });
 
-    // Handle search
+    // Helper function to filter search results by folder
+    const filterEmailsByFolder = (emailList, folder) => {
+      if (!emailList || !Array.isArray(emailList)) return [];
+
+      // For inbox and unified views, return all results
+      if (folder === 'inbox') return emailList;
+
+      // Filter based on folder-specific criteria
+      return emailList.filter(email => {
+        const labels = email.label_ids || [];
+
+        switch (folder) {
+          case 'sent':
+            return labels.includes('SENT');
+          case 'spam':
+            return labels.includes('SPAM');
+          case 'trash':
+            return labels.includes('TRASH');
+          case 'important':
+            return labels.includes('IMPORTANT');
+          case 'starred':
+          case 'favorites':
+            return labels.includes('STARRED');
+          case 'drafts':
+            return labels.includes('DRAFT');
+          default:
+            // For labels, check if email has that label
+            if (route.query.label) {
+              return labels.includes(route.query.label);
+            }
+            return true;
+        }
+      });
+    };
+
+    // Handle search with folder-scoped caching and client-side filtering
     const handleSearch = async (query) => {
       if (!query || !query.trim()) {
+        handleClearSearch();
         return;
       }
 
+      // Keep the search query in the input field
+      currentSearchQuery.value = query;
+
       isSearchMode.value = true;
-      searchLoading.value = true;
+      searchLoading.value = false;
       searchError.value = '';
       selectedEmail.value = null;
 
       // Ensure cache is loaded from storage first
       await emailCache.loadFromStorage();
 
-      const cacheKey = `search:${query}`;
-      const STALE_TIME = 5 * 60 * 1000; // 5 minutes
+      // Folder-specific cache key (even though backend search is global)
+      const cacheKey = `search:${props.folder}:${query}`;
 
       try {
         // Check cache first
-        if (emailCache.isFresh(cacheKey, STALE_TIME)) {
+        if (emailCache.isFresh(cacheKey, CACHE_TTL)) {
           const cached = emailCache.getEntry(cacheKey);
           if (cached) {
-            searchResults.value = decorateEmails(cached.value);
+            // Ensure cached value is an array
+            const cachedList = Array.isArray(cached.value) ? cached.value : [];
+            searchResults.value = decorateEmails(cachedList);
             searchLoading.value = false;
             return;
           }
         }
 
-        // Fetch from API
-        const data = await searchEmails(query);
-        const decorated = decorateEmails(data);
+        // Load with loading state
+        searchLoading.value = true;
 
-        // Update cache and state
-        emailCache.setEntry(cacheKey, data);
-        searchResults.value = decorated;
+        // Call global search API
+        const options = {
+          accountId: props.selectedAccountId
+        };
+
+        const rawData = await searchEmails(query, null, options);
+
+        // Normalize backend response - it can be an array or object with emails/items property
+        let searchEmailList;
+        if (Array.isArray(rawData)) {
+          searchEmailList = rawData;
+        } else if (rawData && Array.isArray(rawData.emails)) {
+          searchEmailList = rawData.emails;
+        } else if (rawData && Array.isArray(rawData.items)) {
+          searchEmailList = rawData.items;
+        } else {
+          searchEmailList = [];
+        }
+
+        // Use results directly from backend (no client-side filtering)
+        // Backend search is global across all folders
+        await emailCache.setEntry(cacheKey, searchEmailList);
+        searchResults.value = decorateEmails(searchEmailList);
       } catch (error) {
         console.error('Search error:', error);
         searchError.value = error.response?.data?.detail || error.message || 'Search failed. Please try again.';
@@ -788,11 +903,22 @@ export default {
     };
 
     // Handle clear search
-    const handleClearSearch = () => {
+    const handleClearSearch = async () => {
       isSearchMode.value = false;
       searchResults.value = [];
+      searchLoading.value = false;
       searchError.value = '';
       selectedEmail.value = null;
+      currentSearchQuery.value = ''; // Clear search input
+
+      // Invalidate all search caches for this folder
+      const searchPrefix = `search:${props.folder}:`;
+      const allKeys = Object.keys(emailCache.entries);
+      for (const key of allKeys) {
+        if (key.startsWith(searchPrefix)) {
+          await emailCache.invalidate(key);
+        }
+      }
     };
 
     return {
@@ -822,6 +948,7 @@ export default {
       searchResults,
       searchLoading,
       searchError,
+      currentSearchQuery,
       displayedEmails,
       handleSearch,
       handleClearSearch,

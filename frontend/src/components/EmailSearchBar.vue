@@ -138,14 +138,21 @@ import { ref, computed } from 'vue';
 export default {
   name: 'EmailSearchBar',
   props: {
+    modelValue: {
+      type: String,
+      default: ''
+    },
     placeholder: {
       type: String,
       default: 'Search emails (e.g., from:google subject:jobs is:unread)'
     }
   },
-  emits: ['search', 'clear'],
+  emits: ['search', 'clear', 'update:modelValue'],
   setup(props, { emit }) {
-    const searchQuery = ref('');
+    const searchQuery = computed({
+      get: () => props.modelValue,
+      set: (value) => emit('update:modelValue', value)
+    });
     const showAdvanced = ref(false);
 
     const advancedFilters = ref({
