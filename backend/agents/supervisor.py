@@ -79,11 +79,11 @@ Your capabilities:
 4. Help compose professional emails
 
 CRITICAL RULES FOR DRAFT CREATION:
-1. If user provides recipient email, subject, and body context - create the draft immediately
+1. ALWAYS ask the user how they want to proceed before creating a draft
 2. If user only provides recipient - ask what the email should be about
 3. If user provides context but NO recipient - ask for recipient email address
 4. If user says "generate it yourself" or "auto" - create subject and body from context
-5. NEVER ask for confirmation before creating a draft
+5. ALWAYS ask for user preference: auto-complete with AI or provide manually
 6. ALWAYS confirm after creating: "Draft created to [email] with subject '[subject]'"
 
 For updating drafts:
@@ -901,58 +901,32 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
 
                 for tool in tools:
                     if tool.name == tool_name:
-                        # NEW: For create_draft, check if subject/body are missing
+                        # NEW: For create_draft, ALWAYS ask for user preference before creating
                         if tool_name == "create_draft":
                             recipient = tool_args.get("recipient")
                             subject = tool_args.get("subject", "")
                             body = tool_args.get("body", "")
 
-                            subject_missing = not subject or not subject.strip()
-                            body_missing = not body or not body.strip()
+                            # Extract context hint for potential auto-generation
+                            context_hint = ""
+                            import re
+                            context_patterns = [
+                                r"about\s+(.+?)(?:\s+to|\s*$)",
+                                r"regarding\s+(.+?)(?:\s+to|\s*$)",
+                                r"for\s+(.+?)(?:\s+to|\s*$)",
+                            ]
+                            for pattern in context_patterns:
+                                match = re.search(pattern, current_input.lower())
+                                if match:
+                                    context_hint = match.group(1)
+                                    break
 
-                            # If subject OR body missing, we need to ask user for their preference
-                            if subject_missing or body_missing:
-                                # Extract context hint for potential auto-generation
-                                context_hint = ""
-                                import re
-                                context_patterns = [
-                                    r"about\s+(.+?)(?:\s+to|\s*$)",
-                                    r"regarding\s+(.+?)(?:\s+to|\s*$)",
-                                    r"for\s+(.+?)(?:\s+to|\s*$)",
-                                ]
-                                for pattern in context_patterns:
-                                    match = re.search(pattern, current_input.lower())
-                                    if match:
-                                        context_hint = match.group(1)
-                                        break
-
-                                # If recipient ALSO missing, ask for that FIRST
-                                if not recipient or not recipient.strip():
-                                    return {
-                                        "response": "I'd be happy to create that draft! What email address should I send it to?",
-                                        "draft_pending": DraftPendingInfo(
-                                            awaiting="recipient",
-                                            subject=subject,
-                                            body=body,
-                                            context_hint=context_hint or current_input,
-                                            auto_generate=False,
-                                        ),
-                                        "next_agent": "__end__",
-                                    }
-
-                                # Recipient exists but subject/body missing - present choice
+                            # If recipient missing, ask for that FIRST
+                            if not recipient or not recipient.strip():
                                 return {
-                                    "response": (
-                                        "I can help you complete this draft. How would you like to proceed?\n\n"
-                                        "Please choose one option:\n"
-                                        "1. Auto-complete with AI - I'll generate the subject and body based on context\n"
-                                        "2. I'll provide subject and body manually\n"
-                                        "3. Cancel\n\n"
-                                        "Reply with the number (1, 2, or 3) or the option name."
-                                    ),
+                                    "response": "I'd be happy to create that draft! What email address should I send it to?",
                                     "draft_pending": DraftPendingInfo(
-                                        awaiting="ai_generation_choice",
-                                        recipient=recipient,
+                                        awaiting="recipient",
                                         subject=subject,
                                         body=body,
                                         context_hint=context_hint or current_input,
@@ -960,6 +934,27 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     ),
                                     "next_agent": "__end__",
                                 }
+
+                            # ALWAYS present choice to user before creating draft
+                            return {
+                                "response": (
+                                    "I can help you create this draft. How would you like to proceed?\n\n"
+                                    "Please choose one option:\n"
+                                    "1. Auto-complete with AI - I'll generate the subject and body based on context\n"
+                                    "2. I'll provide subject and body manually\n"
+                                    "3. Cancel\n\n"
+                                    "Reply with the number (1, 2, or 3) or the option name."
+                                ),
+                                "draft_pending": DraftPendingInfo(
+                                    awaiting="ai_generation_choice",
+                                    recipient=recipient,
+                                    subject=subject,
+                                    body=body,
+                                    context_hint=context_hint or current_input,
+                                    auto_generate=False,
+                                ),
+                                "next_agent": "__end__",
+                            }
 
                         result = tool.invoke(tool_args)
                         result_dict = json.loads(result)
