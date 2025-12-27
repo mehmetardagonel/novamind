@@ -21,8 +21,8 @@ from typing import List, Dict
 import sys
 from pathlib import Path
 
-# Add backend to path
-backend_path = Path(__file__).parent
+# Add backend to path (go up two levels from tests/integration/ to backend/)
+backend_path = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(backend_path))
 
 # Import the multi-agent system
@@ -273,11 +273,113 @@ def mock_update_draft(draft_id: str, instruction: str, user_id: str = None) -> D
 
 
 def mock_get_llm(*args, **kwargs):
-    """Mock LLM for testing. Accepts any arguments to match actual get_llm signature."""
+    """
+    Mock LLM for testing that intelligently responds based on context.
+    Returns appropriate responses and tool calls based on the input.
+    """
     llm = MagicMock()
-    llm.invoke = MagicMock(return_value=MagicMock(
-        content="Here's a summary of your emails: You received important updates from John about the Q4 project (75% complete, on track for December), Sarah rescheduled a meeting to Friday 3 PM, and there were several notifications from GitHub and monitoring services. The most urgent item is the high CPU alert on server prod-01."
-    ))
+    call_count = {"count": 0}
+
+    def smart_invoke(input_data):
+        """Smart mock that returns different responses based on input."""
+        call_count["count"] += 1
+
+        # Convert input to string for pattern matching
+        if isinstance(input_data, list):
+            content = " ".join([str(msg.content) if hasattr(msg, 'content') else str(msg) for msg in input_data])
+        else:
+            content = str(input_data)
+
+        content_lower = content.lower()
+
+        # Routing calls (supervisor) - return agent name
+        if "route to:" in content_lower or "current message:" in content_lower:
+            if "delete" in content_lower or "draft" in content_lower:
+                return MagicMock(content="draft", tool_calls=[])
+            elif "summarize" in content_lower or "summary" in content_lower:
+                return MagicMock(content="inbox", tool_calls=[])
+            elif "show" in content_lower or "list" in content_lower:
+                return MagicMock(content="inbox", tool_calls=[])
+            elif "update" in content_lower:
+                return MagicMock(content="draft", tool_calls=[])
+            else:
+                return MagicMock(content="__end__", tool_calls=[])
+
+        # Agent calls with tools bound - return tool calls
+        # Check if this is a bound tools call by seeing if there are multiple invocations
+        if call_count["count"] > 1:
+            # Draft deletion
+            if "delete" in content_lower and "draft" in content_lower:
+                recipient = None
+                if "john.doe@company.com" in content_lower:
+                    recipient = "john.doe@company.com"
+                elif "sarah.williams@partner.com" in content_lower:
+                    recipient = "sarah.williams@partner.com"
+                elif "nonexistent@email.com" in content_lower:
+                    recipient = "nonexistent@email.com"
+
+                if recipient:
+                    return MagicMock(
+                        content="",
+                        tool_calls=[{
+                            "name": "delete_draft_for_recipient",
+                            "args": {"recipient_email": recipient},
+                            "id": "call_delete_123"
+                        }]
+                    )
+
+            # Draft update
+            if "update" in content_lower and "draft" in content_lower:
+                recipient = None
+                if "john.doe@company.com" in content_lower:
+                    recipient = "john.doe@company.com"
+
+                if recipient:
+                    return MagicMock(
+                        content="",
+                        tool_calls=[{
+                            "name": "update_draft",
+                            "args": {"recipient_email": recipient, "instruction": "make it more formal"},
+                            "id": "call_update_123"
+                        }]
+                    )
+
+            # Fetch emails / summarize
+            if "summarize" in content_lower or "emails" in content_lower:
+                return MagicMock(
+                    content="",
+                    tool_calls=[{
+                        "name": "summarize_emails",
+                        "args": {"time_period": "today", "importance": False, "max_emails": 25},
+                        "id": "call_summarize_123"
+                    }]
+                )
+
+            # Show/list drafts
+            if "show" in content_lower or "list" in content_lower or "drafts" in content_lower:
+                recipient = None
+                if "john.doe@company.com" in content_lower:
+                    recipient = "john.doe@company.com"
+
+                if recipient:
+                    return MagicMock(
+                        content="",
+                        tool_calls=[{
+                            "name": "get_drafts_for_recipient",
+                            "args": {"recipient_email": recipient},
+                            "id": "call_get_drafts_123"
+                        }]
+                    )
+
+        # Default response (for end node or generic responses)
+        return MagicMock(
+            content="Here's a summary of your emails: You received important updates from John about the Q4 project (75% complete, on track for December), Sarah rescheduled a meeting to Friday 3 PM, and there were several notifications from GitHub and monitoring services. The most urgent item is the high CPU alert on server prod-01.",
+            tool_calls=[]
+        )
+
+    llm.invoke = smart_invoke
+    llm.bind_tools = MagicMock(return_value=llm)
+
     return llm
 
 

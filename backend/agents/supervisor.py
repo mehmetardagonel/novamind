@@ -416,7 +416,7 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
 
                 result_dict = {
                     "response": response_content,
-                    "next_agent": "supervisor",
+                    "next_agent": "__end__",
                     "last_tool_result": {"results": tool_results},
                 }
 
@@ -431,7 +431,7 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
 
         return {
             "response": response.content or "I couldn't process that request.",
-            "next_agent": "supervisor",
+            "next_agent": "__end__",
         }
 
     except Exception as e:
@@ -487,7 +487,7 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                             "2 (or 'manual') - to provide subject and body manually\n"
                             "3 (or 'cancel') - to cancel"
                         ),
-                        "next_agent": "supervisor",
+                        "next_agent": "__end__",
                     }
 
                 # Handle CANCEL
@@ -572,7 +572,7 @@ Make it professional, clear, and appropriate. The body should include:
                             context_hint=pending.get("context_hint"),
                             auto_generate=False,
                         ),
-                        "next_agent": "supervisor",
+                        "next_agent": "__end__",
                     }
 
             elif awaiting == "subject_and_body":
@@ -601,7 +601,7 @@ Make it professional, clear, and appropriate. The body should include:
                             "Body: Your email body here\n\n"
                             "Both subject and body are required."
                         ),
-                        "next_agent": "supervisor",
+                        "next_agent": "__end__",
                     }
 
                 # Create the draft with manual input
@@ -634,7 +634,7 @@ Make it professional, clear, and appropriate. The body should include:
                 if "@" not in email_input or "." not in email_input.split("@")[-1]:
                     return {
                         "response": f"'{email_input}' doesn't look like a valid email address.\nPlease provide a valid email (e.g., john@example.com)",
-                        "next_agent": "supervisor",
+                        "next_agent": "__end__",
                     }
 
                 # Create the draft with the provided email
@@ -751,13 +751,13 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                         logger.error(f"[DRAFT_AGENT] Reply generation failed: {gen_err}")
                         return {
                             "response": "Failed to generate reply. Please type your message manually.",
-                            "next_agent": "supervisor",
+                            "next_agent": "__end__",
                         }
 
                 if not reply_content:
                     return {
                         "response": "What would you like to reply?\n\n*You can type your message or say 'generate it for me' to have AI write a reply.*",
-                        "next_agent": "supervisor",
+                        "next_agent": "__end__",
                     }
 
                 # Extract recipient email from sender
@@ -819,7 +819,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     drafts_list=[selected],
                                     operation="send",
                                 ),
-                                "next_agent": "supervisor",
+                                "next_agent": "__end__",
                             }
 
                         # Handle DELETE operation
@@ -858,7 +858,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                         drafts_list=[selected],
                                         operation="update",
                                     ),
-                                    "next_agent": "supervisor",
+                                    "next_agent": "__end__",
                                 }
 
                             # Call update_draft tool
@@ -937,7 +937,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                             context_hint=context_hint or current_input,
                                             auto_generate=False,
                                         ),
-                                        "next_agent": "supervisor",
+                                        "next_agent": "__end__",
                                     }
 
                                 # Recipient exists but subject/body missing - present choice
@@ -958,7 +958,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                         context_hint=context_hint or current_input,
                                         auto_generate=False,
                                     ),
-                                    "next_agent": "supervisor",
+                                    "next_agent": "__end__",
                                 }
 
                         result = tool.invoke(tool_args)
@@ -993,7 +993,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                         "auto", "generate", "yourself", "create it"
                                     ]),
                                 ),
-                                "next_agent": "supervisor",
+                                "next_agent": "__end__",
                             }
 
                         if result_dict.get("requires_selection"):
@@ -1004,7 +1004,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     drafts_list=result_dict.get("drafts", []),
                                     operation=result_dict.get("operation", "update"),
                                 ),
-                                "next_agent": "supervisor",
+                                "next_agent": "__end__",
                             }
 
                         if result_dict.get("requires_confirmation"):
@@ -1016,7 +1016,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     operation="send",
                                     recipient=result_dict.get("recipient"),
                                 ),
-                                "next_agent": "supervisor",
+                                "next_agent": "__end__",
                             }
 
                         if result_dict.get("success"):
@@ -1028,13 +1028,13 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
 
                         return {
                             "response": result_dict.get("message", result),
-                            "next_agent": "supervisor",
+                            "next_agent": "__end__",
                         }
 
         # No tool call - return LLM response
         return {
             "response": response.content or "I couldn't process that draft request.",
-            "next_agent": "supervisor",
+            "next_agent": "__end__",
         }
 
     except Exception as e:
@@ -1135,7 +1135,7 @@ def send_agent_node(state: EmailAgentState) -> dict:
 
         return {
             "response": response.content or "I couldn't process that send request.",
-            "next_agent": "supervisor",
+            "next_agent": "__end__",
         }
 
     except Exception as e:
@@ -1177,7 +1177,7 @@ def organization_agent_node(state: EmailAgentState) -> dict:
 
         return {
             "response": response.content or "I couldn't process that organization request.",
-            "next_agent": "supervisor",
+            "next_agent": "__end__",
         }
 
     except Exception as e:
