@@ -39,11 +39,10 @@
 
         <!-- Account Selector (only show on inbox) -->
         <div v-if="isInboxView" class="account-selector">
-          <span class="material-symbols-outlined selector-icon">account_circle</span>
-          <select
-            v-model="selectedAccountId"
-            class="account-dropdown"
+          <span class="material-symbols-outlined selector-icon"
+            >account_circle</span
           >
+          <select v-model="selectedAccountId" class="account-dropdown">
             <option :value="null">All Accounts</option>
             <option
               v-for="account in accounts"
@@ -105,7 +104,7 @@ export default {
 
     // Check if we're on inbox view
     const isInboxView = computed(() => {
-      return route.path.includes('/email/inbox') || route.path === '/app';
+      return route.path.includes("/email/inbox") || route.path === "/app";
     });
 
     onMounted(async () => {
@@ -190,6 +189,8 @@ export default {
         return "Trash";
       } else if (path.includes("/email/labels")) {
         return "Labels";
+      } else if (path.includes("/accounts")) {
+        return "Accounts";
       }
       // Fallback for an email detail view (e.g., /app/email/inbox/123)
       else if (path.match(/\/email\/\w+\/\d+/)) {
