@@ -92,6 +92,10 @@
             <div class="email-header">
               <div class="sender-with-label">
                 <span class="email-sender">{{ email.sender }}</span>
+                <!-- Show "To:" field when in drafts view -->
+                <span v-if="folder === 'drafts' && email.recipient" class="email-recipient">
+                  → {{ email.recipient }}
+                </span>
                 <span v-if="email.account_email" class="account-badge" :title="email.account_email">
                   {{ email.account_email }}
                 </span>
@@ -1115,6 +1119,14 @@ export default {
 .email-sender {
   font-weight: 500;
   color: var(--text-secondary);
+  font-size: 1.05rem;
+}
+
+/* Recipient (To) Field for Drafts */
+.email-recipient {
+  font-weight: 600;
+  color: #1976d2;
+  margin-left: 8px;
   font-size: 1.05rem;
 }
 
