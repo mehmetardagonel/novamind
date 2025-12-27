@@ -79,12 +79,13 @@ Your capabilities:
 4. Help compose professional emails
 
 CRITICAL RULES FOR DRAFT CREATION:
-1. ALWAYS ask the user how they want to proceed before creating a draft
-2. If user only provides recipient - ask what the email should be about
-3. If user provides context but NO recipient - ask for recipient email address
-4. If user says "generate it yourself" or "auto" - create subject and body from context
-5. ALWAYS ask for user preference: auto-complete with AI or provide manually
-6. ALWAYS confirm after creating: "Draft created to [email] with subject '[subject]'"
+1. When the user asks to create/compose a draft, ALWAYS use the create_draft tool (even if subject/body are missing).
+2. If user provides context but NO recipient - ask for recipient email address.
+3. If subject/body are missing, ask if you should generate them. Use the user's last request as context.
+4. If user says "yes", "auto", or "generate it", create subject and body from context.
+5. If user says "no" or "manual", ask for subject and body in a clear format.
+6. Do NOT ask for "the user's message" if they already described the email.
+7. ALWAYS confirm after creating: "Draft created to [email] with subject '[subject]'"
 
 For updating drafts:
 - Use the update_draft tool with the recipient email and instruction
@@ -174,6 +175,39 @@ CRITICAL RULES:
 Be careful - sending is irreversible!
 """
 
+def _format_email_cards(emails: list) -> str:
+    blocks = []
+    for idx, email in enumerate(emails or [], 1):
+        if not isinstance(email, dict):
+            continue
+        sender = email.get("sender") or email.get("from") or "Unknown"
+        subject = email.get("subject") or "(No subject)"
+        date = email.get("date") or "Unknown"
+        body = email.get("body") or email.get("snippet") or ""
+        body = " ".join(str(body).split())
+        if len(body) > 300:
+            body = body[:300] + "..."
+
+        important = (
+            email.get("ml_prediction") == "important"
+            or email.get("is_important") is True
+            or email.get("importance") is True
+        )
+
+        lines = [
+            f"# Email #{idx}",
+            "",
+            f"From: {sender}",
+            f"Subject: {subject}",
+            f"Date: {date}",
+        ]
+        if important:
+            lines.append("⭐ Important")
+        lines.extend(["", "Body:", body])
+        blocks.append("\n".join(lines))
+
+    return "\n\n---\n\n".join(blocks).strip()
+
 
 # =============================================================================
 # LLM Initialization
@@ -214,6 +248,27 @@ def supervisor_node(state: EmailAgentState) -> dict:
     logger.info(f"[SUPERVISOR] Processing: {state.get('current_input', '')[:100]}")
 
     current_input = state.get("current_input", "").strip()
+
+    show_match = re.search(r"\b(show|list|display)\b.*\b(those|these|them)\b", current_input, re.IGNORECASE)
+    if show_match:
+        listed_emails = state.get("listed_emails")
+        if not listed_emails or not listed_emails.get("emails"):
+            return {
+                "response": "No emails are currently listed. Please ask for a summary or fetch emails first.",
+                "next_agent": "__end__",
+            }
+
+        formatted = _format_email_cards(listed_emails["emails"])
+        if not formatted:
+            return {
+                "response": "I couldn't format those emails. Please try fetching them again.",
+                "next_agent": "__end__",
+            }
+
+        return {
+            "response": f"{formatted}\n\n*Reply to any email by saying 'reply 1', 'reply 2', etc.*",
+            "next_agent": "__end__",
+        }
 
     # Check for "reply N" pattern FIRST (before pending checks)
     reply_match = re.match(r'^reply\s*(?:to\s*)?(?:email\s*)?#?(\d+)$', current_input, re.IGNORECASE)
@@ -370,6 +425,7 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
         if response.tool_calls:
             tool_results = []
             fetched_emails = None  # Track fetched emails for reply-by-number feature
+            emails_visible = False
 
             for tool_call in response.tool_calls:
                 tool_name = tool_call["name"]
@@ -391,9 +447,19 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                                 parsed_emails = json.loads(json_str)
                                 if isinstance(parsed_emails, list) and parsed_emails:
                                     fetched_emails = parsed_emails
+                                    emails_visible = True
                                     logger.info(f"[INBOX_AGENT] Stored {len(fetched_emails)} emails for reply-by-number")
                             except Exception as parse_err:
                                 logger.warning(f"[INBOX_AGENT] Could not parse emails for storage: {parse_err}")
+                        elif tool_name == "summarize_emails":
+                            try:
+                                parsed_summary = json.loads(result)
+                                summary_emails = parsed_summary.get("emails")
+                                if isinstance(summary_emails, list) and summary_emails:
+                                    fetched_emails = summary_emails
+                                    logger.info(f"[INBOX_AGENT] Stored {len(fetched_emails)} emails from summary for follow-up")
+                            except Exception as parse_err:
+                                logger.warning(f"[INBOX_AGENT] Could not parse summary emails for storage: {parse_err}")
                         break
 
             # Generate response with tool results
@@ -410,9 +476,12 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                     if "```json" in result and "```json" not in response_content:
                         response_content = f"{response_content}\n\n{result}"
 
-                # Add hint for reply-by-number if emails were fetched
+                # Add hint if emails were fetched
                 if fetched_emails:
-                    response_content = f"{response_content}\n\n*Reply to any email by saying 'reply 1', 'reply 2', etc.*"
+                    if emails_visible:
+                        response_content = f"{response_content}\n\n*Reply to any email by saying 'reply 1', 'reply 2', etc.*"
+                    else:
+                        response_content = f"{response_content}\n\n*Want to see the emails? Say 'show these emails'.*"
 
                 result_dict = {
                     "response": response_content,
@@ -462,6 +531,83 @@ def draft_agent_node(state: EmailAgentState) -> dict:
         current_input = state.get("current_input", "")
         pending = state.get("draft_pending")
 
+        def _extract_first_email(text: str) -> Optional[str]:
+            import re
+            match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text or "")
+            return match.group(0) if match else None
+
+        def _extract_subject_body(text: str) -> tuple[str, str]:
+            import re
+            subject_match = re.search(r"subject\s*[:\-]\s*(.+?)(?=body\s*[:\-]|$)", text, re.IGNORECASE | re.DOTALL)
+            body_match = re.search(r"body\s*[:\-]\s*(.+)", text, re.IGNORECASE | re.DOTALL)
+            subject = subject_match.group(1).strip() if subject_match else ""
+            body = body_match.group(1).strip() if body_match else ""
+            return subject, body
+
+        def _is_create_draft_intent(text: str) -> bool:
+            import re
+            lower = (text or "").lower()
+            if any(kw in lower for kw in ["update", "edit", "delete", "remove", "send", "reply"]):
+                return False
+            if re.search(r"\b(create|compose|write|make)\b", lower) and re.search(r"\b(email|draft|mail)\b", lower):
+                return True
+            return re.search(r"\bdraft\s+(me\s+)?(an|a|to)\b", lower) is not None
+
+        if not pending and _is_create_draft_intent(current_input):
+            recipient = _extract_first_email(current_input)
+            subject, body = _extract_subject_body(current_input)
+            context_hint = current_input
+
+            if not recipient:
+                return {
+                    "response": "I'd be happy to create that draft! What email address should I send it to?",
+                    "draft_pending": DraftPendingInfo(
+                        awaiting="recipient",
+                        subject=subject,
+                        body=body,
+                        context_hint=context_hint,
+                        auto_generate=False,
+                    ),
+                    "next_agent": "__end__",
+                }
+
+            if subject and body:
+                for tool in tools:
+                    if tool.name == "create_draft":
+                        result = tool.invoke({
+                            "recipient": recipient,
+                            "subject": subject,
+                            "body": body,
+                        })
+                        result_dict = json.loads(result)
+                        if result_dict.get("success"):
+                            return {
+                                "response": f"Draft created to {recipient} with subject '{subject}'",
+                                "next_agent": "__end__",
+                                "draft_pending": None,
+                            }
+                        return {
+                            "response": f"Failed to create draft: {result_dict.get('message', 'Unknown error')}",
+                            "next_agent": "__end__",
+                            "draft_pending": None,
+                        }
+
+            return {
+                "response": (
+                    "I can generate the subject and body for you. Would you like me to do that?\n\n"
+                    "Reply 'Yes' to auto-generate, or 'No' to provide them yourself."
+                ),
+                "draft_pending": DraftPendingInfo(
+                    awaiting="ai_generation_choice",
+                    recipient=recipient,
+                    subject=subject,
+                    body=body,
+                    context_hint=context_hint,
+                    auto_generate=False,
+                ),
+                "next_agent": "__end__",
+            }
+
         # Handle pending draft completion
         if pending:
             awaiting = pending.get("awaiting")
@@ -471,23 +617,49 @@ def draft_agent_node(state: EmailAgentState) -> dict:
 
                 # Parse user choice
                 choice = None
-                if user_input_lower in ["1", "auto", "auto-complete", "auto-complete with ai", "ai", "generate"]:
+                if user_input_lower.startswith("yes") or user_input_lower in [
+                    "1",
+                    "auto",
+                    "auto-generate",
+                    "auto generate",
+                    "autogenerate",
+                    "auto-complete",
+                    "auto-complete with ai",
+                    "ai",
+                    "generate",
+                    "go ahead",
+                    "sure",
+                    "ok",
+                    "okay",
+                ]:
                     choice = "auto"
-                elif user_input_lower in ["2", "manual", "manually", "i'll provide", "provide manually", "i'll provide subject and body manually"]:
+                elif user_input_lower.startswith("no") or user_input_lower in [
+                    "2",
+                    "manual",
+                    "manually",
+                    "i'll provide",
+                    "provide manually",
+                    "i will provide",
+                    "i want to write it",
+                    "i'll write it",
+                ]:
                     choice = "manual"
                 elif user_input_lower in ["3", "cancel"]:
                     choice = "cancel"
+                elif "auto" in user_input_lower or "generate" in user_input_lower:
+                    choice = "auto"
 
                 # Invalid choice - re-prompt
                 if choice is None:
                     return {
                         "response": (
                             "I didn't understand that choice. Please reply with:\n"
-                            "1 (or 'auto') - to auto-complete with AI\n"
-                            "2 (or 'manual') - to provide subject and body manually\n"
-                            "3 (or 'cancel') - to cancel"
+                            "Yes - to auto-generate the subject and body\n"
+                            "No - to provide them manually\n"
+                            "Cancel - to cancel"
                         ),
                         "next_agent": "__end__",
+                        "draft_pending": pending,
                     }
 
                 # Handle CANCEL
@@ -602,6 +774,7 @@ Make it professional, clear, and appropriate. The body should include:
                             "Both subject and body are required."
                         ),
                         "next_agent": "__end__",
+                        "draft_pending": pending,
                     }
 
                 # Create the draft with manual input
@@ -635,6 +808,7 @@ Make it professional, clear, and appropriate. The body should include:
                     return {
                         "response": f"'{email_input}' doesn't look like a valid email address.\nPlease provide a valid email (e.g., john@example.com)",
                         "next_agent": "__end__",
+                        "draft_pending": pending,
                     }
 
                 # Create the draft with the provided email
@@ -642,9 +816,9 @@ Make it professional, clear, and appropriate. The body should include:
                 body = pending.get("body", "")
                 context_hint = pending.get("context_hint", "")
 
-                # If subject/body empty but have context, auto-generate
-                if (not subject or not body) and (context_hint or pending.get("auto_generate")):
-                    generation_prompt = f"""Generate an email subject and body based on this context:
+                if not subject or not body:
+                    if pending.get("auto_generate"):
+                        generation_prompt = f"""Generate an email subject and body based on this context:
 Context: {context_hint or 'General email'}
 
 Recipient: {email_input}
@@ -653,16 +827,32 @@ Return JSON format:
 {{"subject": "...", "body": "..."}}
 
 Make it professional and appropriate."""
-                    try:
-                        gen_response = llm.invoke(generation_prompt)
-                        import re
-                        json_match = re.search(r'\{[^}]+\}', gen_response.content, re.DOTALL)
-                        if json_match:
-                            generated = json.loads(json_match.group())
-                            subject = generated.get("subject", subject)
-                            body = generated.get("body", body)
-                    except Exception as e:
-                        logger.warning(f"Auto-generation failed: {e}")
+                        try:
+                            gen_response = llm.invoke(generation_prompt)
+                            import re
+                            json_match = re.search(r'\{[^}]+\}', gen_response.content, re.DOTALL)
+                            if json_match:
+                                generated = json.loads(json_match.group())
+                                subject = generated.get("subject", subject)
+                                body = generated.get("body", body)
+                        except Exception as e:
+                            logger.warning(f"Auto-generation failed: {e}")
+                    else:
+                        return {
+                            "response": (
+                                "I can generate the subject and body for you. Would you like me to do that?\n\n"
+                                "Reply 'Yes' to auto-generate, or 'No' to provide them yourself."
+                            ),
+                            "draft_pending": DraftPendingInfo(
+                                awaiting="ai_generation_choice",
+                                recipient=email_input,
+                                subject=subject,
+                                body=body,
+                                context_hint=context_hint,
+                                auto_generate=False,
+                            ),
+                            "next_agent": "__end__",
+                        }
 
                 # Call create_draft tool
                 for tool in tools:
@@ -758,6 +948,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                     return {
                         "response": "What would you like to reply?\n\n*You can type your message or say 'generate it for me' to have AI write a reply.*",
                         "next_agent": "__end__",
+                        "draft_pending": pending,
                     }
 
                 # Extract recipient email from sender
@@ -938,12 +1129,8 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                             # ALWAYS present choice to user before creating draft
                             return {
                                 "response": (
-                                    "I can help you create this draft. How would you like to proceed?\n\n"
-                                    "Please choose one option:\n"
-                                    "1. Auto-complete with AI - I'll generate the subject and body based on context\n"
-                                    "2. I'll provide subject and body manually\n"
-                                    "3. Cancel\n\n"
-                                    "Reply with the number (1, 2, or 3) or the option name."
+                                    "I can generate the subject and body for you. Would you like me to do that?\n\n"
+                                    "Reply 'Yes' to auto-generate, or 'No' to provide them yourself."
                                 ),
                                 "draft_pending": DraftPendingInfo(
                                     awaiting="ai_generation_choice",
@@ -984,9 +1171,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     subject=tool_args.get("subject", ""),
                                     body=tool_args.get("body", ""),
                                     context_hint=context_hint or current_input,
-                                    auto_generate=any(kw in current_input.lower() for kw in [
-                                        "auto", "generate", "yourself", "create it"
-                                    ]),
+                                    auto_generate=False,
                                 ),
                                 "next_agent": "__end__",
                             }

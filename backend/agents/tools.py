@@ -216,6 +216,7 @@ def create_inbox_tools(user_id: Optional[str] = None):
 
             # Prepare email data for LLM summarization
             email_items = []
+            emails_for_display = []
             for email in emails[:max_emails]:
                 sender = email.get("sender", "Unknown sender")
                 subject = email.get("subject", "(No subject)")
@@ -232,6 +233,19 @@ def create_inbox_tools(user_id: Optional[str] = None):
                     f"  Date: {date}\n"
                     f"  Preview: {snippet}"
                 )
+
+                if isinstance(email, dict):
+                    email_copy = email.copy()
+                    if email_copy.get("body") and len(email_copy["body"]) > 300:
+                        email_copy["body"] = email_copy["body"][:300] + "..."
+                    emails_for_display.append(email_copy)
+                else:
+                    emails_for_display.append({
+                        "sender": sender,
+                        "subject": subject,
+                        "body": snippet,
+                        "date": date,
+                    })
 
             # Create LLM prompt for summarization
             emails_text = "\n\n".join(email_items)
@@ -264,7 +278,8 @@ def create_inbox_tools(user_id: Optional[str] = None):
                 "email_count": len(emails),
                 "time_period": time_period,
                 "importance": importance,
-            })
+                "emails": emails_for_display,
+            }, cls=DateTimeEncoder)
 
         except Exception as e:
             logger.error(f"Error summarizing emails: {e}")
