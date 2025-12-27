@@ -46,10 +46,11 @@ class DraftPendingInfo(TypedDict, total=False):
     body: Optional[str]
     context_hint: Optional[str]
     auto_generate: bool
-    awaiting: Literal["recipient", "subject", "body", "confirmation", "selection", "ai_generation_choice", "subject_and_body", "update_instruction"]
+    awaiting: Literal["recipient", "subject", "body", "confirmation", "selection", "ai_generation_choice", "subject_and_body", "update_instruction", "reply_content"]
     drafts_list: Optional[list]  # For multi-draft selection
     operation: Optional[Literal["send", "delete", "update"]]
     update_instruction: Optional[str]
+    reply_to_email: Optional[dict]  # Original email being replied to
 
 
 class AccountSelectionInfo(TypedDict, total=False):
@@ -101,12 +102,17 @@ class EmailAgentState(TypedDict, total=False):
     human_input_type: Optional[str]
     human_prompt: Optional[str]
 
+    # Listed emails for numbered reference (reply by number)
+    listed_emails: Optional[dict]  # {emails: list, listed_at: str}
+
 
 def create_initial_state(
     user_message: str,
     user_id: Optional[str] = None,
     context: Optional[str] = None,
     existing_messages: Optional[list] = None,
+    listed_emails: Optional[dict] = None,
+    draft_pending: Optional[DraftPendingInfo] = None,
 ) -> EmailAgentState:
     """Create initial state for a new conversation turn."""
     messages = existing_messages or []
@@ -122,7 +128,7 @@ def create_initial_state(
         user_id=user_id,
         response="",
         next_agent=None,
-        draft_pending=None,
+        draft_pending=draft_pending,
         account_selection=None,
         context=context,
         last_tool_result=None,
@@ -131,4 +137,5 @@ def create_initial_state(
         requires_human_input=False,
         human_input_type=None,
         human_prompt=None,
+        listed_emails=listed_emails,
     )
