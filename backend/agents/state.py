@@ -46,7 +46,7 @@ class DraftPendingInfo(TypedDict, total=False):
     body: Optional[str]
     context_hint: Optional[str]
     auto_generate: bool
-    awaiting: Literal["recipient", "subject", "body", "confirmation", "selection"]
+    awaiting: Literal["recipient", "subject", "body", "confirmation", "selection", "ai_generation_choice", "subject_and_body", "update_instruction"]
     drafts_list: Optional[list]  # For multi-draft selection
     operation: Optional[Literal["send", "delete", "update"]]
     update_instruction: Optional[str]

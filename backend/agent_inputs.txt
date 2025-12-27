@@ -1,0 +1,108 @@
+=============================================================================
+MASTER LIST OF AI AGENT INPUTS
+=============================================================================
+This file contains natural language commands to trigger every capability 
+of the Novamind Email Agent.
+
+-----------------------------------------------------------------------------
+1. INBOX & READING (The "Inbox Agent")
+-----------------------------------------------------------------------------
+
+[Basic Listing]
+- "List my connected email accounts"
+- "Show me my latest 5 emails"
+- "Check my inbox"
+- "Do I have any new mail?"
+
+[Filtering by Sender]
+- "Show me emails from 'john@example.com'"
+- "List emails from Google"
+- "Find messages from my boss"
+
+[Filtering by Date/Time]
+- "Show me emails from today"
+- "What emails did I get yesterday?"
+- "List emails from the last week"
+- "Show me emails from the last 3 months"
+
+[Filtering by Topic/Keyword]
+- "Show emails about 'Project Alpha'"
+- "Find emails with subject 'Invoice'"
+- "Search for 'meeting' in my emails"
+
+[Filtering by Importance]
+- "Show me my important emails"
+- "Do I have any urgent messages?"
+- "Check for important emails from today"
+
+[Summarization & Insights]
+- "Summarize my latest emails"
+- "Give me a summary of the email from 'alice@example.com'"
+- "What is the main point of the last email I received?"
+- "Summarize my inbox for today"
+
+[Deep Search / RAG Queries] (Uses intelligent search to find specific info)
+- "What did Bob say about the deadline?"
+- "Did I receive the contract yet?"
+- "Find the login code sent by GitHub"
+- "When is my next meeting?"
+- "What are the key takeaways from the marketing team updates?"
+
+-----------------------------------------------------------------------------
+2. DRAFTING (The "Draft Agent")
+-----------------------------------------------------------------------------
+
+[One-Shot Creation] (Provide all details at once)
+- "Draft an email to 'client@company.com' with subject 'Proposal' and body 'Attached is the file.'"
+- "Write an email to 'mom@gmail.com' saying 'Happy Birthday!'"
+
+[Interactive Creation] (Agent will ask for missing details)
+- "I need to write an email to 'boss@company.com'" (Agent asks: What should it say?)
+- "Draft a follow-up email about the interview" (Agent asks: To whom?)
+
+[Auto-Generation] (Agent invents subject/body from context)
+- "Draft a polite decline to 'recruiter@agency.com' regarding the job offer"
+- "Generate a thank you email to 'interviewer@tech.com' for their time yesterday"
+
+[Managing Drafts]
+- "Show all my drafts"
+- "Show drafts for 'client@company.com'"
+
+[Updating Drafts]
+- "Update the draft to 'client@company.com' and make it more formal"
+- "Change the body of the draft to 'bob@example.com' to say we are meeting at 3 PM"
+- "Add a closing line to the draft for 'alice@example.com'"
+
+[Deleting Drafts]
+- "Delete the draft to 'spam@example.com'"
+- "Remove the draft I wrote to 'old.client@test.com'"
+
+-----------------------------------------------------------------------------
+3. SENDING (The "Send Agent")
+-----------------------------------------------------------------------------
+
+[Immediate Send] (Sends immediately without saving as draft first)
+- "Send an email to 'colleague@work.com' right now saying 'I am running late'"
+- "Immediately send a message to 'team@project.com' with subject 'Update' and body 'Done.'"
+
+[Sending Existing Drafts]
+- "Send the draft to 'client@company.com'" (Agent will ask for confirmation)
+- "Confirm and send the draft to 'boss@company.com'"
+
+-----------------------------------------------------------------------------
+4. ORGANIZATION (The "Organization Agent")
+-----------------------------------------------------------------------------
+
+[Moving Emails]
+- "Move all emails from 'newsletter@shop.com' to 'Promotions'"
+- "Organize my inbox by moving emails from 'jira@atlassian.com' to the 'Work' folder"
+
+[Cleaning Up]
+- "Delete all spam emails"
+- "Clean up my spam folder"
+
+-----------------------------------------------------------------------------
+5. MULTI-STEP / COMPLEX WORKFLOWS
+-----------------------------------------------------------------------------
+- "Find the email from 'Client X' about the budget, summarize it, and then draft a reply saying we accept."
+- "Check if I have any emails from 'HR', and if so, move them to the 'Admin' folder."

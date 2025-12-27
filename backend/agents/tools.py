@@ -178,7 +178,102 @@ def create_inbox_tools(user_id: Optional[str] = None):
             logger.error(f"Error getting drafts for {recipient_email}: {e}")
             return json.dumps({"error": str(e)})
 
-    return [list_email_accounts, fetch_emails, query_emails, get_all_drafts, get_drafts_for_recipient]
+    @tool
+    def summarize_emails(
+        time_period: str = "today",
+        importance: bool = False,
+        max_emails: int = 25,
+    ) -> str:
+        """
+        Generate an AI summary of emails from a specific time period.
+
+        Args:
+            time_period: Time period to summarize (today, yesterday, last_week, last_month)
+            importance: If True, only summarize important emails
+            max_emails: Maximum number of emails to include in summary (default 25)
+
+        Returns:
+            JSON string with summary and email details
+        """
+        try:
+            # Get LLM instance
+            from agents.supervisor import get_llm
+            llm = get_llm()
+
+            # Fetch emails based on criteria
+            emails = _fetch_mails(
+                time_period=time_period,
+                importance=importance,
+                max_results=max_emails,
+                user_id=user_id,
+            )
+
+            if not emails or not isinstance(emails, list):
+                return json.dumps({
+                    "success": False,
+                    "message": f"No emails found for {time_period}",
+                })
+
+            # Prepare email data for LLM summarization
+            email_items = []
+            for email in emails[:max_emails]:
+                sender = email.get("sender", "Unknown sender")
+                subject = email.get("subject", "(No subject)")
+                body = email.get("body", "")
+                date = email.get("date", "")
+
+                # Truncate body for summary
+                snippet = " ".join(body.split())[:200]
+                if len(snippet) >= 200:
+                    snippet = snippet + "..."
+
+                email_items.append(
+                    f"- **{subject}** from {sender}\n"
+                    f"  Date: {date}\n"
+                    f"  Preview: {snippet}"
+                )
+
+            # Create LLM prompt for summarization
+            emails_text = "\n\n".join(email_items)
+            importance_label = "important " if importance else ""
+            period_label = time_period.replace("_", " ")
+
+            prompt = (
+                f"You are an email assistant. Create a concise, helpful summary of the user's "
+                f"{importance_label}emails from {period_label}.\n\n"
+                f"Guidelines:\n"
+                f"- Write 2-4 sentences in natural, conversational language\n"
+                f"- Highlight key topics, action items, and important senders\n"
+                f"- Group similar emails together (e.g., 'several updates from the team')\n"
+                f"- Mention any urgent or time-sensitive matters\n"
+                f"- Do NOT use bullet points, JSON, or code formatting\n\n"
+                f"Emails to summarize ({len(emails)} total):\n\n"
+                f"{emails_text}"
+            )
+
+            # Generate summary with LLM
+            summary_text = llm.invoke(prompt).content.strip()
+
+            # Clean up any code fences or JSON that might have leaked through
+            import re
+            summary_text = re.sub(r'```[\s\S]*?```', '', summary_text).strip()
+
+            return json.dumps({
+                "success": True,
+                "summary": summary_text,
+                "email_count": len(emails),
+                "time_period": time_period,
+                "importance": importance,
+            })
+
+        except Exception as e:
+            logger.error(f"Error summarizing emails: {e}")
+            return json.dumps({
+                "success": False,
+                "message": f"Failed to summarize emails: {str(e)}",
+            })
+
+    return [list_email_accounts, fetch_emails, query_emails, get_all_drafts, get_drafts_for_recipient, summarize_emails]
 
 
 # =============================================================================
