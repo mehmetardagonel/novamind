@@ -46,6 +46,7 @@
                 class="message-text"
                 v-html="formatMessageText(message.text)"
               ></p>
+
               <p
                 v-else-if="
                   message.role === 'bot' &&
@@ -57,6 +58,7 @@
                 Here are the emails I found:
               </p>
 
+              <!-- ✅ Keep 1st file behavior (ChatEmailList) -->
               <ChatEmailList
                 v-if="message.emails && message.emails.length > 0"
                 :emails="message.emails"
@@ -82,18 +84,15 @@
                 </span>
               </div>
               <div class="voice-inline-wave">
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
+                <span></span><span></span><span></span><span></span
+                ><span></span>
               </div>
             </div>
           </div>
 
           <div class="chat-input-area">
             <div class="input-wrapper">
-              <!-- Normal chat input -->
+              <!-- ✅ 2nd UI behavior: swap input for voice bar -->
               <template v-if="!isVoiceActive && !isRecording && !isListening">
                 <input
                   type="text"
@@ -136,7 +135,6 @@
                 </button>
               </template>
 
-              <!-- Voice recorder bar (replaces the input) -->
               <template v-else>
                 <div class="voice-bar" :class="{ recording: isRecording }">
                   <div class="voice-bar-left">
@@ -154,6 +152,8 @@
                           {{
                             isRecording
                               ? "Tap stop to finish"
+                              : isListening
+                              ? "Listening…"
                               : "Processing audio…"
                           }}
                         </div>
@@ -163,11 +163,10 @@
 
                   <div class="voice-bar-wave" aria-hidden="true">
                     <span></span><span></span><span></span><span></span
-                    ><span></span> <span></span><span></span><span></span
+                    ><span></span><span></span><span></span><span></span
                     ><span></span><span></span>
                   </div>
 
-                  <!-- SAME click handler, just styled as a stop button while recording -->
                   <button
                     class="voice-bar-stop"
                     @click="handleVoiceInput"
@@ -180,8 +179,6 @@
                     </span>
                   </button>
                 </div>
-
-                <!-- Keep mic button behavior available even in voice bar (optional, but nice) -->
               </template>
             </div>
           </div>
@@ -205,23 +202,29 @@ export default {
   setup() {
     const authStore = useAuthStore();
     const chatStore = useChatStore();
+
     const userPrompt = ref("");
     const isLoading = ref(false);
     const historyContainer = ref(null);
-    const isListening = ref(false); // Listening state for voice
-    const isVoiceThinking = ref(false); // Waiting on voice response
-    const listeningDots = ref(""); // Dot animation state
+
+    const isListening = ref(false);
+    const isVoiceThinking = ref(false);
+    const listeningDots = ref("");
     const activeRecorder = ref(null);
-    let dotInterval = null; // For managing the dot animation timer
+    let dotInterval = null;
+
     const isRecording = ref(false);
     const isSpeaking = ref(false);
+
     const audioPlayer = new Audio();
     let currentAudioUrl = null;
+
     const API_BASE_URL =
       import.meta.env.VITE_API_URL || "http://localhost:8001";
     const normalizedBase = API_BASE_URL.endsWith("/")
       ? API_BASE_URL.slice(0, -1)
       : API_BASE_URL;
+
     const API_URL = `${normalizedBase}/chat`;
     const VOICE_RESPONSE_URL = `${normalizedBase}/voice/response`;
 
@@ -262,7 +265,6 @@ export default {
 
     const formatMessageText = (text) => {
       if (!text) return "";
-      // Escape HTML entities first, then convert newlines to <br>
       const escaped = text
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -345,6 +347,7 @@ export default {
         .replace(/[:\s]+$/, "");
     };
 
+    // ✅ from 1st file (extra cleanup)
     const stripEmailBlocks = (text) => {
       if (!text) return "";
       const marker = "# Email #1";
@@ -413,25 +416,18 @@ export default {
         return true;
       };
 
-      // 1) Prefer fenced JSON blocks: ```json ... ``` (with or without newline after json)
       const fenceRegex = /```\s*json\s*([\s\S]*?)\s*```/gi;
       for (const match of text.matchAll(fenceRegex)) {
         const candidate = (match[1] || "").trim();
-        if (tryCandidate(candidate, match.index)) {
-          return result;
-        }
+        if (tryCandidate(candidate, match.index)) return result;
       }
 
-      // 2) Fallback: any fenced block that happens to contain the email array
       const anyFenceRegex = /```\s*([\s\S]*?)\s*```/g;
       for (const match of text.matchAll(anyFenceRegex)) {
         const candidate = (match[1] || "").trim();
-        if (tryCandidate(candidate, match.index)) {
-          return result;
-        }
+        if (tryCandidate(candidate, match.index)) return result;
       }
 
-      // 3) Direct parse if the whole response is JSON
       const directPayload = tryParseEmailsJson(text.trim());
       if (directPayload) {
         result.emails = directPayload.emails;
@@ -439,13 +435,11 @@ export default {
         return result;
       }
 
-      // 4) Locate a balanced JSON array substring and try parsing it
       const arrayMatch = findFirstBalancedJson(text, "[", "]");
       if (arrayMatch && tryCandidate(arrayMatch.candidate, arrayMatch.index)) {
         return result;
       }
 
-      // 5) Locate a balanced JSON object substring and try parsing it
       const objectMatch = findFirstBalancedJson(text, "{", "}");
       if (
         objectMatch &&
@@ -481,9 +475,9 @@ export default {
         text: messageText,
         emails: null,
       });
+
       userPrompt.value = "";
       scrollToBottom();
-
       isLoading.value = true;
 
       try {
@@ -512,24 +506,29 @@ export default {
           chatStore.setSessionId(chatId, data.session_id);
         }
 
-        // Handle response - extract JSON and text
         const responseText = data.response || "";
         const providedEmails = Array.isArray(data.emails) ? data.emails : null;
+
         const extracted = providedEmails
           ? { textBefore: "", emails: providedEmails, insights: null }
           : extractJsonFromText(responseText);
 
-        // Ensure we always have some text to display
         let displayText = extracted.textBefore;
+
         if (extracted.insights) {
           displayText = displayText
             ? `${displayText}\n\n${extracted.insights}`
             : extracted.insights;
         }
-        const cleanedResponse = stripJsonBlocks(stripEmailBlocks(responseText)).trim();
+
+        const cleanedResponse = stripJsonBlocks(
+          stripEmailBlocks(responseText)
+        ).trim();
+
         if (!displayText && cleanedResponse) {
           displayText = cleanedResponse;
         }
+
         if (!displayText && Array.isArray(extracted.emails)) {
           displayText = extracted.emails.length
             ? `Found ${extracted.emails.length} email(s).`
@@ -556,16 +555,14 @@ export default {
       }
     };
 
-    // New function for dot animation
     const startDotAnimation = () => {
       listeningDots.value = "";
       dotInterval = setInterval(() => {
         listeningDots.value =
           listeningDots.value.length < 3 ? listeningDots.value + "." : "";
-      }, 500); // Change dot every 0.5 seconds
+      }, 500);
     };
 
-    // New function to clear the dot animation
     const stopDotAnimation = () => {
       if (dotInterval) {
         clearInterval(dotInterval);
@@ -574,7 +571,6 @@ export default {
       listeningDots.value = "";
     };
 
-    // New function to toggle the voice input state
     const playReplyAudio = async (blob) => {
       if (currentAudioUrl) {
         URL.revokeObjectURL(currentAudioUrl);
@@ -598,7 +594,6 @@ export default {
       }
     });
 
-    // New function to handle voice input
     const handleVoiceInput = async () => {
       if (isLoading.value || !activeChat.value) return;
 
@@ -616,15 +611,18 @@ export default {
       try {
         const recorder = recordUntilSilence();
         activeRecorder.value = recorder;
+
         const audioBlob = await recorder.promise;
+
         activeRecorder.value = null;
         isRecording.value = false;
         isListening.value = false;
         isVoiceThinking.value = true;
-        if (!audioBlob || audioBlob.size === 0) {
-          return;
-        }
+
+        if (!audioBlob || audioBlob.size === 0) return;
+
         isLoading.value = true;
+
         const {
           audioBlob: replyAudio,
           sessionId,
@@ -637,9 +635,11 @@ export default {
         );
 
         const chatId = activeChat.value.id;
+
         if (sessionId) {
           await chatStore.setSessionId(chatId, sessionId);
         }
+
         if (userTranscript) {
           chatStore.appendMessage(chatId, {
             role: "user",
@@ -647,6 +647,7 @@ export default {
             emails: null,
           });
         }
+
         if (assistantReply || responseId) {
           let responseText = assistantReply || "";
           let extracted = extractJsonFromText(responseText);
@@ -656,14 +657,14 @@ export default {
               const res = await fetch(
                 `${VOICE_RESPONSE_URL}/${encodeURIComponent(responseId)}`,
                 {
-                  headers: {
-                    "X-User-Id": authStore.user?.id,
-                  },
+                  headers: { "X-User-Id": authStore.user?.id },
                 }
               );
+
               if (res.ok) {
                 const payload = await res.json();
                 responseText = payload.response_text || responseText;
+
                 if (Array.isArray(payload.emails)) {
                   extracted = {
                     textBefore: payload.text_before || "",
@@ -683,15 +684,21 @@ export default {
           }
 
           let displayText = extracted.textBefore;
+
           if (extracted.insights) {
             displayText = displayText
               ? `${displayText}\n\n${extracted.insights}`
               : extracted.insights;
           }
-          const cleanedResponse = stripJsonBlocks(stripEmailBlocks(responseText)).trim();
+
+          const cleanedResponse = stripJsonBlocks(
+            stripEmailBlocks(responseText)
+          ).trim();
+
           if (!displayText && cleanedResponse) {
             displayText = cleanedResponse;
           }
+
           if (!displayText && Array.isArray(extracted.emails)) {
             displayText = extracted.emails.length
               ? `Found ${extracted.emails.length} email(s).`
@@ -710,6 +717,7 @@ export default {
             await playReplyAudio(replyAudio);
           }
         }
+
         scrollToBottom();
       } catch (error) {
         console.error("Voice request failed:", error);
@@ -721,13 +729,13 @@ export default {
         isLoading.value = false;
         stopDotAnimation();
         activeRecorder.value = null;
+
         if (!isListening.value) {
           isSpeaking.value = false;
         }
       }
     };
 
-    // Clear interval when component is destroyed
     onUnmounted(() => {
       stopDotAnimation();
       if (currentAudioUrl) {
@@ -738,7 +746,6 @@ export default {
       audioPlayer.src = "";
     });
 
-    // Initialize chat store on mount
     onMounted(async () => {
       await chatStore.initialize();
       nextTick(scrollToBottom);
@@ -802,17 +809,15 @@ export default {
 
 <style scoped>
 /* =========================================================
-   ComposeView
+   ComposeView (2nd UI)
    - Uses MainApp theme variables (dark/light) automatically
-   - Keeps blue accent (#6c63ff)
+   - Keeps accent (#6c63ff)
    ========================================================= */
 
 .compose-view {
-  /* Only keep accent local; everything else comes from MainApp */
   --cv-primary: #6c63ff;
   --cv-primary-light: rgba(108, 99, 255, 0.16);
 
-  /* Pull from MainApp variables if present, otherwise fallback */
   --cv-app-bg: var(--app-bg, #f6f7f4);
   --cv-content-bg: var(--content-bg, rgba(255, 255, 255, 0.9));
   --cv-border: var(--border-color, rgba(17, 24, 39, 0.12));
@@ -827,7 +832,6 @@ export default {
   padding: 0 1.5rem 1.5rem 0;
   font-family: "IBM Plex Sans", "Söhne", sans-serif;
 
-  /* Keep your nice “glass + gradients”, but base color follows theme */
   background: radial-gradient(
       circle at top right,
       rgba(108, 99, 255, 0.14),
@@ -841,7 +845,6 @@ export default {
     var(--cv-app-bg);
 }
 
-/* Make gradients darker when dark theme is active (optional but nice) */
 :global(.main-app.dark-theme) .compose-view {
   background: radial-gradient(
       circle at top right,
@@ -903,12 +906,12 @@ export default {
 }
 
 .chat-list {
-  padding: 6px; /* tighter */
+  padding: 6px;
   display: flex;
   flex-direction: column;
-  gap: 4px; /* tighter spacing */
+  gap: 4px;
   overflow: auto;
-  overflow-x: hidden; /* prevent any horizontal overflow */
+  overflow-x: hidden;
   min-height: 0;
 }
 
@@ -917,15 +920,15 @@ export default {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px; /* tighter */
-  padding: 7px 8px; /* smaller rows */
+  gap: 6px;
+  padding: 7px 8px;
   border-radius: 9px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--cv-text);
   cursor: pointer;
   text-align: left;
-  min-height: 34px; /* consistent compact height */
+  min-height: 34px;
   box-sizing: border-box;
 }
 
@@ -939,23 +942,23 @@ export default {
 }
 
 .chat-list-item-title {
-  font-size: 0.86rem; /* slightly smaller */
-  line-height: 1.15; /* tighter */
+  font-size: 0.86rem;
+  line-height: 1.15;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
-  min-width: 0; /* important for flex ellipsis */
+  min-width: 0;
 }
 
 .chat-delete {
-  width: 22px; /* smaller button */
+  width: 22px;
   height: 22px;
   border: none;
   border-radius: 7px;
   background: transparent;
   cursor: pointer;
-  font-size: 16px; /* smaller X */
+  font-size: 16px;
   line-height: 1;
   color: var(--cv-text-2);
   display: grid;
@@ -981,14 +984,11 @@ export default {
   border: 1px solid var(--cv-border);
   border-radius: 18px;
   overflow: hidden;
-
-  /* Glass look but follows theme */
   background: color-mix(in srgb, var(--cv-content-bg) 78%, transparent);
   backdrop-filter: blur(12px);
   height: 100%;
 }
 
-/* Scrollable messages */
 .chat-history {
   flex-grow: 1;
   padding: 1.75rem 1.5rem 1rem;
@@ -999,7 +999,6 @@ export default {
   min-height: 0;
 }
 
-/* Message bubbles */
 .message {
   max-width: 760px;
   width: fit-content;
@@ -1048,78 +1047,6 @@ export default {
   color: inherit;
 }
 
-/* Email cards inside AI messages */
-.emails-list {
-  margin-top: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-}
-
-.email-block {
-  background: var(--cv-content-bg);
-  border: 1px solid var(--cv-border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  text-align: left;
-  color: var(--cv-text);
-}
-
-.email-header {
-  font-weight: 600;
-  color: var(--cv-primary);
-  border-bottom: 1px solid var(--cv-border);
-  padding-bottom: 4px;
-  margin-bottom: 6px;
-  font-size: 0.88rem;
-}
-
-.email-field {
-  margin-bottom: 4px;
-  font-size: 0.88rem;
-  line-height: 1.4;
-}
-
-.email-separator {
-  height: 1px;
-  background: var(--cv-border);
-  margin: 6px 0;
-}
-
-.label-badge {
-  background-color: rgba(108, 99, 255, 0.12);
-  color: var(--cv-text);
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 0.8rem;
-  font-weight: 500;
-}
-
-.email-important {
-  color: #d32f2f;
-  background-color: #ffebee;
-  padding: 3px 6px;
-  border-radius: 4px;
-  display: inline-block;
-}
-
-.email-body-content {
-  background: rgba(0, 0, 0, 0.04);
-  padding: 7px;
-  border-radius: 4px;
-  margin-top: 4px;
-  font-family: "Courier New", Courier, monospace;
-  font-size: 0.84rem;
-  white-space: pre-wrap;
-  color: var(--cv-text);
-}
-
-:global(.main-app.dark-theme) .compose-view .email-body-content {
-  background: rgba(255, 255, 255, 0.06);
-}
-
 /* Loading dots */
 .loading-indicator .dot {
   opacity: 0;
@@ -1144,7 +1071,6 @@ export default {
   }
 }
 
-/* Bottom input area */
 .chat-input-area {
   padding: 0.75rem 1rem 1rem;
   border-top: 1px solid var(--cv-border);
@@ -1174,7 +1100,6 @@ export default {
   box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.18);
 }
 
-/* Send & voice buttons */
 .inner-send,
 .inner-voice {
   position: absolute;
@@ -1220,7 +1145,7 @@ export default {
   font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
 }
 
-/* --- Voice inline indicator --- */
+/* Voice inline */
 .voice-inline {
   align-self: flex-start;
   background: rgba(17, 24, 39, 0.06);
@@ -1244,9 +1169,6 @@ export default {
   color: var(--cv-text);
 }
 
-.voice-bar-left {
-  padding-left: 2px;
-}
 .voice-inline-dot {
   width: 9px;
   height: 9px;
@@ -1304,7 +1226,7 @@ export default {
   }
 }
 
-/* --- Voice recorder bar --- */
+/* Voice bar */
 .voice-bar {
   width: 100%;
   height: 44px;
@@ -1323,70 +1245,23 @@ export default {
   box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.18);
 }
 
-.voice-bar-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: rgba(17, 24, 39, 0.3);
-}
-
-.voice-bar-dot.live {
-  background: var(--cv-primary);
-  box-shadow: 0 0 0 6px rgba(108, 99, 255, 0.12);
-  animation: voice-pulse 1.2s ease-in-out infinite;
-}
-
-.voice-bar-wave {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  height: 18px;
-  min-width: 90px;
-}
-
-/* --- Voice recorder bar --- */
-.voice-bar {
-  width: 100%;
-  height: 44px;
-  border-radius: 999px;
-  border: 1px solid var(--cv-border);
-  background: var(--cv-content-bg);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px 0 12px;
-  gap: 12px;
-}
-
-.voice-bar.recording {
-  border-color: rgba(108, 99, 255, 0.55);
-  box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.18);
-}
-
-/* Left “colored button/pill” */
 .voice-pill {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0; /* remove padding bubble */
-  border-radius: 0; /* no pill */
-  background: transparent; /* no blue background */
-  border: none; /* remove outline */
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: none;
 }
 
-/* Voice dot uses text color as a fallback so it always has contrast */
 .voice-pill-dot {
   width: 10px;
   height: 10px;
   border-radius: 999px;
-
-  /* Use text color so it auto adapts to dark/light */
   background: color-mix(in srgb, var(--cv-text) 55%, transparent);
 }
 
-/* Live dot is always your accent */
 .voice-pill-dot.live {
   background: var(--cv-primary);
   box-shadow: 0 0 0 6px rgba(108, 99, 255, 0.18);
@@ -1423,7 +1298,6 @@ export default {
   color: var(--cv-text-2);
 }
 
-/* Wave = staggered pulse, NOT synchronized block */
 .voice-bar-wave {
   flex: 1;
   display: flex;
@@ -1448,7 +1322,6 @@ export default {
   animation-iteration-count: infinite;
 }
 
-/* Uneven rhythm: different delays + different durations + slight amplitude variance */
 .voice-bar-wave span:nth-child(1) {
   animation-delay: 0s;
   animation-duration: 1.05s;
@@ -1523,7 +1396,6 @@ export default {
   }
 }
 
-/* Stop button stays same */
 .voice-bar-stop {
   width: 34px;
   height: 34px;
@@ -1546,25 +1418,101 @@ export default {
   cursor: not-allowed;
 }
 
-.voice-bar-stop {
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-  border: none;
+/* Overlay (from 1st file) */
+.voice-overlay {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(
+      circle at top,
+      rgba(108, 99, 255, 0.25),
+      transparent 60%
+    ),
+    rgba(9, 11, 13, 0.9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  z-index: 50;
+}
+
+.voice-orb {
+  position: relative;
+  width: 140px;
+  height: 140px;
   display: grid;
   place-items: center;
+}
+
+.voice-orb-core {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(108, 99, 255, 1),
+    rgba(108, 99, 255, 0.65)
+  );
+  box-shadow: 0 0 24px rgba(108, 99, 255, 0.55);
+  animation: orb-core 1.6s ease-in-out infinite;
+}
+
+.voice-orb-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid rgba(108, 99, 255, 0.35);
+  animation: orb-ring 2.4s ease-out infinite;
+}
+
+.voice-orb-ring.ring-2 {
+  animation-delay: 0.5s;
+}
+.voice-orb-ring.ring-3 {
+  animation-delay: 1s;
+}
+
+.voice-overlay-label {
+  color: #f3f4f6;
+  font-size: 1rem;
+  letter-spacing: 0.3px;
+}
+
+.voice-overlay-stop {
+  background: transparent;
+  color: #f3f4f6;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 8px 18px;
+  border-radius: 999px;
   cursor: pointer;
-  background: var(--cv-primary);
-  color: #fff;
-  flex: 0 0 auto;
+  font-weight: 600;
+  transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
-.voice-bar-stop.active {
-  background: rgba(220, 38, 38, 0.95);
+.voice-overlay-stop:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.6);
 }
 
-.voice-bar-stop:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+@keyframes orb-core {
+  0%,
+  100% {
+    transform: scale(0.9);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+@keyframes orb-ring {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.15);
+    opacity: 0;
+  }
 }
 </style>

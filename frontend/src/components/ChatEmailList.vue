@@ -3,49 +3,88 @@
     <div v-if="preparedEmails.length === 0" class="no-emails">
       No emails found.
     </div>
+
     <div v-else class="email-list">
       <div
         v-for="(item, index) in preparedEmails"
         :key="index"
         class="email-item"
-        :class="{ unread: item.email?.isUnread }"
+        :class="{
+          unread: item.email?.isUnread,
+          'is-important': getLabelValue(item.email) === 'important',
+          'is-spam': getLabelValue(item.email) === 'spam',
+        }"
       >
-        <div class="email-header">
-          <div class="sender-with-label">
-            <span class="email-sender">{{ senderLabel(item.email) }}</span>
-            <span v-if="item.email?.recipient" class="email-recipient">
+        <!-- ✅ Row 1: email number - recipient account - status - date -->
+        <div class="email-top-row">
+          <span class="email-number">#{{ index + 1 }}</span>
+
+          <span
+            v-if="destinationAccount(item.email)"
+            class="account-pill"
+            :title="destinationAccount(item.email)"
+          >
+            {{ destinationAccount(item.email) }}
+          </span>
+
+          <!-- ✅ ALWAYS shown: Normal / Important / Spam -->
+          <span
+            class="status-pill"
+            :class="`status-${getLabelValue(item.email)}`"
+          >
+            {{ getLabelText(getLabelValue(item.email)) }}
+          </span>
+
+          <span class="email-date">
+            {{ formatDate(item.email?.date || item.email?.timestamp) }}
+          </span>
+        </div>
+
+        <!-- Rest of email -->
+        <div class="email-body">
+          <div class="email-from-row">
+            <span class="avatar" aria-hidden="true">
+              {{ senderInitial(item.email) }}
+            </span>
+
+            <div class="from-block">
+              <div class="email-sender" :title="senderLabel(item.email)">
+                {{ senderLabel(item.email) }}
+              </div>
+
+              <div
+                class="email-subject"
+                :title="item.email?.subject || '(No subject)'"
+              >
+                {{ item.email?.subject || "(No subject)" }}
+              </div>
+            </div>
+
+            <span
+              v-if="item.email?.recipient"
+              class="to-hint"
+              :title="item.email.recipient"
+            >
               → {{ item.email.recipient }}
             </span>
-            <span
-              v-if="item.email?.account_email"
-              class="account-badge"
-              :title="item.email.account_email"
-            >
-              {{ item.email.account_email }}
-            </span>
-            <span
-              v-if="getLabelValue(item.email)"
-              class="ml-label"
-              :class="`ml-label-${getLabelValue(item.email)}`"
-            >
-              {{ getLabelText(getLabelValue(item.email)) }}
+          </div>
+
+          <div v-if="item.preview" class="email-preview">
+            {{ item.preview }}
+          </div>
+
+          <div v-if="item.images.length" class="email-images">
+            <img
+              v-for="(image, imageIndex) in item.images.slice(0, 3)"
+              :key="imageIndex"
+              :src="image"
+              :alt="item.email?.subject || 'Email image'"
+              class="email-image"
+            />
+            <span v-if="item.images.length > 3" class="email-images-more">
+              +{{ item.images.length - 3 }}
             </span>
           </div>
-          <span class="email-date">{{ formatDate(item.email?.date || item.email?.timestamp) }}</span>
-        </div>
-        <div class="email-subject">{{ item.email?.subject || "(No subject)" }}</div>
-        <div v-if="item.preview" class="email-preview">{{ item.preview }}</div>
-        <div v-if="item.images.length" class="email-images">
-          <img
-            v-for="(image, imageIndex) in item.images.slice(0, 3)"
-            :key="imageIndex"
-            :src="image"
-            :alt="item.email?.subject || 'Email image'"
-            class="email-image"
-          />
-          <span v-if="item.images.length > 3" class="email-images-more">
-            +{{ item.images.length - 3 }}
-          </span>
         </div>
       </div>
     </div>
@@ -69,10 +108,18 @@ export default {
       return email.sender || email.from || "Unknown";
     };
 
+    const senderInitial = (email) => {
+      const s = senderLabel(email);
+      const cleaned = String(s).replace(/["<>]/g, "").trim();
+      const letter = cleaned ? cleaned[0].toUpperCase() : "•";
+      return /[A-Z0-9]/.test(letter) ? letter : "•";
+    };
+
     const formatDate = (dateString) => {
       if (!dateString) return "";
       const date = new Date(dateString);
       if (Number.isNaN(date.getTime())) return String(dateString);
+
       const today = new Date();
       if (date.toDateString() === today.toDateString()) {
         return date.toLocaleTimeString([], {
@@ -80,26 +127,36 @@ export default {
           minute: "2-digit",
         });
       }
+
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
-      if (date.toDateString() === yesterday.toDateString()) {
-        return "Yesterday";
-      }
-      return date.toLocaleDateString([], { month: "short", day: "numeric" });
+      if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+
+      return date.toLocaleDateString([], {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      });
     };
 
     const stripCssNoise = (text) => {
       if (!text) return "";
-      const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+      const lines = text
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
       const filtered = lines.filter((line) => {
         const lower = line.toLowerCase();
         if (lower.startsWith("@font-face")) return false;
         if (lower.startsWith("@media")) return false;
-        if (/^[.#]?[a-z0-9_-]+\s*\{/.test(lower) && /:/.test(lower)) return false;
+        if (/^[.#]?[a-z0-9_-]+\s*\{/.test(lower) && /:/.test(lower))
+          return false;
         if (/[{}]/.test(line) && /:/.test(line) && /;/.test(line)) return false;
         if (lower.includes("font-family") && lower.includes(";")) return false;
         return true;
       });
+
       return filtered.join(" ");
     };
 
@@ -108,16 +165,19 @@ export default {
       const html = String(body);
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, "text/html");
-      doc.querySelectorAll("style,script,head,meta,link,noscript").forEach((node) => {
-        node.remove();
-      });
-      const rawText = (doc.body && doc.body.textContent) || doc.textContent || "";
+      doc
+        .querySelectorAll("style,script,head,meta,link,noscript")
+        .forEach((n) => n.remove());
+      const rawText =
+        (doc.body && doc.body.textContent) || doc.textContent || "";
       return stripCssNoise(rawText.replace(/\s+/g, " ").trim());
     };
 
     const extractImages = (body, existingImages) => {
       if (Array.isArray(existingImages) && existingImages.length > 0) {
-        return existingImages.filter((src) => typeof src === "string" && !src.startsWith("cid:"));
+        return existingImages.filter(
+          (src) => typeof src === "string" && !src.startsWith("cid:")
+        );
       }
       if (!body) return [];
       const html = String(body);
@@ -137,26 +197,72 @@ export default {
 
     const buildPreview = (text) => {
       if (!text) return "";
-      return text.substring(0, 100) + (text.length > 100 ? "..." : "");
+      return text.substring(0, 120) + (text.length > 120 ? "…" : "");
     };
 
     const getLabelText = (prediction) => {
-      const labels = {
-        spam: "Spam",
-        ham: "Normal",
-        important: "Important",
-      };
-      return labels[prediction] || prediction;
+      const labels = { spam: "Spam", ham: "Normal", important: "Important" };
+      return labels[prediction] || "Normal";
     };
 
+    // ✅ ALWAYS returns one of: important | spam | ham
     const getLabelValue = (email) => {
-      if (!email || typeof email !== "object") return null;
+      if (!email || typeof email !== "object") return "ham";
+
+      // explicit flags
       if (email.is_important) return "important";
+      if (email.is_spam) return "spam";
+
+      // gmail-style label ids
       const labels = Array.isArray(email.label_ids) ? email.label_ids : [];
-      if (labels.some((label) => String(label).toUpperCase() === "IMPORTANT")) {
-        return "important";
-      }
-      return email.ml_prediction || null;
+      const upper = labels.map((l) => String(l).toUpperCase());
+      if (upper.includes("IMPORTANT")) return "important";
+      if (upper.includes("SPAM")) return "spam";
+
+      // ML prediction
+      const ml = String(email.ml_prediction || "").toLowerCase();
+      if (ml === "important") return "important";
+      if (ml === "spam") return "spam";
+
+      // default
+      return "ham";
+    };
+
+    // connected account destination
+    const destinationAccount = (email) => {
+      if (!email || typeof email !== "object") return "";
+
+      const candidates = [
+        email.account_email,
+        email.accountEmail,
+        email.mailbox_email,
+        email.mailbox,
+        email.user_email,
+        email.userEmail,
+
+        // fallbacks
+        email.recipient,
+        email.delivered_to,
+        email.deliveredTo,
+        email.to,
+        email.to_email,
+      ];
+
+      let val = candidates.find(
+        (v) => v !== undefined && v !== null && v !== ""
+      );
+      if (!val) return "";
+
+      if (Array.isArray(val)) val = val[0];
+      if (val && typeof val === "object")
+        val = val.email || val.address || val.value || "";
+
+      const s = String(val).trim();
+      if (!s) return "";
+
+      const first = s.split(/[;,]/)[0].trim();
+      const m = first.match(/<([^>]+)>/);
+      return (m ? m[1] : first).trim();
     };
 
     const preparedEmails = computed(() =>
@@ -173,9 +279,11 @@ export default {
 
     return {
       senderLabel,
+      senderInitial,
       formatDate,
       getLabelText,
       getLabelValue,
+      destinationAccount,
       preparedEmails,
     };
   },
@@ -183,16 +291,30 @@ export default {
 </script>
 
 <style scoped>
+/* ✅ FULL UI CSS (your nice version) */
+
 .chat-email-list {
-  border: 1px solid var(--border-color, #e0e0e0);
-  border-radius: 12px;
-  background-color: var(--content-bg, #ffffff);
+  --accent: var(--cv-primary, #6c63ff);
+  --border: var(--cv-border, rgba(17, 24, 39, 0.12));
+  --border-soft: var(--cv-border-light, rgba(17, 24, 39, 0.08));
+  --bg: color-mix(
+    in srgb,
+    var(--cv-content-bg, rgba(255, 255, 255, 0.9)) 88%,
+    transparent
+  );
+  --text: var(--cv-text, #1f2328);
+  --muted: var(--cv-text-2, #667085);
+  --hover: var(--cv-hover, rgba(17, 24, 39, 0.05));
+
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 16px;
+  background: var(--bg);
   overflow: hidden;
 }
 
 .no-emails {
   padding: 1rem 1.25rem;
-  color: var(--text-secondary, #667085);
+  color: var(--muted);
   font-size: 0.95rem;
 }
 
@@ -202,116 +324,155 @@ export default {
 }
 
 .email-item {
-  background-color: var(--read-email-bg, #f7f8fa);
-  border-bottom: 1px solid var(--border-color, #e0e0e0);
-  padding: 1rem 1.25rem;
-  transition: background-color 0.2s ease;
-}
-
-.email-item.unread {
-  background-color: var(--content-bg, #ffffff);
+  border-bottom: 1px solid var(--border-soft);
+  padding: 12px 12px 14px;
+  background: transparent;
 }
 
 .email-item:last-child {
   border-bottom: none;
 }
 
-.email-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.5rem;
-}
-
-.sender-with-label {
+.email-top-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  flex: 1;
-  min-width: 0;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border-soft));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-.email-sender {
-  font-weight: 500;
-  color: var(--text-secondary, #667085);
-  font-size: 1.05rem;
-  white-space: nowrap;
+.email-number {
+  font-weight: 700;
+  font-size: 0.78rem;
+  color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.account-pill {
+  max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.email-recipient {
-  font-weight: 600;
-  color: #1976d2;
-  margin-left: 6px;
-  font-size: 1.05rem;
-}
-
-.account-badge {
-  display: inline-block;
-  padding: 0.15rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.65rem;
-  font-weight: 500;
   white-space: nowrap;
-  flex-shrink: 0;
-  background-color: #e3f2fd;
-  color: #1565c0;
-  border: 1px solid #bbdefb;
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: color-mix(in srgb, var(--accent) 92%, var(--text));
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-.ml-label {
-  display: inline-block;
-  padding: 0.15rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.7rem;
-  font-weight: 600;
+.status-pill {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.3px;
   text-transform: uppercase;
-  white-space: nowrap;
-  flex-shrink: 0;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
 }
 
-.ml-label-spam {
-  background-color: #fee;
-  color: #c33;
-  border: 1px solid #fcc;
+/* ✅ IMPORTANT/SPAM/NORMAL */
+.status-important {
+  background: rgba(245, 158, 11, 0.14);
+  color: rgb(180, 83, 9);
+  border-color: rgba(245, 158, 11, 0.28);
 }
 
-.ml-label-important {
-  background-color: #fff3cd;
-  color: #856404;
-  border: 1px solid #ffeaa7;
+.status-ham {
+  background: rgba(34, 197, 94, 0.12);
+  color: rgb(21, 128, 61);
+  border-color: rgba(34, 197, 94, 0.24);
 }
 
-.ml-label-ham {
-  background-color: #d4edda;
-  color: #155724;
-  border: 1px solid #c3e6cb;
-}
-
-.email-subject {
-  font-weight: 500;
-  font-size: 1rem;
-  color: var(--text-secondary, #667085);
-  margin-bottom: 0.5rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.status-spam {
+  background: rgba(239, 68, 68, 0.12);
+  color: rgb(185, 28, 28);
+  border-color: rgba(239, 68, 68, 0.24);
 }
 
 .email-date {
-  font-size: 0.8rem;
-  color: var(--text-secondary, #667085);
-  font-weight: 500;
+  margin-left: auto;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--muted);
   white-space: nowrap;
 }
 
-.email-preview {
+.email-body {
+  padding: 10px 8px 0;
+}
+
+.email-from-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  color: color-mix(in srgb, var(--accent) 92%, var(--text));
+  font-weight: 800;
   font-size: 0.9rem;
-  color: var(--text-secondary, #667085);
+}
+
+.from-block {
+  min-width: 0;
+  flex: 1;
+}
+
+.email-sender {
+  font-weight: 750;
+  color: var(--text);
+  font-size: 0.92rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.email-subject {
+  margin-top: 2px;
+  font-weight: 650;
+  font-size: 0.9rem;
+  color: color-mix(in srgb, var(--text) 85%, var(--muted));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.to-hint {
+  flex: 0 0 auto;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: rgba(17, 24, 39, 0.03);
+}
+
+.email-preview {
+  margin-top: 8px;
+  font-size: 0.86rem;
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -319,28 +480,28 @@ export default {
 
 .email-images {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.6rem;
+  gap: 8px;
+  margin-top: 10px;
   align-items: center;
   flex-wrap: wrap;
 }
 
 .email-image {
-  width: 72px;
-  height: 48px;
+  width: 76px;
+  height: 50px;
   object-fit: cover;
-  border-radius: 6px;
-  border: 1px solid #e5e7eb;
-  background-color: #f3f4f6;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background-color: rgba(17, 24, 39, 0.04);
 }
 
 .email-images-more {
   font-size: 0.75rem;
-  font-weight: 600;
-  color: #475467;
-  background-color: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  font-weight: 750;
+  color: var(--muted);
+  background: rgba(17, 24, 39, 0.04);
+  border: 1px solid var(--border-soft);
   border-radius: 999px;
-  padding: 0.2rem 0.5rem;
+  padding: 0.2rem 0.55rem;
 }
 </style>
