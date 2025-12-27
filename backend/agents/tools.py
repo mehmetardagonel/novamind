@@ -7,6 +7,7 @@ fragile pipe-separated string parsing that caused LLM hallucinations.
 
 import json
 import logging
+import re
 from typing import Optional
 from datetime import datetime
 
@@ -44,6 +45,57 @@ from schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+IMG_SRC_RE = re.compile(r"<img[^>]+src=['\"]?([^'\" >]+)", re.IGNORECASE)
+
+
+def _extract_image_urls(body: Optional[str]) -> list:
+    if not body:
+        return []
+    urls = []
+    for match in IMG_SRC_RE.findall(str(body)):
+        if not match:
+            continue
+        cleaned = match.strip()
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered.startswith("cid:") or lowered.startswith("data:"):
+            continue
+        urls.append(cleaned)
+    seen = set()
+    deduped = []
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped.append(url)
+    return deduped
+
+
+def _filter_images(images: Optional[list]) -> list:
+    if not isinstance(images, list):
+        return []
+    filtered = []
+    for src in images:
+        if not isinstance(src, str):
+            continue
+        lowered = src.lower()
+        if lowered.startswith("cid:") or lowered.startswith("data:"):
+            continue
+        filtered.append(src)
+    return filtered
+
+
+def _apply_images(email: dict) -> dict:
+    if not isinstance(email, dict):
+        return email
+    images = _extract_image_urls(email.get("body"))
+    if not images:
+        images = _filter_images(email.get("images"))
+    if images:
+        email["images"] = images
+    return email
 
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -125,8 +177,9 @@ def create_inbox_tools(user_id: Optional[str] = None):
                 emails_for_json = []
                 for email in result:
                     e_copy = email.copy() if isinstance(email, dict) else email
-                    if isinstance(e_copy, dict) and "body" in e_copy:
-                        if e_copy["body"] and len(e_copy["body"]) > 200:
+                    if isinstance(e_copy, dict):
+                        _apply_images(e_copy)
+                        if e_copy.get("body") and len(e_copy["body"]) > 200:
                             e_copy["body"] = e_copy["body"][:200] + "..."
                     emails_for_json.append(e_copy)
 
@@ -158,6 +211,16 @@ def create_inbox_tools(user_id: Optional[str] = None):
         """Get all draft emails from the user's account."""
         try:
             result = _get_drafts(user_id=user_id)
+            if isinstance(result, list):
+                drafts_for_json = []
+                for draft in result:
+                    d_copy = draft.copy() if isinstance(draft, dict) else draft
+                    if isinstance(d_copy, dict):
+                        _apply_images(d_copy)
+                        if d_copy.get("body") and len(d_copy["body"]) > 200:
+                            d_copy["body"] = d_copy["body"][:200] + "..."
+                    drafts_for_json.append(d_copy)
+                return json.dumps(drafts_for_json, indent=2, cls=DateTimeEncoder)
             return json.dumps(result, indent=2, cls=DateTimeEncoder)
         except Exception as e:
             logger.error(f"Error getting drafts: {e}")
@@ -173,6 +236,16 @@ def create_inbox_tools(user_id: Optional[str] = None):
         """
         try:
             result = _get_drafts_for_recipient(recipient_email, user_id=user_id)
+            if isinstance(result, list):
+                drafts_for_json = []
+                for draft in result:
+                    d_copy = draft.copy() if isinstance(draft, dict) else draft
+                    if isinstance(d_copy, dict):
+                        _apply_images(d_copy)
+                        if d_copy.get("body") and len(d_copy["body"]) > 200:
+                            d_copy["body"] = d_copy["body"][:200] + "..."
+                    drafts_for_json.append(d_copy)
+                return json.dumps(drafts_for_json, indent=2, cls=DateTimeEncoder)
             return json.dumps(result, indent=2, cls=DateTimeEncoder)
         except Exception as e:
             logger.error(f"Error getting drafts for {recipient_email}: {e}")
@@ -236,6 +309,7 @@ def create_inbox_tools(user_id: Optional[str] = None):
 
                 if isinstance(email, dict):
                     email_copy = email.copy()
+                    _apply_images(email_copy)
                     if email_copy.get("body") and len(email_copy["body"]) > 300:
                         email_copy["body"] = email_copy["body"][:300] + "..."
                     emails_for_display.append(email_copy)

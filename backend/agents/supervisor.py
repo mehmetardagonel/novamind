@@ -249,8 +249,9 @@ def supervisor_node(state: EmailAgentState) -> dict:
 
     current_input = state.get("current_input", "").strip()
 
-    show_match = re.search(r"\b(show|list|display)\b.*\b(those|these|them)\b", current_input, re.IGNORECASE)
-    if show_match:
+    show_match = re.search(r"\b(show|list|display|give)\b.*\b(those|these|them|that)\b", current_input, re.IGNORECASE)
+    has_time_filter = re.search(r"\b(today|yesterday|last|week|month|from|since|until)\b", current_input, re.IGNORECASE)
+    if show_match and not has_time_filter:
         listed_emails = state.get("listed_emails")
         if not listed_emails or not listed_emails.get("emails"):
             return {
@@ -258,16 +259,25 @@ def supervisor_node(state: EmailAgentState) -> dict:
                 "next_agent": "__end__",
             }
 
-        formatted = _format_email_cards(listed_emails["emails"])
-        if not formatted:
+        emails = listed_emails["emails"]
+        list_type = listed_emails.get("list_type", "emails")
+        if not emails:
             return {
                 "response": "I couldn't format those emails. Please try fetching them again.",
                 "next_agent": "__end__",
             }
 
+        if list_type == "drafts":
+            return {
+                "response": f"Found {len(emails)} drafts.",
+                "next_agent": "__end__",
+                "display_emails": emails,
+            }
+
         return {
-            "response": f"{formatted}\n\n*Reply to any email by saying 'reply 1', 'reply 2', etc.*",
+            "response": f"Found {len(emails)} emails.\n\n*Reply to any email by saying 'reply 1', 'reply 2', etc.*",
             "next_agent": "__end__",
+            "display_emails": emails,
         }
 
     # Check for "reply N" pattern FIRST (before pending checks)
@@ -283,6 +293,11 @@ def supervisor_node(state: EmailAgentState) -> dict:
             }
 
         emails = listed_emails["emails"]
+        if listed_emails.get("list_type") == "drafts":
+            return {
+                "response": "Those are drafts. Replying is only available for inbox emails. Please fetch emails to reply.",
+                "next_agent": "__end__",
+            }
         if email_number < 1 or email_number > len(emails):
             return {
                 "response": f"Invalid email number. Please choose between 1 and {len(emails)}.",
@@ -344,6 +359,15 @@ What would you like to reply?
             return {"next_agent": "draft"}
 
     if state.get("account_selection"):
+        return {"next_agent": "inbox"}
+
+    draft_list_match = re.search(r"\bdraft(s)?\b", current_input, re.IGNORECASE) and re.search(
+        r"\b(show|list|display|get|fetch|view|see)\b", current_input, re.IGNORECASE
+    )
+    draft_action_match = re.search(
+        r"\b(create|compose|write|make|update|delete|send)\b", current_input, re.IGNORECASE
+    )
+    if draft_list_match and not draft_action_match:
         return {"next_agent": "inbox"}
 
     # Use LLM to determine routing
@@ -414,9 +438,125 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
         tools = create_inbox_tools(user_id=state.get("user_id"))
         llm_with_tools = llm.bind_tools(tools)
 
+        current_input = state.get("current_input", "")
+        current_lower = current_input.lower()
+
+        def _parse_time_period(text: str) -> Optional[str]:
+            if "yesterday" in text:
+                return "yesterday"
+            if "today" in text:
+                return "today"
+            if "last 3 months" in text or "last three months" in text:
+                return "last_3_months"
+            if "last week" in text or "this week" in text:
+                return "last_week"
+            if "last month" in text or "this month" in text:
+                return "last_month"
+            return None
+
+        def _parse_provider(text: str) -> Optional[str]:
+            if "gmail" in text:
+                return "gmail"
+            if "outlook" in text:
+                return "outlook"
+            return None
+
+        def _is_draft_list_request(text: str) -> bool:
+            if not re.search(r"\bdraft(s)?\b", text):
+                return False
+            if re.search(r"\b(create|compose|write|make|update|delete|send)\b", text):
+                return False
+            if re.search(r"\b(show|list|display|get|fetch|view|see)\b", text):
+                return True
+            return "my drafts" in text
+
+        def _wants_show_emails(text: str) -> bool:
+            return bool(
+                re.search(r"\b(show|display|list|see|give)\b", text)
+                and re.search(r"\b(email|emails|mail|mails)\b", text)
+            )
+
+        wants_show_emails = _wants_show_emails(current_lower)
+
+        if _is_draft_list_request(current_lower):
+            draft_tool = next((tool for tool in tools if tool.name == "get_all_drafts"), None)
+            recipient_match = re.search(
+                r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+                current_input,
+            )
+            if recipient_match:
+                draft_tool = next(
+                    (tool for tool in tools if tool.name == "get_drafts_for_recipient"),
+                    draft_tool,
+                )
+            if draft_tool:
+                draft_args = {}
+                if recipient_match and draft_tool.name == "get_drafts_for_recipient":
+                    draft_args["recipient_email"] = recipient_match.group(0)
+                result = draft_tool.invoke(draft_args)
+                try:
+                    parsed_drafts = json.loads(result)
+                    if isinstance(parsed_drafts, list):
+                        response_content = f"Found {len(parsed_drafts)} drafts."
+                        return {
+                            "response": response_content,
+                            "next_agent": "__end__",
+                            "last_tool_result": {"results": [result]},
+                            "display_emails": parsed_drafts,
+                            "listed_emails": {
+                                "emails": parsed_drafts,
+                                "listed_at": datetime.now().isoformat(),
+                                "list_type": "drafts",
+                            },
+                        }
+                except Exception as parse_err:
+                    logger.warning(f"[INBOX_AGENT] Draft list parse failed: {parse_err}")
+
+        def _is_list_request(text: str) -> bool:
+            if "summary" in text or "summarize" in text:
+                return False
+            if re.search(r"\b(show|list|display|get|fetch|read)\b", text) and re.search(
+                r"\b(email|emails|mail|mails)\b", text
+            ):
+                return True
+            if "last" in text and re.search(r"\b(email|emails|mail|mails)\b", text):
+                return True
+            return False
+
+        if _is_list_request(current_lower):
+            fetch_tool = next((tool for tool in tools if tool.name == "fetch_emails"), None)
+            if fetch_tool:
+                fetch_args = {
+                    "time_period": _parse_time_period(current_lower),
+                    "importance": "important" in current_lower,
+                    "provider": _parse_provider(current_lower),
+                }
+                fetch_args = {k: v for k, v in fetch_args.items() if v is not None}
+                result = fetch_tool.invoke(fetch_args)
+                try:
+                    json_str = result
+                    if "```json" in result:
+                        json_str = result.split("```json")[1].split("```")[0].strip()
+                    parsed_emails = json.loads(json_str)
+                    if isinstance(parsed_emails, list):
+                        response_content = f"Found {len(parsed_emails)} emails.\n\n*Reply to any email by saying 'reply 1', 'reply 2', etc.*"
+                        return {
+                            "response": response_content,
+                            "next_agent": "__end__",
+                            "last_tool_result": {"results": [result]},
+                            "display_emails": parsed_emails,
+                            "listed_emails": {
+                                "emails": parsed_emails,
+                                "listed_at": datetime.now().isoformat(),
+                                "list_type": "emails",
+                            },
+                        }
+                except Exception as parse_err:
+                    logger.warning(f"[INBOX_AGENT] Direct fetch parse failed: {parse_err}")
+
         messages = [
             SystemMessage(content=INBOX_AGENT_PROMPT),
-            HumanMessage(content=state.get("current_input", "")),
+            HumanMessage(content=current_input),
         ]
 
         response = llm_with_tools.invoke(messages)
@@ -426,6 +566,10 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
             tool_results = []
             fetched_emails = None  # Track fetched emails for reply-by-number feature
             emails_visible = False
+            fetch_emails_called = False
+            summary_text = None
+            summary_emails = None
+            list_type = "emails"
 
             for tool_call in response.tool_calls:
                 tool_name = tool_call["name"]
@@ -440,6 +584,8 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
 
                         # Extract emails from fetch_emails for reply-by-number feature
                         if tool_name == "fetch_emails":
+                            fetch_emails_called = True
+                            list_type = "emails"
                             try:
                                 json_str = result
                                 if "```json" in result:
@@ -451,12 +597,25 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                                     logger.info(f"[INBOX_AGENT] Stored {len(fetched_emails)} emails for reply-by-number")
                             except Exception as parse_err:
                                 logger.warning(f"[INBOX_AGENT] Could not parse emails for storage: {parse_err}")
+                        elif tool_name in ("get_all_drafts", "get_drafts_for_recipient"):
+                            fetch_emails_called = True
+                            list_type = "drafts"
+                            try:
+                                parsed_emails = json.loads(result)
+                                if isinstance(parsed_emails, list):
+                                    fetched_emails = parsed_emails
+                                    emails_visible = True
+                                    logger.info(f"[INBOX_AGENT] Stored {len(fetched_emails)} drafts for display")
+                            except Exception as parse_err:
+                                logger.warning(f"[INBOX_AGENT] Could not parse drafts for storage: {parse_err}")
                         elif tool_name == "summarize_emails":
                             try:
                                 parsed_summary = json.loads(result)
+                                summary_text = parsed_summary.get("summary") or parsed_summary.get("message")
                                 summary_emails = parsed_summary.get("emails")
                                 if isinstance(summary_emails, list) and summary_emails:
                                     fetched_emails = summary_emails
+                                    list_type = "emails"
                                     logger.info(f"[INBOX_AGENT] Stored {len(fetched_emails)} emails from summary for follow-up")
                             except Exception as parse_err:
                                 logger.warning(f"[INBOX_AGENT] Could not parse summary emails for storage: {parse_err}")
@@ -464,21 +623,59 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
 
             # Generate response with tool results
             if tool_results:
+                if summary_text:
+                    response_content = summary_text
+                    result_dict = {
+                        "response": response_content,
+                        "next_agent": "__end__",
+                        "last_tool_result": {"results": tool_results},
+                    }
+                    if summary_emails:
+                        result_dict["listed_emails"] = {
+                            "emails": summary_emails,
+                            "listed_at": datetime.now().isoformat(),
+                            "list_type": "emails",
+                        }
+                        if wants_show_emails:
+                            result_dict["display_emails"] = summary_emails
+                            response_content = f"{summary_text}\n\nFound {len(summary_emails)} emails."
+                        else:
+                            response_content = f"{summary_text}\n\n*Want to see the emails? Say 'show these emails'.*"
+                        result_dict["response"] = response_content
+                    return result_dict
+
+                if fetch_emails_called and fetched_emails:
+                    if list_type == "drafts":
+                        response_content = f"Found {len(fetched_emails)} drafts."
+                    else:
+                        response_content = f"Found {len(fetched_emails)} emails.\n\n*Reply to any email by saying 'reply 1', 'reply 2', etc.*"
+                    result_dict = {
+                        "response": response_content,
+                        "next_agent": "__end__",
+                        "last_tool_result": {"results": tool_results},
+                    }
+                    result_dict["listed_emails"] = {
+                        "emails": fetched_emails,
+                        "listed_at": datetime.now().isoformat(),
+                        "list_type": list_type,
+                    }
+                    result_dict["display_emails"] = fetched_emails
+                    return result_dict
+
                 follow_up_messages = messages + [
                     AIMessage(content=response.content or "", tool_calls=response.tool_calls),
                     HumanMessage(content=f"Tool results: {tool_results[0]}")
                 ]
                 final_response = llm.invoke(follow_up_messages)
 
-                # Ensure JSON blocks are preserved for fetch_emails
                 response_content = final_response.content
-                for result in tool_results:
-                    if "```json" in result and "```json" not in response_content:
-                        response_content = f"{response_content}\n\n{result}"
 
                 # Add hint if emails were fetched
                 if fetched_emails:
-                    if emails_visible:
+                    if list_type == "drafts":
+                        if not emails_visible:
+                            response_content = f"{response_content}\n\n*Want to see the drafts? Say 'show these drafts'.*"
+                    elif emails_visible:
                         response_content = f"{response_content}\n\n*Reply to any email by saying 'reply 1', 'reply 2', etc.*"
                     else:
                         response_content = f"{response_content}\n\n*Want to see the emails? Say 'show these emails'.*"
@@ -494,6 +691,7 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                     result_dict["listed_emails"] = {
                         "emails": fetched_emails,
                         "listed_at": datetime.now().isoformat(),
+                        "list_type": list_type,
                     }
 
                 return result_dict
@@ -1492,6 +1690,7 @@ class EmailAssistant:
         # State persistence for reply-by-number feature
         self.listed_emails = None
         self.draft_pending = None
+        self.last_result = None
 
     def chat(self, message: str, context: str = "") -> str:
         """
@@ -1521,6 +1720,7 @@ class EmailAssistant:
             # Run the graph
             config = {"configurable": {"thread_id": self.thread_id}}
             result = self.graph.invoke(state, config)
+            self.last_result = result
 
             # Persist state for next turn (reply-by-number feature)
             self.listed_emails = result.get("listed_emails", self.listed_emails)

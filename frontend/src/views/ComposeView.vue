@@ -57,54 +57,10 @@
                 Here are the emails I found:
               </p>
 
-              <div
+              <ChatEmailList
                 v-if="message.emails && message.emails.length > 0"
-                class="emails-list"
-              >
-                <div
-                  v-for="(email, eIndex) in message.emails"
-                  :key="eIndex"
-                  class="email-block"
-                >
-                  <div class="email-header">📧 Email #{{ eIndex + 1 }}</div>
-
-                  <div class="email-field">
-                    <strong>From:</strong>
-                    {{ email.from || email.sender || "Unknown" }}
-                  </div>
-
-                  <div class="email-field">
-                    <strong>Subject:</strong>
-                    {{ email.subject || "(No subject)" }}
-                  </div>
-
-                  <div v-if="email.date || email.timestamp" class="email-field">
-                    <strong>Date:</strong> {{ email.date || email.timestamp }}
-                  </div>
-
-                  <div v-if="email.label" class="email-field email-label">
-                    <strong>Label:</strong>
-                    <span class="label-badge">{{ email.label }}</span>
-                  </div>
-
-                  <div
-                    v-if="isImportantEmail(email)"
-                    class="email-field email-important"
-                  >
-                    ⭐ <strong>Important</strong>
-                  </div>
-
-                  <div class="email-separator"></div>
-
-                  <div class="email-field email-body">
-                    <strong>Body:</strong><br />
-                    <div
-                      class="email-body-content"
-                      v-html="formatBody(email.body)"
-                    ></div>
-                  </div>
-                </div>
-              </div>
+                :emails="message.emails"
+              />
             </div>
 
             <div
@@ -204,9 +160,11 @@ import { useAuthStore } from "../stores/auth";
 import { useChatStore } from "../stores/chat";
 import { sendVoicePrompt } from "@/api/voice";
 import { recordUntilSilence } from "@/utils/voiceRecorder";
+import ChatEmailList from "@/components/ChatEmailList.vue";
 
 export default {
   name: "ComposeView",
+  components: { ChatEmailList },
   setup() {
     const authStore = useAuthStore();
     const chatStore = useChatStore();
@@ -346,6 +304,14 @@ export default {
         .replace(/\s+/g, " ")
         .trim()
         .replace(/[:\s]+$/, "");
+    };
+
+    const stripEmailBlocks = (text) => {
+      if (!text) return "";
+      const marker = "# Email #1";
+      const idx = text.indexOf(marker);
+      if (idx === -1) return text;
+      return text.slice(0, idx).trim();
     };
 
     const findBalancedJson = (text, startIndex, openChar, closeChar) => {
@@ -504,7 +470,10 @@ export default {
 
         // Handle response - extract JSON and text
         const responseText = data.response || "";
-        const extracted = extractJsonFromText(responseText);
+        const providedEmails = Array.isArray(data.emails) ? data.emails : null;
+        const extracted = providedEmails
+          ? { textBefore: "", emails: providedEmails, insights: null }
+          : extractJsonFromText(responseText);
 
         // Ensure we always have some text to display
         let displayText = extracted.textBefore;
@@ -513,13 +482,16 @@ export default {
             ? `${displayText}\n\n${extracted.insights}`
             : extracted.insights;
         }
+        const cleanedResponse = stripJsonBlocks(stripEmailBlocks(responseText)).trim();
+        if (!displayText && cleanedResponse) {
+          displayText = cleanedResponse;
+        }
         if (!displayText && Array.isArray(extracted.emails)) {
           displayText = extracted.emails.length
             ? `Found ${extracted.emails.length} email(s).`
             : "No emails found.";
         } else if (!displayText) {
-          displayText =
-            stripJsonBlocks(responseText) || "I processed your request.";
+          displayText = cleanedResponse || "I processed your request.";
         }
 
         chatStore.appendMessage(chatId, {
@@ -669,12 +641,16 @@ export default {
               ? `${displayText}\n\n${extracted.insights}`
               : extracted.insights;
           }
+          const cleanedResponse = stripJsonBlocks(stripEmailBlocks(responseText)).trim();
+          if (!displayText && cleanedResponse) {
+            displayText = cleanedResponse;
+          }
           if (!displayText && Array.isArray(extracted.emails)) {
             displayText = extracted.emails.length
               ? `Found ${extracted.emails.length} email(s).`
               : "No emails found.";
           } else if (!displayText) {
-            displayText = stripJsonBlocks(responseText).trim();
+            displayText = cleanedResponse;
           }
 
           chatStore.appendMessage(chatId, {

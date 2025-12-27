@@ -270,6 +270,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     session_id: str  # Return session ID to client
+    emails: Optional[List[Dict]] = None
 
 
 @app.get("/read-email", response_model=List[EmailOut])
@@ -708,7 +709,14 @@ async def chat(
         except Exception as e:
             logger.error(f"Failed to schedule chat memory embeddings: {e}")
 
-        return ChatResponse(response=ai_response, session_id=session_id)
+        emails_payload = None
+        try:
+            last_result = getattr(chat_service, "last_result", None) or {}
+            emails_payload = last_result.get("display_emails")
+        except Exception:
+            emails_payload = None
+
+        return ChatResponse(response=ai_response, session_id=session_id, emails=emails_payload)
     except ValueError as e:
         logger.warning(f"Invalid chat input: {str(e)}")
         # User input validation error

@@ -94,6 +94,9 @@ class EmailAgentState(TypedDict, total=False):
     last_tool_result: Optional[dict]
     intermediate_steps: Optional[list]
 
+    # Optional email payload for UI rendering
+    display_emails: Optional[list]
+
     # Error handling
     error: Optional[str]
 
@@ -103,7 +106,7 @@ class EmailAgentState(TypedDict, total=False):
     human_prompt: Optional[str]
 
     # Listed emails for numbered reference (reply by number)
-    listed_emails: Optional[dict]  # {emails: list, listed_at: str}
+    listed_emails: Optional[dict]  # {emails: list, listed_at: str, list_type: "emails"|"drafts"}
 
 
 def create_initial_state(

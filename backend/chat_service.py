@@ -50,6 +50,7 @@ class ChatService:
         """
         self.user_id = user_id
         self._assistant = EmailAssistant(user_id=user_id)
+        self.last_result = None
 
         # For backward compatibility
         self.pending_selection = None
@@ -80,6 +81,7 @@ class ChatService:
 
             # Use the multi-agent assistant
             response = self._assistant.chat(raw_message, context)
+            self.last_result = getattr(self._assistant, "last_result", None)
 
             # Update legacy chat history for compatibility
             self._update_legacy_history(raw_message, response)
