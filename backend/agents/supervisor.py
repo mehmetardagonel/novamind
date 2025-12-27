@@ -22,6 +22,7 @@ from datetime import datetime
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command, interrupt
+from langgraph.errors import GraphInterrupt
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -953,6 +954,51 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                         selected_draft = draft_list[selection - 1]
                         draft_id = selected_draft.get("id")
 
+                        # Check if user provided meaningful update instructions
+                        # Generic requests should trigger AI choice prompt
+                        instruction = parsed.get("instruction", "")
+                        
+                        generic_keywords = [
+                            "update draft", "edit draft", "modify draft", "change draft",
+                            "update email", "edit email", "modify email", "change email"
+                        ]
+                        is_generic_update = (
+                            not instruction 
+                            or (any(k in instruction.lower() for k in generic_keywords) and len(instruction.split()) < 15)
+                        )
+                        
+                        logger.info(f"[DRAFT_AGENT] Update instruction: '{instruction}', is_generic: {is_generic_update}")
+
+                        if parsed["mode"] != "direct" and is_generic_update:
+                            logger.info(f"[DRAFT_AGENT] No update details provided, asking user for choice")
+                            ai_choice_prompt = "Would you like me to:\n1. Auto-generate the update based on context\n2. Let you provide the update yourself\n\nPlease enter 1 or 2:"
+
+                            ai_choice = interrupt(ai_choice_prompt)
+                            logger.info(f"[DRAFT_AGENT] User AI choice: {ai_choice}")
+
+                            if ai_choice.strip() == "1":
+                                # User wants AI to generate - set instruction for AI
+                                parsed["instruction"] = f"Update this draft to be more professional and clear"
+                            elif ai_choice.strip() == "2":
+                                # User wants to provide content manually
+                                update_content_prompt = "Please provide the updated subject and body.\nFormat: subject: <subject>\nbody: <body>"
+                                update_content = interrupt(update_content_prompt)
+                                logger.info(f"[DRAFT_AGENT] User provided update: {update_content[:100]}")
+
+                                # Parse the user's update
+                                manual_parsed = parse_update_instruction(update_content)
+                                if manual_parsed["mode"] == "direct":
+                                    parsed = manual_parsed  # Use the manually provided subject/body
+                                else:
+                                    # Treat as instruction if not in correct format
+                                    parsed["instruction"] = update_content
+                            else:
+                                return {
+                                    "response": "Invalid choice. Please say 'update draft' again and select 1 or 2.",
+                                    "next_agent": "__end__",
+                                    "draft_pending": None,
+                                }
+
                         # Update with selected draft
                         update_args = {"draft_id": draft_id}
                         if parsed["mode"] == "direct":
@@ -1671,6 +1717,9 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
             "next_agent": "__end__",
         }
 
+    except GraphInterrupt:
+        # Re-raise GraphInterrupt - it needs to propagate for interrupt() to work properly
+        raise
     except Exception as e:
         logger.error(f"[DRAFT_AGENT] Error: {e}", exc_info=True)
         return {
@@ -1968,17 +2017,87 @@ class EmailAssistant:
             # Create config with thread_id for checkpointer
             config = {"configurable": {"thread_id": self.thread_id}}
 
-            # Check if we have an interrupted state to resume
+            # Check if we should resume from an interrupted state
             try:
                 state_snapshot = self.graph.get_state(config)
-                is_interrupted = state_snapshot and state_snapshot.next and len(state_snapshot.next) > 0
+                has_next = state_snapshot and state_snapshot.next and len(state_snapshot.next) > 0
+                
+                has_interrupts = False
+                if state_snapshot and hasattr(state_snapshot, 'tasks') and state_snapshot.tasks:
+                    for task in state_snapshot.tasks:
+                        if hasattr(task, 'interrupts') and task.interrupts:
+                            has_interrupts = True
+                            break
+                            
+                is_interrupted = has_next or has_interrupts
             except Exception:
                 is_interrupted = False
 
+            # If interrupted, use Command(resume=...) to continue the graph flow
             if is_interrupted:
-                # We're in an interrupted state - resume with Command
-                logger.info(f"[ASSISTANT] Resuming from interrupt with: {message[:50]}")
+                logger.info(f"[ASSISTANT] Resuming interrupted graph with: {message[:50]}")
                 result = self.graph.invoke(Command(resume=message), config)
+                # Continue to process the result below
+            # DEPRECATED fallback: Check if we have a pending draft selection (when interrupt() doesn't work)
+            elif self.draft_pending and self.draft_pending.get("interrupt_reason") == "need_draft_selection":
+                logger.info(f"[ASSISTANT] Handling pending draft selection with input: {message}")
+                drafts_list = self.draft_pending.get("drafts_list", [])
+
+                # Validate the selection
+                if message.strip().isdigit():
+                    selection = int(message.strip())
+                    if 1 <= selection <= len(drafts_list):
+                        selected_draft = drafts_list[selection - 1]
+                        draft_id = selected_draft.get("id") or selected_draft.get("message_id")
+                        logger.info(f"[ASSISTANT] User selected draft {selection}, id={draft_id}")
+
+                        # Now perform the update with the selected draft
+                        from .tools import create_draft_tools
+                        tools = create_draft_tools(user_id=self.user_id)
+
+                        for tool in tools:
+                            if tool.name == "update_draft":
+                                update_args = {"draft_id": draft_id}
+
+                                # Add subject/body if provided
+                                if self.draft_pending.get("subject"):
+                                    update_args["subject"] = self.draft_pending.get("subject")
+                                if self.draft_pending.get("body"):
+                                    update_args["body"] = self.draft_pending.get("body")
+                                if self.draft_pending.get("update_instruction"):
+                                    update_args["instruction"] = self.draft_pending.get("update_instruction")
+
+                                logger.info(f"[ASSISTANT] Calling update_draft with: {update_args}")
+                                try:
+                                    result_str = tool.invoke(update_args)
+                                    result_dict = json.loads(result_str)
+                                    self.draft_pending = None  # Clear pending state
+
+                                    if result_dict.get("success"):
+                                        response = result_dict.get("message", "Draft updated successfully")
+                                    else:
+                                        response = result_dict.get("message", "Failed to update draft")
+
+                                    self.conversation_history.append({
+                                        "role": "user",
+                                        "content": message,
+                                        "timestamp": datetime.now().isoformat(),
+                                    })
+                                    self.conversation_history.append({
+                                        "role": "assistant",
+                                        "content": response,
+                                        "timestamp": datetime.now().isoformat(),
+                                    })
+                                    return response
+
+                                except Exception as e:
+                                    self.draft_pending = None
+                                    return f"Error updating draft: {str(e)}"
+
+                    else:
+                        return f"Invalid selection. Please enter a number between 1 and {len(drafts_list)}."
+                else:
+                    return f"Please enter a number between 1 and {len(drafts_list)} to select a draft."
             else:
                 # Normal message flow
                 state = create_initial_state(
@@ -1993,6 +2112,75 @@ class EmailAssistant:
                 result = self.graph.invoke(state, config)
 
             self.last_result = result
+            logger.info(f"[ASSISTANT] Graph result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
+
+            # Check if the graph has pending interrupts via state snapshot
+            # This is the proper way to detect interrupts in LangGraph
+            try:
+                state_snapshot = self.graph.get_state(config)
+                logger.info(f"[ASSISTANT] State snapshot next: {state_snapshot.next if state_snapshot else 'None'}")
+                # Log all available attributes on state snapshot for debugging
+                if state_snapshot:
+                    snapshot_attrs = [attr for attr in dir(state_snapshot) if not attr.startswith('_')]
+                    logger.info(f"[ASSISTANT] State snapshot attrs: {snapshot_attrs}")
+                    logger.info(f"[ASSISTANT] has interrupts attr: {hasattr(state_snapshot, 'interrupts')}")
+                    if hasattr(state_snapshot, 'interrupts'):
+                        logger.info(f"[ASSISTANT] interrupts value: {state_snapshot.interrupts}")
+                    if hasattr(state_snapshot, 'tasks'):
+                        logger.info(f"[ASSISTANT] tasks value: {state_snapshot.tasks}")
+
+                # Check for interrupts in state snapshot (LangGraph stores them in tasks)
+                if state_snapshot and hasattr(state_snapshot, 'tasks') and state_snapshot.tasks:
+                    # Interrupts are stored in tasks, not directly on state_snapshot
+                    for task in state_snapshot.tasks:
+                        if hasattr(task, 'interrupts') and task.interrupts:
+                            interrupts = task.interrupts
+                            logger.info(f"[ASSISTANT] Found {len(interrupts)} interrupt(s) in task {task.name}")
+
+                            if len(interrupts) > 0:
+                                # Extract the interrupt message from the first interrupt
+                                first_interrupt = interrupts[0]
+                                interrupt_msg = first_interrupt.value if hasattr(first_interrupt, 'value') else str(first_interrupt)
+                                logger.info(f"[ASSISTANT] Interrupt message: {str(interrupt_msg)[:200]}")
+
+                                # Update conversation history with the interrupt prompt
+                                self.conversation_history.append({
+                                    "role": "user",
+                                    "content": message,
+                                    "timestamp": datetime.now().isoformat(),
+                                })
+                                self.conversation_history.append({
+                                    "role": "assistant",
+                                    "content": interrupt_msg,
+                                    "timestamp": datetime.now().isoformat(),
+                                })
+
+                                return interrupt_msg
+
+            except Exception as snap_err:
+                logger.info(f"[ASSISTANT] Could not get state snapshot: {snap_err}")
+
+            # Also check for __interrupt__ in result (older LangGraph pattern)
+            if isinstance(result, dict) and "__interrupt__" in result:
+                interrupts = result["__interrupt__"]
+                if interrupts and len(interrupts) > 0:
+                    # Extract the interrupt message
+                    interrupt_msg = interrupts[0].value if hasattr(interrupts[0], 'value') else str(interrupts[0])
+                    logger.info(f"[ASSISTANT] Graph interrupted (from result): {interrupt_msg[:100]}")
+
+                    # Update conversation history with the interrupt prompt
+                    self.conversation_history.append({
+                        "role": "user",
+                        "content": message,
+                        "timestamp": datetime.now().isoformat(),
+                    })
+                    self.conversation_history.append({
+                        "role": "assistant",
+                        "content": interrupt_msg,
+                        "timestamp": datetime.now().isoformat(),
+                    })
+
+                    return interrupt_msg
 
             # Persist state for next turn (reply-by-number feature)
             self.listed_emails = result.get("listed_emails", self.listed_emails)
@@ -2018,6 +2206,42 @@ class EmailAssistant:
                 self.conversation_history = self.conversation_history[-20:]
 
             return response
+
+        except GraphInterrupt as gi:
+            # Handle GraphInterrupt exception - extract the interrupt message
+            # The interrupt contains the prompt we want to show the user
+            logger.info(f"[ASSISTANT] GraphInterrupt caught: {gi}")
+
+            # Extract the message from the interrupt
+            interrupt_msg = "Please provide more information to continue."
+            if gi.args and len(gi.args) > 0:
+                interrupts = gi.args[0]
+                # Interrupts can be a single object or a collection (list/tuple)
+                first_interrupt = None
+                if isinstance(interrupts, (list, tuple)) and len(interrupts) > 0:
+                    first_interrupt = interrupts[0]
+                else:
+                    first_interrupt = interrupts
+
+                # Extract value from the interrupt object
+                if hasattr(first_interrupt, 'value'):
+                    interrupt_msg = first_interrupt.value
+                else:
+                    interrupt_msg = str(first_interrupt)
+
+            # Update conversation history
+            self.conversation_history.append({
+                "role": "user",
+                "content": message,
+                "timestamp": datetime.now().isoformat(),
+            })
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": interrupt_msg,
+                "timestamp": datetime.now().isoformat(),
+            })
+
+            return interrupt_msg
 
         except Exception as e:
             logger.error(f"Chat error: {e}", exc_info=True)
