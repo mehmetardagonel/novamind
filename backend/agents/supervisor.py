@@ -736,10 +736,36 @@ def draft_agent_node(state: EmailAgentState) -> dict:
 
         def _extract_subject_body(text: str) -> tuple[str, str]:
             import re
-            subject_match = re.search(r"subject\s*[:\-]\s*(.+?)(?=body\s*[:\-]|$)", text, re.IGNORECASE | re.DOTALL)
-            body_match = re.search(r"body\s*[:\-]\s*(.+)", text, re.IGNORECASE | re.DOTALL)
-            subject = subject_match.group(1).strip() if subject_match else ""
-            body = body_match.group(1).strip() if body_match else ""
+            if not text:
+                return "", ""
+            subject = ""
+            body = ""
+            subject_match = re.search(
+                r"\bsubject\b\s*[:=\-]\s*(.+?)(?=\bbody\b\s*[:=\-]|$)",
+                text,
+                re.IGNORECASE | re.DOTALL,
+            )
+            body_match = re.search(r"\bbody\b\s*[:=\-]\s*(.+)", text, re.IGNORECASE | re.DOTALL)
+            if subject_match:
+                subject = subject_match.group(1).strip().rstrip(" ,;")
+            else:
+                for line in text.splitlines():
+                    line_stripped = line.strip()
+                    if not line_stripped:
+                        continue
+                    if line_stripped.lower().startswith("subject"):
+                        subject = line_stripped[len("subject"):].lstrip(" \t:-=").rstrip(" ,;")
+                        break
+            if body_match:
+                body = body_match.group(1).strip()
+            else:
+                for line in text.splitlines():
+                    line_stripped = line.strip()
+                    if not line_stripped:
+                        continue
+                    if line_stripped.lower().startswith("body"):
+                        body = line_stripped[len("body"):].lstrip(" \t:-=")
+                        break
             return subject, body
 
         def _is_create_draft_intent(text: str) -> bool:
@@ -949,30 +975,39 @@ Make it professional, clear, and appropriate. The body should include:
                 user_input = current_input.strip()
 
                 # Parse subject and body from user input
-                subject = ""
-                body = ""
-
-                # Try to extract using the format "Subject: ... Body: ..."
-                import re
-                subject_match = re.search(r'subject:\s*(.+?)(?=body:|$)', user_input, re.IGNORECASE | re.DOTALL)
-                body_match = re.search(r'body:\s*(.+)', user_input, re.IGNORECASE | re.DOTALL)
-
-                if subject_match:
-                    subject = subject_match.group(1).strip()
-                if body_match:
-                    body = body_match.group(1).strip()
+                subject, body = _extract_subject_body(user_input)
+                if not subject:
+                    subject = pending.get("subject", "")
+                if not body:
+                    body = pending.get("body", "")
 
                 # Validation: both must be provided
                 if not subject or not body:
-                    return {
-                        "response": (
-                            "I couldn't parse the subject and body. Please make sure to use this format:\n\n"
+                    updated_pending = dict(pending)
+                    if subject:
+                        updated_pending["subject"] = subject
+                    if body:
+                        updated_pending["body"] = body
+                    if not subject and not body:
+                        response = (
+                            "I couldn't find a subject or body. Please use this format:\n\n"
                             "Subject: Your subject line here\n"
-                            "Body: Your email body here\n\n"
-                            "Both subject and body are required."
-                        ),
+                            "Body: Your email body here"
+                        )
+                    elif not subject:
+                        response = (
+                            "I have the body. Please provide the subject using:\n"
+                            "Subject: Your subject line here"
+                        )
+                    else:
+                        response = (
+                            "I have the subject. Please provide the body using:\n"
+                            "Body: Your email body here"
+                        )
+                    return {
+                        "response": response,
                         "next_agent": "__end__",
-                        "draft_pending": pending,
+                        "draft_pending": updated_pending,
                     }
 
                 # Create the draft with manual input
