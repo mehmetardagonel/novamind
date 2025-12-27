@@ -13,6 +13,7 @@ Architecture:
 """
 
 import os
+import re
 import json
 import logging
 from typing import Literal, Optional, Any
@@ -163,6 +164,52 @@ def supervisor_node(state: EmailAgentState) -> dict:
     """
     logger.info(f"[SUPERVISOR] Processing: {state.get('current_input', '')[:100]}")
 
+    current_input = state.get("current_input", "").strip()
+
+    # Check for "reply N" pattern FIRST (before pending checks)
+    reply_match = re.match(r'^reply\s*(?:to\s*)?(?:email\s*)?#?(\d+)$', current_input, re.IGNORECASE)
+    if reply_match:
+        email_number = int(reply_match.group(1))
+        listed_emails = state.get("listed_emails")
+
+        if not listed_emails or not listed_emails.get("emails"):
+            return {
+                "response": "No emails are currently listed. Please fetch your emails first (e.g., 'show my emails').",
+                "next_agent": "__end__",
+            }
+
+        emails = listed_emails["emails"]
+        if email_number < 1 or email_number > len(emails):
+            return {
+                "response": f"Invalid email number. Please choose between 1 and {len(emails)}.",
+                "next_agent": "__end__",
+            }
+
+        email = emails[email_number - 1]
+        body_preview = email.get('body', '')[:500]
+        if len(email.get('body', '')) > 500:
+            body_preview += '...'
+
+        preview = f"""**Email #{email_number}:**
+**From:** {email.get('sender', 'Unknown')}
+**Subject:** {email.get('subject', '(No subject)')}
+**Date:** {email.get('date', 'Unknown')}
+
+{body_preview}
+
+---
+What would you like to reply?
+*Type your message or say 'generate it for me' to have AI write a reply.*"""
+
+        return {
+            "response": preview,
+            "next_agent": "__end__",
+            "draft_pending": DraftPendingInfo(
+                awaiting="reply_content",
+                reply_to_email=email,
+            ),
+        }
+
     # Check for pending operations that need specific routing
     if state.get("draft_pending"):
         pending = state["draft_pending"]
@@ -170,6 +217,8 @@ def supervisor_node(state: EmailAgentState) -> dict:
 
         # Handle pending draft operations
         if awaiting == "recipient":
+            return {"next_agent": "draft"}
+        elif awaiting == "reply_content":
             return {"next_agent": "draft"}
         elif awaiting == "confirmation":
             user_input = state.get("current_input", "").lower().strip()
@@ -265,6 +314,8 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
         # Handle tool calls
         if response.tool_calls:
             tool_results = []
+            fetched_emails = None  # Track fetched emails for reply-by-number feature
+
             for tool_call in response.tool_calls:
                 tool_name = tool_call["name"]
                 tool_args = tool_call["args"]
@@ -275,6 +326,19 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                     if tool.name == tool_name:
                         result = tool.invoke(tool_args)
                         tool_results.append(result)
+
+                        # Extract emails from fetch_emails for reply-by-number feature
+                        if tool_name == "fetch_emails":
+                            try:
+                                json_str = result
+                                if "```json" in result:
+                                    json_str = result.split("```json")[1].split("```")[0].strip()
+                                parsed_emails = json.loads(json_str)
+                                if isinstance(parsed_emails, list) and parsed_emails:
+                                    fetched_emails = parsed_emails
+                                    logger.info(f"[INBOX_AGENT] Stored {len(fetched_emails)} emails for reply-by-number")
+                            except Exception as parse_err:
+                                logger.warning(f"[INBOX_AGENT] Could not parse emails for storage: {parse_err}")
                         break
 
             # Generate response with tool results
@@ -291,11 +355,24 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                     if "```json" in result and "```json" not in response_content:
                         response_content = f"{response_content}\n\n{result}"
 
-                return {
+                # Add hint for reply-by-number if emails were fetched
+                if fetched_emails:
+                    response_content = f"{response_content}\n\n*Reply to any email by saying 'reply 1', 'reply 2', etc.*"
+
+                result_dict = {
                     "response": response_content,
                     "next_agent": "supervisor",
                     "last_tool_result": {"results": tool_results},
                 }
+
+                # Store listed emails for reply-by-number feature
+                if fetched_emails:
+                    result_dict["listed_emails"] = {
+                        "emails": fetched_emails,
+                        "listed_at": datetime.now().isoformat(),
+                    }
+
+                return result_dict
 
         return {
             "response": response.content or "I couldn't process that request.",
@@ -389,6 +466,81 @@ Make it professional and appropriate."""
                         else:
                             return {
                                 "response": f"Failed to create draft: {result_dict.get('message', 'Unknown error')}",
+                                "next_agent": "__end__",
+                                "draft_pending": None,
+                            }
+
+            elif awaiting == "reply_content":
+                # User provided reply content for a numbered email
+                original_email = pending.get("reply_to_email", {})
+                reply_content = current_input.strip()
+
+                # Check if user wants AI to generate the reply
+                auto_generate_keywords = ["generate", "write it", "auto", "yourself", "for me", "create it"]
+                if any(kw in reply_content.lower() for kw in auto_generate_keywords):
+                    # Use LLM to generate reply based on original email
+                    generation_prompt = f"""Generate a professional reply to this email:
+
+From: {original_email.get('sender', 'Unknown')}
+Subject: {original_email.get('subject', '')}
+Body: {original_email.get('body', '')[:1000]}
+
+Write a brief, professional reply. Return ONLY the reply text, no subject line or greeting like 'Here is a reply'."""
+
+                    try:
+                        gen_response = llm.invoke(generation_prompt)
+                        reply_content = gen_response.content.strip()
+                        logger.info(f"[DRAFT_AGENT] AI generated reply: {reply_content[:100]}...")
+                    except Exception as gen_err:
+                        logger.error(f"[DRAFT_AGENT] Reply generation failed: {gen_err}")
+                        return {
+                            "response": "Failed to generate reply. Please type your message manually.",
+                            "next_agent": "supervisor",
+                        }
+
+                if not reply_content:
+                    return {
+                        "response": "What would you like to reply?\n\n*You can type your message or say 'generate it for me' to have AI write a reply.*",
+                        "next_agent": "supervisor",
+                    }
+
+                # Extract recipient email from sender
+                sender = original_email.get("sender", "")
+                recipient = sender
+                if "<" in sender and ">" in sender:
+                    recipient = sender.split("<")[1].split(">")[0].strip()
+
+                # Create subject with Re: prefix (avoid duplicate)
+                original_subject = original_email.get("subject", "")
+                if original_subject.lower().startswith("re:"):
+                    subject = original_subject
+                else:
+                    subject = f"Re: {original_subject}"
+
+                # Create draft using existing tool
+                for tool in tools:
+                    if tool.name == "create_draft":
+                        result = tool.invoke({
+                            "recipient": recipient,
+                            "subject": subject,
+                            "body": reply_content,
+                        })
+                        result_dict = json.loads(result)
+
+                        if result_dict.get("success"):
+                            return {
+                                "response": f"Reply draft created!\n\n**To:** {recipient}\n**Subject:** {subject}\n\n**Your reply:**\n{reply_content}\n\nWould you like to send it? (Yes/No)",
+                                "next_agent": "__end__",
+                                "draft_pending": DraftPendingInfo(
+                                    awaiting="confirmation",
+                                    recipient=recipient,
+                                    drafts_list=[result_dict],
+                                    operation="send",
+                                ),
+                            }
+                        else:
+                            return {
+                                "response": f"Failed to create reply draft: {result_dict.get('message', 'Unknown error')}",
                                 "next_agent": "__end__",
                                 "draft_pending": None,
                             }
@@ -538,7 +690,16 @@ def send_agent_node(state: EmailAgentState) -> dict:
                 drafts = pending.get("drafts_list", [])
                 if drafts:
                     draft = drafts[0]
-                    draft_id = draft.get("id")
+                    # Check both 'draft_id' (from draft_email) and 'id' (legacy) for compatibility
+                    draft_id = draft.get("draft_id") or draft.get("id")
+
+                    if not draft_id:
+                        logger.error(f"[SEND_AGENT] No draft_id found in draft: {draft}")
+                        return {
+                            "response": "Error: Could not find draft ID. The draft may not have been created properly.",
+                            "next_agent": "__end__",
+                            "draft_pending": None,
+                        }
 
                     for tool in tools:
                         if tool.name == "confirm_and_send_draft":
@@ -771,6 +932,9 @@ class EmailAssistant:
         self.graph = create_email_assistant_graph()
         self.thread_id = f"thread_{user_id or 'default'}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         self.conversation_history = []
+        # State persistence for reply-by-number feature
+        self.listed_emails = None
+        self.draft_pending = None
 
     def chat(self, message: str, context: str = "") -> str:
         """
@@ -787,17 +951,23 @@ class EmailAssistant:
             return "Please provide a message to get started."
 
         try:
-            # Create initial state
+            # Create initial state with persisted data
             state = create_initial_state(
                 user_message=message,
                 user_id=self.user_id,
                 context=context,
                 existing_messages=self.conversation_history,
+                listed_emails=self.listed_emails,
+                draft_pending=self.draft_pending,
             )
 
             # Run the graph
             config = {"configurable": {"thread_id": self.thread_id}}
             result = self.graph.invoke(state, config)
+
+            # Persist state for next turn (reply-by-number feature)
+            self.listed_emails = result.get("listed_emails", self.listed_emails)
+            self.draft_pending = result.get("draft_pending")
 
             # Extract response
             response = result.get("response", "I couldn't process that request.")
@@ -825,6 +995,8 @@ class EmailAssistant:
             return f"Sorry, I encountered an error: {str(e)}"
 
     def clear_history(self):
-        """Clear conversation history."""
+        """Clear conversation history and persisted state."""
         self.conversation_history = []
         self.thread_id = f"thread_{self.user_id or 'default'}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        self.listed_emails = None
+        self.draft_pending = None
