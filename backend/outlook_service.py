@@ -250,6 +250,22 @@ def _parse_outlook_message(msg: Dict) -> Dict:
             recipient_list.append(email_addr)
     recipient = ", ".join(recipient_list)
 
+    cc_recipients = msg.get("ccRecipients", [])
+    cc_list = []
+    for recip_obj in cc_recipients:
+        email_addr = recip_obj.get("emailAddress", {}).get("address", "")
+        if email_addr:
+            cc_list.append(email_addr)
+    cc = ", ".join(cc_list)
+
+    bcc_recipients = msg.get("bccRecipients", [])
+    bcc_list = []
+    for recip_obj in bcc_recipients:
+        email_addr = recip_obj.get("emailAddress", {}).get("address", "")
+        if email_addr:
+            bcc_list.append(email_addr)
+    bcc = ", ".join(bcc_list)
+
     # Get body (prefer text, fallback to html)
     body_obj = msg.get("body", {})
     body = body_obj.get("content", "")
@@ -276,6 +292,8 @@ def _parse_outlook_message(msg: Dict) -> Dict:
         "message_id": msg.get("id", ""),
         "sender": sender,
         "recipient": recipient,
+        "cc": cc,
+        "bcc": bcc,
         "subject": msg.get("subject", "(No Subject)"),
         "body": body,
         "snippet": msg.get("bodyPreview", "")[:200],
@@ -310,7 +328,7 @@ async def fetch_messages(
     params = [
         f"$top={max_results}",
         "$orderby=receivedDateTime desc",
-        "$select=id,subject,bodyPreview,body,from,toRecipients,receivedDateTime,isRead,importance,categories,flag",
+        "$select=id,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,isRead,importance,categories,flag",
     ]
 
     if query:
@@ -422,7 +440,7 @@ async def get_message(access_token: str, message_id: str) -> Optional[Dict]:
     try:
         endpoint = (
             f"/me/messages/{message_id}"
-            "?$select=id,subject,bodyPreview,body,from,toRecipients,receivedDateTime,isRead,importance,categories,flag"
+            "?$select=id,subject,bodyPreview,body,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,isRead,importance,categories,flag"
         )
         response = _make_graph_request(access_token, endpoint)
         return _parse_outlook_message(response)
@@ -455,17 +473,29 @@ async def update_message(
     access_token: str,
     message_id: str,
     to: Optional[str] = None,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
     subject: Optional[str] = None,
     body: Optional[str] = None,
     is_html: bool = False,
 ) -> Dict:
     """Update an existing message (draft) by id."""
     try:
+        def _parse_recipients(raw_value: str) -> List[Dict[str, Dict[str, str]]]:
+            recipients = []
+            for entry in (raw_value or "").split(","):
+                address = entry.strip()
+                if address:
+                    recipients.append({"emailAddress": {"address": address}})
+            return recipients
+
         data: Dict[str, Any] = {}
         if to is not None:
-            data["toRecipients"] = (
-                [{"emailAddress": {"address": to}}] if to.strip() else []
-            )
+            data["toRecipients"] = _parse_recipients(to)
+        if cc is not None:
+            data["ccRecipients"] = _parse_recipients(cc)
+        if bcc is not None:
+            data["bccRecipients"] = _parse_recipients(bcc)
         if subject is not None:
             data["subject"] = subject
         if body is not None:
@@ -793,12 +823,23 @@ class OutlookService:
         access_token: str,
         message_id: str,
         to: Optional[str] = None,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
         subject: Optional[str] = None,
         body: Optional[str] = None,
         is_html: bool = False,
     ) -> Dict:
         """Update a message (draft) by id."""
-        return await update_message(access_token, message_id, to=to, subject=subject, body=body, is_html=is_html)
+        return await update_message(
+            access_token,
+            message_id,
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            subject=subject,
+            body=body,
+            is_html=is_html,
+        )
 
     async def trash(self, access_token: str, message_id: str) -> Dict:
         """Move to trash."""

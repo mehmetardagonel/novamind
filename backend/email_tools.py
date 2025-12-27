@@ -573,19 +573,25 @@ def get_drafts_for_recipient(to_email: str, user_id: str = None) -> List[Dict]:
         return []
 
 
-def delete_draft(draft_id: str, user_id: str = None) -> Dict:
+def delete_draft(draft_id: str, user_id: str = None, account_id: Optional[str] = None) -> Dict:
     """Delete a draft email from the user's primary account (Gmail or Outlook)."""
     try:
         if user_id:
-            primary = _get_primary_email_account(user_id)
-            if not primary:
-                return {"success": False, "message": "No email accounts connected"}
-
-            provider = primary.get("provider")
-            account_id = primary.get("id")
-
             import asyncio
             from email_account_service import email_account_service
+
+            account = None
+            if account_id:
+                account = asyncio.run(email_account_service.get_account(user_id, account_id))
+                if not account:
+                    return {"success": False, "message": "Account not found"}
+            else:
+                account = _get_primary_email_account(user_id)
+                if not account:
+                    return {"success": False, "message": "No email accounts connected"}
+
+            provider = account.get("provider")
+            account_id = account.get("id")
 
             if provider == "outlook":
                 access_token = asyncio.run(
@@ -748,12 +754,15 @@ def search_emails(
 def update_draft(
     draft_id: str,
     to: Optional[str] = None,
+    cc: Optional[str] = None,
+    bcc: Optional[str] = None,
     subject: Optional[str] = None,
     body: Optional[str] = None,
     append_to_body: Optional[str] = None,
     remove_from_body: Optional[str] = None,
     instruction: Optional[str] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    account_id: Optional[str] = None,
 ) -> Dict:
     """
     Update a draft email in the user's primary account (Gmail or Outlook).
@@ -761,6 +770,8 @@ def update_draft(
     Parameters:
     - draft_id: Required - The draft ID to update
     - to: Update recipient email (None = keep existing, "" = clear)
+    - cc: Update cc (None = keep existing, "" = clear)
+    - bcc: Update bcc (None = keep existing, "" = clear)
     - subject: Update subject line (None = keep existing, "" = clear)
     - body: Update body text (None = keep existing, "" = clear)
     - append_to_body: Complete enhanced body from chat_service (used directly, no further enhancement)
@@ -772,15 +783,21 @@ def update_draft(
     """
     try:
         if user_id:
-            primary = _get_primary_email_account(user_id)
-            if not primary:
-                return {"success": False, "message": "No email accounts connected"}
-
-            provider = primary.get("provider")
-            account_id = primary.get("id")
-
             import asyncio
             from email_account_service import email_account_service
+
+            account = None
+            if account_id:
+                account = asyncio.run(email_account_service.get_account(user_id, account_id))
+                if not account:
+                    return {"success": False, "message": "Account not found"}
+            else:
+                account = _get_primary_email_account(user_id)
+                if not account:
+                    return {"success": False, "message": "No email accounts connected"}
+
+            provider = account.get("provider")
+            account_id = account.get("id")
 
             # Handle instruction parameter - treat as body if body is not provided
             if instruction is not None and body is None:
@@ -807,6 +824,8 @@ def update_draft(
                         access_token,
                         draft_id,
                         to=to,
+                        cc=cc,
+                        bcc=bcc,
                         subject=subject,
                         body=update_body,
                     )
@@ -863,6 +882,8 @@ def update_draft(
         updated_draft = update_gmail_draft(
             draft_id=draft_id,
             to=to,  # None = keep existing
+            cc=cc,  # None = keep existing
+            bcc=bcc,  # None = keep existing
             subject=subject,  # None = keep existing
             body=update_body,  # None = keep existing, or enhanced body string
             service=service

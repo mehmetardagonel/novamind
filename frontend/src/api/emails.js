@@ -247,6 +247,16 @@ export const deleteEmail = async (messageId, userId) => {
   return res.data;
 };
 
+export const deleteDraft = async (draftId, userId, accountId = null) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const headers = { "X-User-Id": resolvedUserId };
+  if (accountId) headers["X-Account-Id"] = accountId;
+  const res = await apiClient.delete(`/emails/drafts/${draftId}`, {
+    headers,
+  });
+  return res.data;
+};
+
 export const restoreEmail = async (messageId, userId) => {
   const resolvedUserId = await resolveUserId(userId);
   const res = await apiClient.post(
@@ -294,6 +304,23 @@ export const sendEmail = async (
       ...(accountId ? { "X-Account-Id": accountId } : {}),
     },
   });
+  return res.data;
+};
+
+export const updateDraft = async (
+  draftId,
+  { to, cc, bcc, subject, body },
+  userId,
+  accountId = null
+) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const headers = { "X-User-Id": resolvedUserId };
+  if (accountId) headers["X-Account-Id"] = accountId;
+  const res = await apiClient.patch(
+    `/emails/drafts/${draftId}`,
+    { to, cc, bcc, subject, body },
+    { headers }
+  );
   return res.data;
 };
 
@@ -446,9 +473,11 @@ export default {
   getTrashEmails,
   fetchUnifiedEmails,
   deleteEmail,
+  deleteDraft,
   restoreEmail,
   setEmailStar,
   sendEmail,
+  updateDraft,
   saveDraft,
   getTodayEmails,
   getUnreadEmails,

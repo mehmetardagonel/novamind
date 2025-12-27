@@ -29,6 +29,8 @@ class EmailOut(BaseModel):
     message_id: str
     sender: str
     recipient: str
+    cc: Optional[str] = None
+    bcc: Optional[str] = None
     subject: str
     body: str
     date: datetime
@@ -41,11 +43,20 @@ class EmailOut(BaseModel):
     account_id: Optional[str] = None
     account_email: Optional[str] = None
     provider: Optional[Literal["gmail", "outlook"]] = None  # Email provider
+    draft_id: Optional[str] = None  # Draft id when available (Gmail)
 
 class EmailRequest(BaseModel):
     to: EmailStr
     subject: str
     body: str
+
+
+class DraftUpdateRequest(BaseModel):
+    to: Optional[str] = None
+    cc: Optional[str] = None
+    bcc: Optional[str] = None
+    subject: Optional[str] = None
+    body: Optional[str] = None
 
 class LabelBase(BaseModel):
     name: str = Field(..., min_length=1)

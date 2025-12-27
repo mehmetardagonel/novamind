@@ -432,6 +432,8 @@ def parse_message(msg: dict) -> EmailOut:
     subject = _extract_header(headers, "Subject")
     sender = _extract_header(headers, "From")
     recipient = _extract_header(headers, "To")
+    cc = _extract_header(headers, "Cc")
+    bcc = _extract_header(headers, "Bcc")
     date_str = _extract_header(headers, "Date")
     body = _decode_body(msg.get("payload", {}))
 
@@ -448,6 +450,8 @@ def parse_message(msg: dict) -> EmailOut:
         message_id=msg["id"],
         sender=sender,
         recipient=recipient,
+        cc=cc or None,
+        bcc=bcc or None,
         subject=subject,
         body=body,
         date=dt,
@@ -568,7 +572,7 @@ def set_star(message_id: str, starred: bool, user_id: str = "") -> dict:
     ).execute()
 
 
-def create_draft(to: str, subject: str, body: str, service=None) -> dict:
+def create_draft(to: str, subject: str, body: str, service=None, cc: Optional[str] = None, bcc: Optional[str] = None) -> dict:
     """
     Create a draft email in Gmail (stored with DRAFT label).
     Returns draft object with draft id and message details.
@@ -579,8 +583,14 @@ def create_draft(to: str, subject: str, body: str, service=None) -> dict:
     logger.info(f"Creating draft via Gmail API for: {to}")
 
     message = MIMEText(body)
-    message["to"] = to
-    message["subject"] = subject
+    if to:
+        message["to"] = to
+    if cc:
+        message["cc"] = cc
+    if bcc:
+        message["bcc"] = bcc
+    if subject:
+        message["subject"] = subject
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
 
@@ -724,7 +734,9 @@ def send_draft(draft_id: str, service=None) -> Optional[dict]:
 
 
 def update_draft(draft_id: str, to: Optional[str] = None,
-                subject: Optional[str] = None, body: Optional[str] = None, service=None) -> Optional[dict]:
+                subject: Optional[str] = None, body: Optional[str] = None,
+                cc: Optional[str] = None, bcc: Optional[str] = None,
+                service=None) -> Optional[dict]:
     """
     Update a draft email. Since Gmail API doesn't support partial updates,
     we delete the old draft and create a new one with updated content.
@@ -759,12 +771,21 @@ def update_draft(draft_id: str, to: Optional[str] = None,
         ).execute()
 
         headers = full_msg.get("payload", {}).get("headers", [])
-        current_to = to or _extract_header(headers, "To")
-        current_subject = subject or _extract_header(headers, "Subject")
-        current_body = body or _decode_body(full_msg.get("payload", {}))
+        current_to = _extract_header(headers, "To") if to is None else to
+        current_subject = _extract_header(headers, "Subject") if subject is None else subject
+        current_body = _decode_body(full_msg.get("payload", {})) if body is None else body
+        current_cc = _extract_header(headers, "Cc") if cc is None else cc
+        current_bcc = _extract_header(headers, "Bcc") if bcc is None else bcc
 
         # Create new draft with updated content FIRST (to avoid data loss if creation fails)
-        new_draft = create_draft(current_to, current_subject, current_body, service=service)
+        new_draft = create_draft(
+            current_to,
+            current_subject,
+            current_body,
+            service=service,
+            cc=current_cc,
+            bcc=current_bcc,
+        )
 
         # Only delete old draft if new one was created successfully
         if new_draft and new_draft.get("id"):
@@ -1213,11 +1234,38 @@ async def fetch_drafts_multi_provider(user_id: str, max_per_account: int = 25) -
             account_id = account.get("id")
 
             if provider == "gmail":
-                # Fetch Gmail drafts
+                # Fetch Gmail drafts via Drafts API (to get draft IDs)
                 logger.info(f"Fetching Gmail drafts from account {account.get('email_address')}")
-                query = "label:DRAFT"
-                gmail_drafts = await fetch_messages_multi_account(user_id, query, max_per_account)
-                all_drafts.extend(gmail_drafts)
+                service = await get_user_gmail_service(user_id, account_id)
+                draft_refs = service.users().drafts().list(
+                    userId="me",
+                    maxResults=max_per_account,
+                ).execute()
+                for draft_ref in draft_refs.get("drafts", []):
+                    draft_id = draft_ref.get("id")
+                    if not draft_id:
+                        continue
+                    draft = service.users().drafts().get(
+                        userId="me",
+                        id=draft_id,
+                        format="full",
+                    ).execute()
+                    msg = draft.get("message", {})
+                    if not msg:
+                        continue
+                    if not msg.get("payload"):
+                        msg = service.users().messages().get(
+                            userId="me",
+                            id=msg.get("id", ""),
+                            format="full",
+                        ).execute()
+                    email_out = parse_message(msg)
+                    email_out.message_id = draft_id
+                    email_out.draft_id = draft_id
+                    email_out.account_id = account_id
+                    email_out.account_email = account.get("email_address", "")
+                    email_out.provider = "gmail"
+                    all_drafts.append(email_out)
 
             elif provider == "outlook":
                 # Fetch Outlook drafts
@@ -1232,6 +1280,8 @@ async def fetch_drafts_multi_provider(user_id: str, max_per_account: int = 25) -
                             message_id=draft.get("message_id", ""),
                             sender=draft.get("sender", ""),
                             recipient=draft.get("recipient", ""),
+                            cc=draft.get("cc"),
+                            bcc=draft.get("bcc"),
                             subject=draft.get("subject", "(No Subject)"),
                             body=draft.get("body", draft.get("snippet", "")),
                             date=draft.get("date", datetime.now()),
@@ -1240,6 +1290,7 @@ async def fetch_drafts_multi_provider(user_id: str, max_per_account: int = 25) -
                             account_id=account_id,
                             account_email=account.get("email_address", ""),
                             provider="outlook",
+                            draft_id=draft.get("message_id", ""),
                         )
                         all_drafts.append(email_out)
 

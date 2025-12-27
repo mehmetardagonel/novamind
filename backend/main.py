@@ -22,6 +22,7 @@ from session_store import chat_sessions, chat_session_locks
 from models import (
     EmailOut,
     EmailRequest,
+    DraftUpdateRequest,
     LabelOut,
     LabelCreate,
     LabelUpdateRequest,
@@ -76,7 +77,13 @@ from ml_service import get_classifier
 # Import Email Cache Service
 from email_cache import get_email_cache
 # Import email tool helpers
-from email_tools import fetch_mails, draft_email, send_email as send_email_multi
+from email_tools import (
+    fetch_mails,
+    draft_email,
+    send_email as send_email_multi,
+    update_draft,
+    delete_draft,
+)
 # Import Gmail Account Service
 from gmail_account_service import gmail_account_service
 
@@ -748,6 +755,64 @@ async def list_drafts(
 
         return emails
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/emails/drafts/{draft_id}")
+async def update_draft_endpoint(
+    draft_id: str,
+    req: DraftUpdateRequest,
+    user_id: str = Header(..., alias="X-User-Id"),
+    account_id: Optional[str] = Header(None, alias="X-Account-Id"),
+):
+    """Update a draft email and invalidate drafts cache."""
+    try:
+        result = update_draft(
+            draft_id=draft_id,
+            to=req.to,
+            cc=req.cc,
+            bcc=req.bcc,
+            subject=req.subject,
+            body=req.body,
+            user_id=user_id,
+            account_id=account_id,
+        )
+        if not result.get("success"):
+            message = result.get("message", "Draft update failed")
+            if message == "Account not found":
+                raise HTTPException(status_code=404, detail=message)
+            raise HTTPException(status_code=500, detail=message)
+
+        email_cache.invalidate(user_id, "drafts")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating draft: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/emails/drafts/{draft_id}")
+async def delete_draft_endpoint(
+    draft_id: str,
+    user_id: str = Header(..., alias="X-User-Id"),
+    account_id: Optional[str] = Header(None, alias="X-Account-Id"),
+):
+    """Delete a draft email and invalidate drafts cache."""
+    try:
+        result = delete_draft(draft_id=draft_id, user_id=user_id, account_id=account_id)
+        if not result.get("success"):
+            message = result.get("message", "Draft deletion failed")
+            if message == "Account not found":
+                raise HTTPException(status_code=404, detail=message)
+            raise HTTPException(status_code=500, detail=message)
+
+        email_cache.invalidate(user_id, "drafts")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting draft: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/emails/sent", response_model=List[EmailOut])

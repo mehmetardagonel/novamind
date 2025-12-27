@@ -256,7 +256,9 @@
         </div>
 
         <div class="email-detail-content">
-          <h2 class="email-detail-subject">{{ selectedEmail.subject }}</h2>
+          <h2 v-if="!isDrafts" class="email-detail-subject">
+            {{ selectedEmail.subject }}
+          </h2>
 
           <div class="email-detail-meta">
             <div class="sender-info">
@@ -272,7 +274,74 @@
             </div>
           </div>
 
+          <div v-if="isDrafts" class="draft-editor">
+            <div class="draft-row">
+              <label class="draft-label">To</label>
+              <input
+                class="draft-input"
+                v-model="draftForm.to"
+                @input="queueDraftSave"
+                placeholder="Recipient"
+              />
+            </div>
+            <div class="draft-row">
+              <label class="draft-label">Cc</label>
+              <input
+                class="draft-input"
+                v-model="draftForm.cc"
+                @input="queueDraftSave"
+                placeholder="Cc"
+              />
+            </div>
+            <div class="draft-row">
+              <label class="draft-label">Bcc</label>
+              <input
+                class="draft-input"
+                v-model="draftForm.bcc"
+                @input="queueDraftSave"
+                placeholder="Bcc"
+              />
+            </div>
+            <div class="draft-row">
+              <label class="draft-label">Subject</label>
+              <input
+                class="draft-input"
+                v-model="draftForm.subject"
+                @input="queueDraftSave"
+                placeholder="Subject"
+              />
+            </div>
+            <div class="draft-row">
+              <label class="draft-label">Body</label>
+              <textarea
+                class="draft-textarea"
+                v-model="draftForm.body"
+                @input="queueDraftSave"
+                placeholder="Write your message..."
+              ></textarea>
+            </div>
+            <div class="draft-status-row">
+              <span v-if="draftIsSaving" class="draft-status saving">
+                <span class="draft-spinner"></span>
+                Saving...
+              </span>
+              <span v-else-if="draftSaveError" class="draft-status error">
+                Save failed.
+              </span>
+              <span v-else-if="draftSaveStatus" class="draft-status success">
+                {{ draftSaveStatus }}
+              </span>
+              <button
+                v-if="draftSaveError"
+                class="draft-retry-btn"
+                @click="retryDraftSave"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
           <div
+            v-else
             class="email-body"
             v-html="sanitizeHtml(selectedEmail.body)"
           ></div>
@@ -289,10 +358,12 @@ import {
   fetchEmails,
   fetchUnifiedEmails,
   deleteEmail,
+  deleteDraft,
   setEmailStar,
   restoreEmail,
   fetchLabels,
   updateEmailLabels,
+  updateDraft,
   searchEmails,
 } from "../api/emails";
 import { useEmailCacheStore } from "../stores/emails";
@@ -320,6 +391,7 @@ export default {
     const selectedEmail = ref(null);
     const authUrl = ref("");
     const isTrash = computed(() => props.folder === "trash");
+    const isDrafts = computed(() => props.folder === "drafts");
 
     const route = useRoute();
     const activeLabelId = computed(() => route.query.label || null);
@@ -354,6 +426,20 @@ export default {
       () => (loading.value && emails.value.length > 0 && !loadMoreInFlight.value) || searchLoading.value
     );
 
+    const draftForm = ref({
+      to: "",
+      cc: "",
+      bcc: "",
+      subject: "",
+      body: "",
+    });
+    const draftIsSaving = ref(false);
+    const draftSaveStatus = ref("");
+    const draftSaveError = ref("");
+    const lastDraftPayload = ref(null);
+    const draftSaveTimer = ref(null);
+    const lastSelectedDraftId = ref(null);
+
     // 🔹 label popup state
     const showLabelMenu = ref(false);
     const availableLabels = ref([]);
@@ -374,6 +460,94 @@ export default {
           isUnread,
         };
       });
+    };
+
+    const hydrateDraftForm = (email) => {
+      draftForm.value = {
+        to: email?.recipient || "",
+        cc: email?.cc || "",
+        bcc: email?.bcc || "",
+        subject: email?.subject || "",
+        body: email?.body || "",
+      };
+      lastDraftPayload.value = { ...draftForm.value };
+    };
+
+    const normalizeDraftPayload = (form) => ({
+      to: form.to ?? "",
+      cc: form.cc ?? "",
+      bcc: form.bcc ?? "",
+      subject: form.subject ?? "",
+      body: form.body ?? "",
+    });
+
+    const queueDraftSave = () => {
+      if (!isDrafts.value || !selectedEmail.value) return;
+      draftSaveError.value = "";
+      draftSaveStatus.value = "Saving...";
+      if (draftSaveTimer.value) clearTimeout(draftSaveTimer.value);
+      draftSaveTimer.value = setTimeout(() => {
+        saveDraftEdits();
+      }, 800);
+    };
+
+    const saveDraftEdits = async () => {
+      if (!selectedEmail.value || !isDrafts.value) return;
+
+      const previousId = selectedEmail.value.message_id;
+      const draftId = selectedEmail.value.draft_id || selectedEmail.value.message_id;
+      const accountId = selectedEmail.value.account_id || null;
+      if (!draftId) return;
+
+      const payload = normalizeDraftPayload(draftForm.value);
+      if (
+        lastDraftPayload.value &&
+        JSON.stringify(lastDraftPayload.value) === JSON.stringify(payload)
+      ) {
+        draftSaveStatus.value = "Saved";
+        return;
+      }
+
+      draftIsSaving.value = true;
+      draftSaveError.value = "";
+
+      try {
+        const response = await updateDraft(draftId, payload, null, accountId);
+        const newDraftId = response?.new_draft_id || draftId;
+        lastDraftPayload.value = { ...payload };
+        draftSaveStatus.value = "Saved";
+
+        lastSelectedDraftId.value = newDraftId;
+        const updated = {
+          ...selectedEmail.value,
+          message_id: newDraftId,
+          draft_id: newDraftId,
+          recipient: payload.to,
+          cc: payload.cc,
+          bcc: payload.bcc,
+          subject: payload.subject,
+          body: payload.body,
+        };
+        selectedEmail.value = updated;
+
+        const folder = emailCache.getFolder(folderKey.value);
+        folder.items = folder.items.map((email) =>
+          email.message_id === previousId ? updated : email
+        );
+      } catch (error) {
+        console.error("Failed to save draft:", error);
+        draftSaveError.value =
+          error.response?.data?.detail ||
+          error.message ||
+          "Failed to save draft.";
+        draftSaveStatus.value = "Save failed";
+      } finally {
+        draftIsSaving.value = false;
+      }
+    };
+
+    const retryDraftSave = () => {
+      saveDraftEdits();
     };
 
     const loadEmails = async ({ force = false } = {}) => {
@@ -542,8 +716,14 @@ export default {
 
       try {
         const messageId = selectedEmail.value.message_id;
+        const draftId = selectedEmail.value.draft_id || messageId;
+        const accountId = selectedEmail.value.account_id || null;
 
-        await deleteEmail(messageId);
+        if (isDrafts.value) {
+          await deleteDraft(draftId, null, accountId);
+        } else {
+          await deleteEmail(messageId);
+        }
 
         const folder = emailCache.getFolder(folderKey.value);
         folder.items = folder.items.filter(
@@ -610,6 +790,49 @@ export default {
           )
         ) {
           selectedEmail.value = null;
+        }
+      }
+    );
+
+    watch(
+      () => selectedEmail.value,
+      (email) => {
+        if (isDrafts.value && email) {
+          if (lastSelectedDraftId.value !== email.message_id) {
+            draftSaveStatus.value = "";
+            draftSaveError.value = "";
+          }
+          hydrateDraftForm(email);
+          lastSelectedDraftId.value = email.message_id;
+        } else if (!email) {
+          draftForm.value = {
+            to: "",
+            cc: "",
+            bcc: "",
+            subject: "",
+            body: "",
+          };
+          draftSaveStatus.value = "";
+          draftSaveError.value = "";
+          lastSelectedDraftId.value = null;
+        }
+      }
+    );
+
+    watch(
+      () => isDrafts.value,
+      (nextIsDrafts) => {
+        if (!nextIsDrafts) {
+          draftForm.value = {
+            to: "",
+            cc: "",
+            bcc: "",
+            subject: "",
+            body: "",
+          };
+          draftSaveStatus.value = "";
+          draftSaveError.value = "";
+          lastSelectedDraftId.value = null;
         }
       }
     );
@@ -866,6 +1089,7 @@ export default {
       handleDelete,
       handleRestore,
       isTrash,
+      isDrafts,
       formatDate,
       formatFullDate,
       getPreview,
@@ -898,6 +1122,12 @@ export default {
       closeLabelMenu,
       saveLabelChanges,
       toggleLabelMenu,
+      draftForm,
+      draftIsSaving,
+      draftSaveStatus,
+      draftSaveError,
+      queueDraftSave,
+      retryDraftSave,
     };
   },
 };
@@ -1312,6 +1542,93 @@ export default {
 .email-body a {
   text-decoration: underline;
   cursor: pointer;
+}
+
+.draft-editor {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.draft-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.draft-label {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  padding-top: 0.4rem;
+}
+
+.draft-input,
+.draft-textarea {
+  width: 100%;
+  border: 1px solid var(--light-border-color);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  background: #fff;
+}
+
+.draft-textarea {
+  min-height: 200px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.draft-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 28px;
+}
+
+.draft-status {
+  font-size: 0.9rem;
+}
+
+.draft-status.success {
+  color: #1a7f37;
+}
+
+.draft-status.error {
+  color: #b42318;
+}
+
+.draft-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #cbd5e1;
+  border-top-color: #475569;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+  animation: draft-spin 0.8s linear infinite;
+}
+
+.draft-retry-btn {
+  border: 1px solid #d0d5dd;
+  background: #fff;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  color: #101828;
+  cursor: pointer;
+}
+
+.draft-retry-btn:hover {
+  background: #f8fafc;
+}
+
+@keyframes draft-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 🔹 Bottom-right restore button */
