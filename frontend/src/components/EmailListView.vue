@@ -28,7 +28,7 @@
     </div>
 
     <div v-else-if="errorMessage || searchError" class="error-box">
-      <h3>{{ searchError ? 'Search Error' : 'Gmail API Error' }}</h3>
+      <h3>{{ searchError ? "Search Error" : "Gmail API Error" }}</h3>
       <p>{{ errorMessage || searchError }}</p>
       <div class="setup-instructions">
         <p><strong>Troubleshooting:</strong></p>
@@ -76,7 +76,10 @@
           </span>
         </div>
         <div class="email-list">
-          <div v-if="displayedEmails.length === 0 && !loading && !searchLoading" class="no-emails">
+          <div
+            v-if="displayedEmails.length === 0 && !loading && !searchLoading"
+            class="no-emails"
+          >
             <p>No emails found.</p>
           </div>
           <div
@@ -93,10 +96,17 @@
               <div class="sender-with-label">
                 <span class="email-sender">{{ email.sender }}</span>
                 <!-- Show "To:" field when in drafts view -->
-                <span v-if="folder === 'drafts' && email.recipient" class="email-recipient">
+                <span
+                  v-if="folder === 'drafts' && email.recipient"
+                  class="email-recipient"
+                >
                   → {{ email.recipient }}
                 </span>
-                <span v-if="email.account_email" class="account-badge" :title="email.account_email">
+                <span
+                  v-if="email.account_email"
+                  class="account-badge"
+                  :title="email.account_email"
+                >
                   {{ email.account_email }}
                 </span>
                 <span
@@ -268,7 +278,9 @@
                   {{ formatFullDate(selectedEmail.date) }}
                 </div>
                 <div v-if="selectedEmail.account_email" class="account-info">
-                  <span class="account-badge">{{ selectedEmail.account_email }}</span>
+                  <span class="account-badge">{{
+                    selectedEmail.account_email
+                  }}</span>
                 </div>
               </div>
             </div>
@@ -411,7 +423,9 @@ export default {
     const loading = computed(() => folderState.value.is_loading);
     const errorMessage = computed(() => folderState.value.error || "");
     const nextCursor = computed(() => folderState.value.next_cursor);
-    const canLoadMore = computed(() => !!nextCursor.value && !isSearchMode.value);
+    const canLoadMore = computed(
+      () => !!nextCursor.value && !isSearchMode.value
+    );
     const displayedEmails = computed(() => {
       return isSearchMode.value ? searchResults.value : emails.value;
     });
@@ -423,7 +437,9 @@ export default {
       () => loading.value && loadMoreInFlight.value
     );
     const isBackgroundLoading = computed(
-      () => (loading.value && emails.value.length > 0 && !loadMoreInFlight.value) || searchLoading.value
+      () =>
+        (loading.value && emails.value.length > 0 && !loadMoreInFlight.value) ||
+        searchLoading.value
     );
 
     const draftForm = ref({
@@ -495,7 +511,8 @@ export default {
       if (!selectedEmail.value || !isDrafts.value) return;
 
       const previousId = selectedEmail.value.message_id;
-      const draftId = selectedEmail.value.draft_id || selectedEmail.value.message_id;
+      const draftId =
+        selectedEmail.value.draft_id || selectedEmail.value.message_id;
       const accountId = selectedEmail.value.account_id || null;
       if (!draftId) return;
 
@@ -891,9 +908,9 @@ export default {
 
     const getLabelText = (prediction) => {
       const labels = {
-        'spam': 'Spam',
-        'ham': 'Normal',
-        'important': 'Important'
+        spam: "Spam",
+        ham: "Normal",
+        important: "Important",
       };
       return labels[prediction] || prediction;
     };
@@ -912,19 +929,19 @@ export default {
     const isSearchMode = ref(false);
     const searchResults = ref([]);
     const searchLoading = ref(false);
-    const searchError = ref('');
+    const searchError = ref("");
 
     const handleSearch = async (query) => {
       if (!query || !query.trim()) return;
 
       isSearchMode.value = true;
       searchLoading.value = true;
-      searchError.value = '';
+      searchError.value = "";
       selectedEmail.value = null;
 
       try {
         const searchKey = `search:${query}`;
-        
+
         // Check if we already have these search results in cache
         const existingSearch = emailCache.getFolder(searchKey);
         if (existingSearch.items.length > 0 && emailCache.isFresh(searchKey)) {
@@ -938,17 +955,20 @@ export default {
         if (response.success) {
           const results = decorateEmails(response.emails || []);
           searchResults.value = results;
-          
+
           // Store in Pinia cache
           const folder = emailCache.getFolder(searchKey);
           folder.items = results;
           folder.fetched_at = Date.now();
         } else {
-          searchError.value = 'Search failed. Please try again.';
+          searchError.value = "Search failed. Please try again.";
         }
       } catch (error) {
-        console.error('Search error:', error);
-        searchError.value = error.response?.data?.detail || error.message || 'Search failed. Please try again.';
+        console.error("Search error:", error);
+        searchError.value =
+          error.response?.data?.detail ||
+          error.message ||
+          "Search failed. Please try again.";
       } finally {
         searchLoading.value = false;
       }
@@ -957,7 +977,7 @@ export default {
     const handleClearSearch = async () => {
       isSearchMode.value = false;
       searchResults.value = [];
-      searchError.value = '';
+      searchError.value = "";
       selectedEmail.value = null;
       // No need to reload normal inbox emails as they are still in cache
     };
@@ -1203,20 +1223,44 @@ export default {
   padding-left: 1.5rem;
 }
 
-/* Email Container */
-.email-container {
-  display: flex;
-  height: calc(100vh - 200px);
-  gap: 0;
-  overflow: hidden;
-}
-
-.email-list-panel {
-  flex: 0 0 400px;
+/* Make this component a proper full-height flex column */
+.email-list-view {
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border-color, #e0e0e0);
-  overflow: hidden;
+}
+
+/* Container must be flex and allowed to shrink */
+.email-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden; /* keep */
+}
+
+/* Panels must be allowed to shrink so children can overflow-scroll */
+.email-list-panel,
+.email-detail-panel {
+  min-height: 0;
+  overflow: hidden; /* keep */
+  display: flex;
+  flex-direction: column;
+}
+
+/* ✅ This is the actual scroller */
+.email-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Detail body should also scroll */
+.email-detail-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .email-list-panel.full-width {
