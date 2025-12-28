@@ -2,6 +2,13 @@
 
 import { createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "../stores/auth"; // 👈 NEW
+import { useAccountsStore } from "../stores/accounts";
+import {
+  shouldForceMailboxLoading,
+  clearForceMailboxLoading,
+} from "../utils/navigationFlags";
+
+const connectDebug = import.meta.env.VITE_CONNECT_DEBUG === "1";
 
 const routes = [
   {
@@ -32,6 +39,14 @@ const routes = [
     component: () =>
       import(
         /* webpackChunkName: "mailbox-loading" */ "../views/MailboxLoading.vue"
+      ),
+  },
+  {
+    path: "/connect-first-account",
+    name: "ConnectFirstAccount",
+    component: () =>
+      import(
+        /* webpackChunkName: "connect-first-account" */ "../views/ConnectFirstAccount.vue"
       ),
   },
 
@@ -166,6 +181,7 @@ let authInitialized = false;
 
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore();
+  const accountsStore = useAccountsStore();
 
   // Ensure Supabase session is restored once on app start
   if (!authInitialized && authStore.refreshUser) {
@@ -175,13 +191,36 @@ router.beforeEach(async (to, from, next) => {
 
   const isAuthed = authStore.isAuthenticated;
 
+  if (isAuthed && shouldForceMailboxLoading()) {
+    await accountsStore.fetchAccounts();
+    if (accountsStore.hasConnectedAccounts) {
+      clearForceMailboxLoading();
+      if (connectDebug) {
+        console.info(
+          "CONNECT_DEBUG: redirecting to /mailbox-loading from router guard (force flag)"
+        );
+      }
+      return next("/mailbox-loading");
+    }
+  }
+
   // If user is logged in and goes to / or /home, send them to inbox
   if ((to.path === "/" || to.path === "/home") && isAuthed) {
+    if (connectDebug) {
+      console.info(
+        "INBOX_REDIRECT from router guard (/ or /home) to /app/email/inbox"
+      );
+    }
     return next("/app/email/inbox");
   }
 
   // If user is logged in and tries to access login again, also send them to inbox
   if (to.path === "/login" && isAuthed) {
+    if (connectDebug) {
+      console.info(
+        "INBOX_REDIRECT from router guard (/login) to /app/email/inbox"
+      );
+    }
     return next("/app/email/inbox");
   }
 
@@ -192,6 +231,29 @@ router.beforeEach(async (to, from, next) => {
 
   if (to.path === "/mailbox-loading" && !isAuthed) {
     return next("/login");
+  }
+
+  if (to.path === "/connect-first-account" && !isAuthed) {
+    return next("/login");
+  }
+
+  if (to.path === "/mailbox-loading" && isAuthed) {
+    await accountsStore.fetchAccounts();
+    if (!accountsStore.hasConnectedAccounts) {
+      return next("/connect-first-account");
+    }
+  }
+
+  if (to.path === "/connect-first-account" && isAuthed) {
+    await accountsStore.fetchAccounts();
+    if (accountsStore.hasConnectedAccounts) {
+      if (connectDebug) {
+        console.info(
+          "CONNECT_DEBUG: redirecting to /app/email/inbox from router guard (already connected)"
+        );
+      }
+      return next("/app/email/inbox");
+    }
   }
 
   return next();

@@ -84,7 +84,7 @@ export default {
     const ensureAccountsAndPrefetch = async ({ force = false } = {}) => {
       await accountsStore.fetchAccounts({ force });
       if (!accountsStore.hasConnectedAccounts) {
-        router.replace("/app/accounts");
+        router.replace("/connect-first-account");
         return;
       }
 

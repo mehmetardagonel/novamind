@@ -18,6 +18,7 @@ from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel
 
 from session_store import chat_sessions, chat_session_locks
+from voice_summary import build_email_voice_summary
 
 from models import (
     EmailOut,
@@ -161,6 +162,7 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+VOICE_EMAIL_SUMMARY_MAX = int(os.getenv("VOICE_EMAIL_SUMMARY_MAX", "5"))
 
 app = FastAPI()
 
@@ -224,8 +226,6 @@ app.add_middleware(
         "X-Session-Id",
         "X-Transcript",
         "X-User-Transcript",
-        "X-Assistant-Reply",
-        "X-Assistant-Tts",
         "X-Voice-Response-Id",
     ],
 )
@@ -278,6 +278,7 @@ class ChatResponse(BaseModel):
     response: str
     session_id: str  # Return session ID to client
     emails: Optional[List[Dict]] = None
+    voice_summary: Optional[str] = None
 
 
 @app.get("/read-email", response_model=List[EmailOut])
@@ -731,7 +732,20 @@ async def chat(
             logger.warning(f"[CHAT_API] Error getting display_emails: {e}")
             emails_payload = None
 
-        response_obj = ChatResponse(response=ai_response, session_id=session_id, emails=emails_payload)
+        voice_summary = None
+        if isinstance(emails_payload, list):
+            voice_summary = build_email_voice_summary(
+                emails=emails_payload,
+                total=len(emails_payload),
+                max_to_read=VOICE_EMAIL_SUMMARY_MAX,
+            )
+
+        response_obj = ChatResponse(
+            response=ai_response,
+            session_id=session_id,
+            emails=emails_payload,
+            voice_summary=voice_summary,
+        )
         logger.info(f"[CHAT_API] Final ChatResponse emails field: {response_obj.emails is not None}, count: {len(response_obj.emails) if response_obj.emails else 0}")
         return response_obj
     except ValueError as e:

@@ -79,6 +79,10 @@ import { onMounted, computed, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useRouter, useRoute } from "vue-router";
 import SidebarNav from "../components/SidebarNav.vue";
+import {
+  shouldForceMailboxLoading,
+  clearForceMailboxLoading,
+} from "../utils/navigationFlags";
 export default {
   name: "MainApp",
   components: {
@@ -92,6 +96,7 @@ export default {
     const route = useRoute();
     const isDarkTheme = ref(false);
     const selectedAccountId = ref(null);
+    const connectDebug = import.meta.env.VITE_CONNECT_DEBUG === "1";
 
     // Removed searchQuery and performSearch, as the search bar is deleted
     const toggleTheme = () => {
@@ -118,6 +123,17 @@ export default {
       // Load email accounts for account selector
       await accountsStore.fetchAccounts();
 
+      if (shouldForceMailboxLoading() && accountsStore.hasConnectedAccounts) {
+        clearForceMailboxLoading();
+        if (connectDebug) {
+          console.info(
+            "CONNECT_DEBUG: redirecting to /mailbox-loading from MainApp onMounted (force flag)"
+          );
+        }
+        router.replace("/mailbox-loading");
+        return;
+      }
+
       // Check if user just completed OAuth
       const storedPath = sessionStorage.getItem("oauth_redirect_path");
 
@@ -127,6 +143,11 @@ export default {
         router.replace(storedPath);
       } else if (router.currentRoute.value.path === "/app") {
         // Default behavior
+        if (connectDebug) {
+          console.info(
+            "INBOX_REDIRECT from MainApp onMounted (/app default) to /app/email/inbox"
+          );
+        }
         router.replace("/app/email/inbox");
       }
     });

@@ -18,6 +18,9 @@ from rag_service import rag_service
 import io
 import wave
 
+from voice_summary import build_email_voice_summary
+from voice_sanitize import sanitize_for_tts
+
 router = APIRouter(prefix="/voice", tags=["voice"])
 
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
@@ -26,6 +29,7 @@ VOICE_TTS_MODEL = os.getenv("VOICE_TTS_MODEL", "aura-asteria-en")
 VOICE_TTS_ENCODING = os.getenv("VOICE_TTS_ENCODING", "linear16")  # easiest for browser playback
 VOICE_TTS_SAMPLE_RATE = int(os.getenv("VOICE_TTS_SAMPLE_RATE", "24000"))
 VOICE_EMAIL_SUMMARY_MAX = int(os.getenv("VOICE_EMAIL_SUMMARY_MAX", "5"))
+VOICE_DEBUG = os.getenv("VOICE_DEBUG", "0") == "1"
 
 VOICE_RESPONSE_CACHE: dict[str, dict] = {}
 VOICE_RESPONSE_CACHE_MAX = 200
@@ -161,7 +165,12 @@ def _extract_emails_payload(text: str) -> dict:
     result["text_before"] = text.strip()
     return result
 
-def _store_voice_response(user_id: str, response_text: str, emails: Optional[list] = None) -> str:
+def _store_voice_response(
+    user_id: str,
+    response_text: str,
+    emails: Optional[list] = None,
+    voice_summary: Optional[str] = None,
+) -> str:
     # Use provided emails if available (from chat_service.last_result.display_emails),
     # otherwise fall back to parsing from response text
     if emails is not None:
@@ -175,6 +184,7 @@ def _store_voice_response(user_id: str, response_text: str, emails: Optional[lis
         "emails": payload.get("emails"),
         "insights": payload.get("insights"),
         "text_before": payload.get("text_before") or "",
+        "voice_summary": voice_summary or "",
     }
     logger.info(
         "Stored voice response %s (emails=%s).",
@@ -224,50 +234,8 @@ def _build_voice_summary(text: str) -> str:
         return f"I found some emails{provider_phrase}. They're shown on the screen."
     return f"Here are your emails{provider_phrase} on the screen."
 
-def _clean_sender_name(value: Optional[str]) -> str:
-    if not value:
-        return "Someone"
-    name = str(value).strip().strip("\"'")
-    name = re.sub(r"\s*<[^>]+>", "", name).strip()
-    if not name and "@" in value:
-        name = value.split("@", 1)[0].strip()
-    return name or "Someone"
-
-def _clean_subject(value: Optional[str]) -> str:
-    if not value:
-        return "an email"
-    subject = re.sub(r"\s+", " ", str(value)).strip()
-    return subject or "an email"
-
-def _ensure_sentence(text: str) -> str:
-    if not text:
-        return ""
-    if text[-1] in ".!?":
-        return text
-    return f"{text}."
-
 def _build_spoken_email_summary(emails: list, max_items: int) -> str:
-    if not emails:
-        return ""
-    summary_lines = []
-    for email in emails[:max_items]:
-        if not isinstance(email, dict):
-            continue
-        sender_name = _clean_sender_name(
-            email.get("sender_name")
-            or email.get("from_name")
-            or email.get("from")
-            or email.get("sender")
-        )
-        subject = _clean_subject(email.get("subject") or email.get("title"))
-        summary_lines.append(_ensure_sentence(f"{sender_name} sent {subject}"))
-
-    spoken_summary = " ".join(line for line in summary_lines if line).strip()
-    remaining = len(emails) - max_items
-    if remaining > 0:
-        tail = f"And {remaining} more emails."
-        spoken_summary = f"{spoken_summary} {tail}" if spoken_summary else tail
-    return spoken_summary
+    return build_email_voice_summary(emails=emails, total=len(emails), max_to_read=max_items)
 
 async def deepgram_stt(audio_bytes: bytes, content_type: str) -> str:
     if not DEEPGRAM_API_KEY:
@@ -299,6 +267,10 @@ async def deepgram_stt(audio_bytes: bytes, content_type: str) -> str:
     return transcript.strip()
 
 logger = logging.getLogger(__name__)
+
+def _voice_debug(message: str, *args) -> None:
+    if VOICE_DEBUG:
+        logger.info(message, *args)
 
 async def _store_chat_embedding_background(
     user_id: str, session_id: str, role: str, content: str, message_id: str
@@ -448,6 +420,12 @@ async def voice_chat(
             logger.warning("Voice: failed to get display_emails from last_result: %s", e)
             emails_payload = None
 
+        _voice_debug(
+            "VOICE_DEBUG: response_len=%s emails_payload=%s",
+            len(response_text or ""),
+            len(emails_payload) if isinstance(emails_payload, list) else "none",
+        )
+
     # Store chat memory for RAG (best-effort)
     if transcript:
         try:
@@ -474,12 +452,24 @@ async def voice_chat(
 
     tts_text = response_text or ""
     payload = _extract_emails_payload(response_text or "")
-    emails = payload.get("emails")
+    emails_from_text = payload.get("emails")
     base_text = (payload.get("text_before") or "").strip()
-    if isinstance(emails, list) and emails:
-        spoken_summary = _build_spoken_email_summary(emails, VOICE_EMAIL_SUMMARY_MAX)
-        if spoken_summary:
-            tts_text = f"{base_text} {spoken_summary}".strip() if base_text else spoken_summary
+
+    emails_for_summary = None
+    if isinstance(emails_payload, list):
+        emails_for_summary = emails_payload
+    elif isinstance(emails_from_text, list):
+        emails_for_summary = emails_from_text
+
+    voice_summary = None
+    if isinstance(emails_for_summary, list):
+        voice_summary = build_email_voice_summary(
+            emails=emails_for_summary,
+            total=len(emails_for_summary),
+            max_to_read=VOICE_EMAIL_SUMMARY_MAX,
+        )
+        if voice_summary:
+            tts_text = voice_summary
         else:
             tts_text = base_text or _build_voice_summary(response_text)
     elif _is_email_heavy_response(response_text):
@@ -493,18 +483,24 @@ async def voice_chat(
         else:
             tts_text = _build_voice_summary(response_text)
     logger.info("Voice TTS text (%s chars): %s", len(tts_text or ""), (tts_text or "")[:200])
+    _voice_debug(
+        "VOICE_DEBUG: voice_summary=%r tts_text=%r emails_for_summary=%s",
+        (voice_summary or "")[:120],
+        (tts_text or "")[:120],
+        len(emails_for_summary) if isinstance(emails_for_summary, list) else "none",
+    )
 
-    response_id = _store_voice_response(user_id, response_text, emails_payload)
+    response_id = _store_voice_response(
+        user_id, response_text, emails_payload, voice_summary=voice_summary
+    )
 
+    tts_text = sanitize_for_tts(tts_text)
     audio_out, mime = await deepgram_tts(tts_text)
     logger.info("Voice TTS audio bytes: %s", len(audio_out))
 
     # Return audio for immediate playback + useful metadata in headers
     safe_transcript = _safe_header_value(normalized_transcript, max_len=200)
     safe_full_transcript = _safe_header_value(normalized_transcript, max_len=2000)
-    safe_reply = _safe_header_value(tts_text, max_len=2000)
-    safe_tts = _safe_header_value(tts_text, max_len=2000)
-
     return Response(
         content=audio_out,
         media_type=mime,
@@ -512,8 +508,6 @@ async def voice_chat(
             "X-Session-Id": sid,
             "X-Transcript": safe_transcript,
             "X-User-Transcript": safe_full_transcript,
-            "X-Assistant-Reply": safe_reply,
-            "X-Assistant-Tts": safe_tts,
             "X-Voice-Response-Id": response_id,
         },
     )
@@ -525,11 +519,18 @@ async def get_voice_response(
     payload = VOICE_RESPONSE_CACHE.get(response_id)
     if not payload or payload.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="Voice response not found")
+    _voice_debug(
+        "VOICE_DEBUG: voice_response keys=%s voice_summary=%r emails=%s",
+        list(payload.keys()) if isinstance(payload, dict) else "none",
+        (payload.get("voice_summary") or "")[:120] if isinstance(payload, dict) else "",
+        len(payload.get("emails") or []) if isinstance(payload, dict) else "none",
+    )
     return JSONResponse(
         {
             "response_text": payload.get("response_text", ""),
             "emails": payload.get("emails"),
             "insights": payload.get("insights"),
             "text_before": payload.get("text_before", ""),
+            "voice_summary": payload.get("voice_summary", ""),
         }
     )

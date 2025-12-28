@@ -195,7 +195,7 @@ export default {
         await accountsStore.fetchAccounts({ force: true });
 
         if (!accountsStore.hasConnectedAccounts) {
-          this.$router.replace("/app/accounts");
+          this.$router.replace("/connect-first-account");
           return;
         }
 
