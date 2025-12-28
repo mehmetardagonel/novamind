@@ -19,6 +19,7 @@ import io
 import wave
 
 from voice_summary import build_email_voice_summary
+from voice_sanitize import sanitize_for_tts
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 
@@ -493,15 +494,13 @@ async def voice_chat(
         user_id, response_text, emails_payload, voice_summary=voice_summary
     )
 
+    tts_text = sanitize_for_tts(tts_text)
     audio_out, mime = await deepgram_tts(tts_text)
     logger.info("Voice TTS audio bytes: %s", len(audio_out))
 
     # Return audio for immediate playback + useful metadata in headers
     safe_transcript = _safe_header_value(normalized_transcript, max_len=200)
     safe_full_transcript = _safe_header_value(normalized_transcript, max_len=2000)
-    safe_reply = _safe_header_value(tts_text, max_len=2000)
-    safe_tts = _safe_header_value(tts_text, max_len=2000)
-
     return Response(
         content=audio_out,
         media_type=mime,
@@ -509,8 +508,6 @@ async def voice_chat(
             "X-Session-Id": sid,
             "X-Transcript": safe_transcript,
             "X-User-Transcript": safe_full_transcript,
-            "X-Assistant-Reply": safe_reply,
-            "X-Assistant-Tts": safe_tts,
             "X-Voice-Response-Id": response_id,
         },
     )

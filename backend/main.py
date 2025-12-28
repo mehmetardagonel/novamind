@@ -226,8 +226,6 @@ app.add_middleware(
         "X-Session-Id",
         "X-Transcript",
         "X-User-Transcript",
-        "X-Assistant-Reply",
-        "X-Assistant-Tts",
         "X-Voice-Response-Id",
     ],
 )
