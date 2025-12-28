@@ -68,6 +68,11 @@ import { useRouter } from "vue-router";
 import BackgroundImage from "@/assets/background.png";
 import { useAccountsStore } from "@/stores/accounts";
 import { connectGmailAccount, connectOutlookAccount } from "@/api/accounts";
+import {
+  setForceMailboxLoading,
+  shouldForceMailboxLoading,
+  clearForceMailboxLoading,
+} from "@/utils/navigationFlags";
 
 const router = useRouter();
 const accountsStore = useAccountsStore();
@@ -75,16 +80,22 @@ const backgroundImageUrl = BackgroundImage;
 const errorMessage = ref("");
 const actionLoading = ref(false);
 
-const CONNECT_FLOW_KEY = "connect_first_account_flow";
+const connectDebug = import.meta.env.VITE_CONNECT_DEBUG === "1";
 
 const redirectIfConnected = () => {
   if (!accountsStore.hasConnectedAccounts) {
-    sessionStorage.removeItem(CONNECT_FLOW_KEY);
+    clearForceMailboxLoading();
     return;
   }
 
-  const shouldGoToLoading = sessionStorage.getItem(CONNECT_FLOW_KEY) === "1";
-  sessionStorage.removeItem(CONNECT_FLOW_KEY);
+  const shouldGoToLoading = shouldForceMailboxLoading();
+  clearForceMailboxLoading();
+
+  if (connectDebug) {
+    console.info(
+      `CONNECT_DEBUG: redirecting to ${shouldGoToLoading ? "/mailbox-loading" : "/app/email/inbox"} from ConnectFirstAccount`
+    );
+  }
 
   router.replace(shouldGoToLoading ? "/mailbox-loading" : "/app/email/inbox");
 };
@@ -99,13 +110,13 @@ const startConnectFlow = async (providerConnect) => {
   actionLoading.value = true;
   try {
     sessionStorage.setItem("oauth_redirect_path", "/connect-first-account");
-    sessionStorage.setItem(CONNECT_FLOW_KEY, "1");
+    setForceMailboxLoading();
 
     const authUrl = await providerConnect();
     window.location.href = authUrl;
   } catch (err) {
     console.error("Failed to initiate connection:", err);
-    sessionStorage.removeItem(CONNECT_FLOW_KEY);
+    clearForceMailboxLoading();
     sessionStorage.removeItem("oauth_redirect_path");
     errorMessage.value = "Could not start connection. Please try again.";
     actionLoading.value = false;
@@ -121,13 +132,13 @@ const connectOutlook = async () => {
   actionLoading.value = true;
   try {
     sessionStorage.setItem("oauth_redirect_path", "/connect-first-account");
-    sessionStorage.setItem(CONNECT_FLOW_KEY, "1");
+    setForceMailboxLoading();
 
     const authUrl = await connectOutlookAccount();
     window.location.href = authUrl;
   } catch (err) {
     console.error("Failed to initiate Outlook connection:", err);
-    sessionStorage.removeItem(CONNECT_FLOW_KEY);
+    clearForceMailboxLoading();
     sessionStorage.removeItem("oauth_redirect_path");
 
     if (err.response?.status === 503) {
