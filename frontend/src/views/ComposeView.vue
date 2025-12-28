@@ -227,6 +227,7 @@ export default {
 
     const API_URL = `${normalizedBase}/chat`;
     const VOICE_RESPONSE_URL = `${normalizedBase}/voice/response`;
+    const voiceDebug = import.meta.env.VITE_VOICE_DEBUG === "1";
 
     const chats = computed(() => chatStore.chats);
     const activeChatId = computed(() => chatStore.activeChatId);
@@ -629,10 +630,19 @@ export default {
           userTranscript,
           assistantReply,
           responseId,
+          assistantTts,
         } = await sendVoicePrompt(
           audioBlob,
           activeChat.value?.sessionId || null
         );
+
+        if (voiceDebug) {
+          console.info("VOICE_DEBUG: voice headers", {
+            hasAudio: Boolean(replyAudio),
+            responseId,
+            assistantTtsPreview: (assistantTts || "").slice(0, 120),
+          });
+        }
 
         const chatId = activeChat.value.id;
 
@@ -676,6 +686,16 @@ export default {
                   };
                 } else {
                   extracted = extractJsonFromText(responseText);
+                }
+
+                if (voiceDebug) {
+                  console.info("VOICE_DEBUG: voice response payload", {
+                    keys: Object.keys(payload || {}),
+                    voiceSummaryPreview: (payload.voice_summary || "").slice(0, 120),
+                    emailsCount: Array.isArray(payload.emails)
+                      ? payload.emails.length
+                      : null,
+                  });
                 }
               }
             } catch (error) {

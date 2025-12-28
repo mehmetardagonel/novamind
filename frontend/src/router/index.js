@@ -2,6 +2,7 @@
 
 import { createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "../stores/auth"; // 👈 NEW
+import { useAccountsStore } from "../stores/accounts";
 
 const routes = [
   {
@@ -32,6 +33,14 @@ const routes = [
     component: () =>
       import(
         /* webpackChunkName: "mailbox-loading" */ "../views/MailboxLoading.vue"
+      ),
+  },
+  {
+    path: "/connect-first-account",
+    name: "ConnectFirstAccount",
+    component: () =>
+      import(
+        /* webpackChunkName: "connect-first-account" */ "../views/ConnectFirstAccount.vue"
       ),
   },
 
@@ -166,6 +175,7 @@ let authInitialized = false;
 
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore();
+  const accountsStore = useAccountsStore();
 
   // Ensure Supabase session is restored once on app start
   if (!authInitialized && authStore.refreshUser) {
@@ -192,6 +202,24 @@ router.beforeEach(async (to, from, next) => {
 
   if (to.path === "/mailbox-loading" && !isAuthed) {
     return next("/login");
+  }
+
+  if (to.path === "/connect-first-account" && !isAuthed) {
+    return next("/login");
+  }
+
+  if (to.path === "/mailbox-loading" && isAuthed) {
+    await accountsStore.fetchAccounts();
+    if (!accountsStore.hasConnectedAccounts) {
+      return next("/connect-first-account");
+    }
+  }
+
+  if (to.path === "/connect-first-account" && isAuthed) {
+    await accountsStore.fetchAccounts();
+    if (accountsStore.hasConnectedAccounts) {
+      return next("/app/email/inbox");
+    }
   }
 
   return next();
