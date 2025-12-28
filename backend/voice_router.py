@@ -161,8 +161,13 @@ def _extract_emails_payload(text: str) -> dict:
     result["text_before"] = text.strip()
     return result
 
-def _store_voice_response(user_id: str, response_text: str) -> str:
-    payload = _extract_emails_payload(response_text or "")
+def _store_voice_response(user_id: str, response_text: str, emails: Optional[list] = None) -> str:
+    # Use provided emails if available (from chat_service.last_result.display_emails),
+    # otherwise fall back to parsing from response text
+    if emails is not None:
+        payload = {"emails": emails, "insights": None, "text_before": response_text or ""}
+    else:
+        payload = _extract_emails_payload(response_text or "")
     response_id = str(uuid.uuid4())
     VOICE_RESPONSE_CACHE[response_id] = {
         "user_id": user_id,
@@ -380,6 +385,8 @@ async def voice_chat(
     # Reuse the SAME session mechanism as /chat
     sid = session_id or str(uuid.uuid4())
 
+    emails_payload = None  # Will be populated if chat returns emails
+
     if not transcript:
         logger.info("Voice STT returned empty transcript.")
         response_text = "I didn't catch that. Please try speaking again."
@@ -429,6 +436,18 @@ async def voice_chat(
             )
         logger.info("Voice response (%s chars).", len(response_text or ""))
 
+        # Get display_emails directly from chat_service like /chat endpoint does
+        # This ensures voice uses the same reliable structured data source as text
+        emails_payload = None
+        try:
+            last_result = getattr(chat_sessions[session_key], "last_result", None) or {}
+            emails_payload = last_result.get("display_emails")
+            if emails_payload:
+                logger.info("Voice: extracted %d emails from chat_service.last_result", len(emails_payload))
+        except Exception as e:
+            logger.warning("Voice: failed to get display_emails from last_result: %s", e)
+            emails_payload = None
+
     # Store chat memory for RAG (best-effort)
     if transcript:
         try:
@@ -473,9 +492,9 @@ async def voice_chat(
             tts_text = first_line
         else:
             tts_text = _build_voice_summary(response_text)
-    logger.info("Voice TTS text (%s chars): %s", len(tts_text or ""), tts_text[:200])
+    logger.info("Voice TTS text (%s chars): %s", len(tts_text or ""), (tts_text or "")[:200])
 
-    response_id = _store_voice_response(user_id, response_text)
+    response_id = _store_voice_response(user_id, response_text, emails_payload)
 
     audio_out, mime = await deepgram_tts(tts_text)
     logger.info("Voice TTS audio bytes: %s", len(audio_out))
