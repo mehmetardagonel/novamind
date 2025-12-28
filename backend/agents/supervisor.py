@@ -98,7 +98,7 @@ Always be professional and helpful.
 INBOX_AGENT_PROMPT = """You are a specialized email reading assistant.
 
 Your capabilities:
-1. Fetch emails with various filters (sender, date, label, importance)
+1. Fetch emails with various filters (sender, date, label, importance, provider)
 2. Search emails with natural language queries
 3. List connected email accounts
 4. View all drafts or drafts for specific recipients
@@ -156,7 +156,9 @@ When user asks to "summarize my emails" or "create a summary":
 Examples:
 - "summarize my emails" → summarize_emails(time_period="today")
 - "summary of important emails this week" → summarize_emails(time_period="last_week", importance=True)
+- "summarize emails from last week" → summarize_emails(time_period="last_week")
 - "what did I get yesterday" → summarize_emails(time_period="yesterday")
+- "summarize last month's emails" → summarize_emails(time_period="last_month")
 
 Be concise but informative.
 """
@@ -250,11 +252,18 @@ def supervisor_node(state: EmailAgentState) -> dict:
 
     current_input = state.get("current_input", "").strip()
 
-    show_match = re.search(r"\b(show|list|display|give)\b.*\b(those|these|them|that)\b", current_input, re.IGNORECASE)
+    show_match = re.search(r"\b(shows?|lists?|displays?|give)\b.*\b(those|these|them|that|emails?|mails?)\b", current_input, re.IGNORECASE)
     has_time_filter = re.search(r"\b(today|yesterday|last|week|month|from|since|until)\b", current_input, re.IGNORECASE)
+
+    logger.info(f"[SHOW_CHECK] show_match={bool(show_match)}, has_time_filter={bool(has_time_filter)}")
+
     if show_match and not has_time_filter:
+        logger.info(f"[SHOW_HANDLER] Triggered! User input: '{current_input}'")
         listed_emails = state.get("listed_emails")
+        logger.info(f"[SHOW_HANDLER] listed_emails type: {type(listed_emails)}, has emails key: {listed_emails.get('emails') if isinstance(listed_emails, dict) else 'N/A'}")
+
         if not listed_emails or not listed_emails.get("emails"):
+            logger.warning(f"[SHOW_HANDLER] No listed_emails in state")
             return {
                 "response": "No emails are currently listed. Please ask for a summary or fetch emails first.",
                 "next_agent": "__end__",
@@ -262,24 +271,31 @@ def supervisor_node(state: EmailAgentState) -> dict:
 
         emails = listed_emails["emails"]
         list_type = listed_emails.get("list_type", "emails")
+        logger.info(f"[SHOW_HANDLER] Retrieved {len(emails) if emails else 0} emails, list_type={list_type}")
+
         if not emails:
+            logger.warning(f"[SHOW_HANDLER] Emails list is empty")
             return {
                 "response": "I couldn't format those emails. Please try fetching them again.",
                 "next_agent": "__end__",
             }
 
         if list_type == "drafts":
+            logger.info(f"[SHOW_HANDLER] Returning {len(emails)} drafts with display_emails")
             return {
                 "response": f"Found {len(emails)} drafts.",
                 "next_agent": "__end__",
                 "display_emails": emails,
             }
 
-        return {
+        logger.info(f"[SHOW_HANDLER] Returning {len(emails)} emails with display_emails. First email preview: {emails[0].get('subject', 'NO SUBJECT') if emails and isinstance(emails[0], dict) else 'INVALID FORMAT'}")
+        result = {
             "response": f"Found {len(emails)} emails.\n\n*Reply to any email by saying 'reply 1', 'reply 2', etc.*",
             "next_agent": "__end__",
             "display_emails": emails,
         }
+        logger.info(f"[SHOW_HANDLER] Result dict keys: {list(result.keys())}, display_emails type: {type(result['display_emails'])}, count: {len(result['display_emails'])}")
+        return result
 
     # Check for "reply N" pattern FIRST (before pending checks)
     reply_match = re.match(r'^reply\s*(?:to\s*)?(?:email\s*)?#?(\d+)$', current_input, re.IGNORECASE)
@@ -577,6 +593,136 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                 except Exception as parse_err:
                     logger.warning(f"[INBOX_AGENT] Direct fetch parse failed: {parse_err}")
 
+        # Handle summary requests with pre-parsed parameters
+        def _is_summary_request(text: str) -> bool:
+            return bool(re.search(r"\b(summary|summarize)\b", text) and re.search(r"\b(email|emails|mail|mails)\b", text))
+
+        if _is_summary_request(current_lower):
+            summary_tool = next((tool for tool in tools if tool.name == "summarize_emails"), None)
+            if summary_tool:
+                # Parse parameters from user input
+                time_period = _parse_time_period(current_lower)
+                importance = "important" in current_lower
+                provider = _parse_provider(current_lower)
+
+                summary_args = {}
+                if time_period:
+                    summary_args["time_period"] = time_period
+                if importance:
+                    summary_args["importance"] = importance
+                if provider:
+                    summary_args["provider"] = provider
+
+                logger.info(f"[INBOX_AGENT] Direct summarize with args: {summary_args}")
+                result = summary_tool.invoke(summary_args)
+
+                try:
+                    parsed_summary = json.loads(result)
+
+                    # Handle account selection if multiple accounts found
+                    if parsed_summary.get("requires_account_selection"):
+                        accounts = parsed_summary.get("accounts", [])
+                        provider_name = parsed_summary.get("provider", "email")
+
+                        account_list_str = "\n".join([
+                            f"{i+1}. {acc.get('email_address', 'Unknown')} ({acc.get('display_name', 'No name')})"
+                            for i, acc in enumerate(accounts)
+                        ])
+                        prompt = (
+                            f"I found multiple {provider_name} accounts connected. Which one would you like to summarize for {time_period or 'today'}?\n\n"
+                            f"{account_list_str}\n\n"
+                            f"Please reply with the number or email address."
+                        )
+
+                        selection = interrupt(prompt)
+                        logger.info(f"[INBOX_AGENT] User selected: {selection}")
+
+                        # Process selection
+                        selected_accounts = []
+                        selection_str = str(selection).strip().lower()
+
+                        if selection_str in ["all", "both", "all of them", "everything"]:
+                            selected_accounts = accounts
+                        elif selection_str.isdigit():
+                            idx = int(selection_str) - 1
+                            if 0 <= idx < len(accounts):
+                                selected_accounts = [accounts[idx]]
+                        else:
+                            for acc in accounts:
+                                if selection_str in acc.get("email_address", "").lower():
+                                    selected_accounts.append(acc)
+
+                        if not selected_accounts:
+                            return {
+                                "response": "I couldn't match your selection. Please try again.",
+                                "next_agent": "__end__"
+                            }
+
+                        # Re-run for selected accounts
+                        summaries = []
+                        all_emails_data = []
+
+                        for acc in selected_accounts:
+                            acc_args = summary_args.copy()
+                            acc_args["account_id"] = acc.get("id")
+                            if "provider" in acc_args:
+                                del acc_args["provider"]
+
+                            logger.info(f"[INBOX_AGENT] Summarizing {acc.get('email_address')} with args: {acc_args}")
+                            acc_result = summary_tool.invoke(acc_args)
+                            acc_data = json.loads(acc_result)
+
+                            if acc_data.get("success"):
+                                summaries.append(f"**{acc.get('email_address')}**:\n{acc_data.get('summary')}")
+                                if acc_data.get("emails"):
+                                    all_emails_data.extend(acc_data.get("emails"))
+                            else:
+                                summaries.append(f"**{acc.get('email_address')}**: {acc_data.get('message', 'No summary available')}")
+
+                        combined = "\n\n---\n\n".join(summaries)
+                        result_dict = {
+                            "response": combined,
+                            "next_agent": "__end__",
+                            "last_tool_result": {"results": [combined]}
+                        }
+
+                        if all_emails_data:
+                            result_dict["display_emails"] = all_emails_data
+                            result_dict["listed_emails"] = {
+                                "emails": all_emails_data,
+                                "listed_at": datetime.now().isoformat(),
+                                "list_type": "emails"
+                            }
+
+                        return result_dict
+
+                    # Single account summary - return result
+                    summary_text = parsed_summary.get("summary") or parsed_summary.get("message")
+                    summary_emails = parsed_summary.get("emails")
+
+                    result_dict = {
+                        "response": summary_text,
+                        "next_agent": "__end__",
+                        "last_tool_result": {"results": [result]}
+                    }
+
+                    if summary_emails and isinstance(summary_emails, list):
+                        result_dict["listed_emails"] = {
+                            "emails": summary_emails,
+                            "listed_at": datetime.now().isoformat(),
+                            "list_type": "emails"
+                        }
+                        if wants_show_emails:
+                            result_dict["display_emails"] = summary_emails
+                            result_dict["response"] = f"{summary_text}\n\nFound {len(summary_emails)} emails."
+                        else:
+                            result_dict["response"] = f"{summary_text}\n\n*Want to see the emails? Say 'show these emails'.*"
+
+                    return result_dict
+
+                except Exception as parse_err:
+                    logger.warning(f"[INBOX_AGENT] Direct summary parse failed: {parse_err}")
+
         messages = [
             SystemMessage(content=INBOX_AGENT_PROMPT),
             HumanMessage(content=current_input),
@@ -634,6 +780,94 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                         elif tool_name == "summarize_emails":
                             try:
                                 parsed_summary = json.loads(result)
+                                
+                                # Handle account selection if multiple accounts found for provider
+                                if parsed_summary.get("requires_account_selection"):
+                                    accounts = parsed_summary.get("accounts", [])
+                                    provider = parsed_summary.get("provider", "email")
+                                    original_params = parsed_summary.get("original_params", {})
+                                    
+                                    # Format prompt for user
+                                    account_list_str = "\n".join([
+                                        f"{i+1}. {acc.get('email_address')} ({acc.get('display_name', 'No name')})" 
+                                        for i, acc in enumerate(accounts)
+                                    ])
+                                    prompt = (
+                                        f"I found multiple {provider} accounts. Which one would you like to summarize?\n\n"
+                                        f"{account_list_str}\n\n"
+                                        f"Please reply with the number, email, or 'all'."
+                                    )
+                                    
+                                    # Interrupt workflow to get user selection
+                                    selection = interrupt(prompt)
+                                    logger.info(f"[INBOX_AGENT] Account selection: {selection}")
+                                    
+                                    # Process user selection
+                                    selected_accounts = []
+                                    selection_str = str(selection).strip().lower()
+                                    
+                                    if selection_str in ["all", "both", "all of them", "everything"]:
+                                        selected_accounts = accounts
+                                    elif selection_str.isdigit():
+                                        idx = int(selection_str) - 1
+                                        if 0 <= idx < len(accounts):
+                                            selected_accounts = [accounts[idx]]
+                                    else:
+                                        # Try matching email address
+                                        for acc in accounts:
+                                            if selection_str in acc.get("email_address", "").lower():
+                                                selected_accounts.append(acc)
+                                    
+                                    if not selected_accounts:
+                                        return {
+                                            "response": "I couldn't match your selection to an account. Please try asking again.",
+                                            "next_agent": "__end__"
+                                        }
+                                    
+                                    # Re-run summarization for selected account(s)
+                                    summaries = []
+                                    all_emails_data = []
+                                    
+                                    for acc in selected_accounts:
+                                        # Prepare args for specific account using original tool_args
+                                        new_args = tool_args.copy()
+                                        new_args["account_id"] = acc.get("id")
+                                        # Remove provider to avoid re-triggering selection logic
+                                        if "provider" in new_args:
+                                            del new_args["provider"]
+                                            
+                                        logger.info(f"[INBOX_AGENT] Re-running summary for account {acc.get('email_address')}")
+                                        logger.info(f"[INBOX_AGENT] New args: {new_args}")
+                                        res = tool.invoke(new_args)
+                                        res_data = json.loads(res)
+                                        
+                                        if res_data.get("success"):
+                                            acc_summary = res_data.get("summary")
+                                            summaries.append(f"**{acc.get('email_address')}**:\n{acc_summary}")
+                                            if res_data.get("emails"):
+                                                all_emails_data.extend(res_data.get("emails"))
+                                        else:
+                                            summaries.append(f"**{acc.get('email_address')}**: {res_data.get('message', 'Failed to summarize')}")
+                                    
+                                    combined_summary = "\n\n---\n\n".join(summaries)
+                                    
+                                    # Return combined result
+                                    result_dict = {
+                                        "response": combined_summary,
+                                        "next_agent": "__end__",
+                                        "last_tool_result": {"results": [combined_summary]}
+                                    }
+                                    
+                                    if all_emails_data:
+                                        result_dict["display_emails"] = all_emails_data
+                                        result_dict["listed_emails"] = {
+                                            "emails": all_emails_data,
+                                            "listed_at": datetime.now().isoformat(),
+                                            "list_type": "emails",
+                                        }
+                                        
+                                    return result_dict
+
                                 summary_text = parsed_summary.get("summary") or parsed_summary.get("message")
                                 summary_emails = parsed_summary.get("emails")
                                 if isinstance(summary_emails, list) and summary_emails:
@@ -1889,10 +2123,11 @@ def end_node(state: EmailAgentState) -> dict:
     """
     # If we already have a response, return it
     if state.get("response"):
+        # Preserve display_emails from state if it exists
         return {
             "response": state.get("response"),
             "next_agent": "__end__",
-            "display_emails": None,  # Clear to prevent persistence from previous turns
+            "display_emails": state.get("display_emails"),  # Preserve instead of clearing
         }
 
     # Generate a greeting or direct answer
@@ -1905,13 +2140,13 @@ def end_node(state: EmailAgentState) -> dict:
         return {
             "response": response.content,
             "next_agent": "__end__",
-            "display_emails": None,  # Explicitly clear
+            "display_emails": None,  # Clear for direct answers that don't have emails
         }
     except Exception as e:
         return {
             "response": "Hello! I'm your email assistant. How can I help you today?",
             "next_agent": "__end__",
-            "display_emails": None,  # Explicitly clear
+            "display_emails": None,  # Clear for error cases
         }
 
 
@@ -2119,6 +2354,17 @@ class EmailAssistant:
 
             self.last_result = result
             logger.info(f"[ASSISTANT] Graph result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
+
+            # Debug display_emails extraction
+            if isinstance(result, dict):
+                display_emails = result.get("display_emails")
+                logger.info(f"[ASSISTANT] display_emails in result: {display_emails is not None}")
+                if display_emails is not None:
+                    logger.info(f"[ASSISTANT] display_emails type: {type(display_emails)}, count: {len(display_emails) if isinstance(display_emails, list) else 'not a list'}")
+                    if isinstance(display_emails, list) and display_emails:
+                        logger.info(f"[ASSISTANT] First email in display_emails: {display_emails[0].get('subject', 'NO SUBJECT') if isinstance(display_emails[0], dict) else 'INVALID'}")
+                else:
+                    logger.warning(f"[ASSISTANT] display_emails is None or missing from result")
 
             # Check if the graph has pending interrupts via state snapshot
             # This is the proper way to detect interrupts in LangGraph

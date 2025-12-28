@@ -256,6 +256,8 @@ def create_inbox_tools(user_id: Optional[str] = None):
         time_period: str = "today",
         importance: bool = False,
         max_emails: int = 25,
+        provider: Optional[str] = None,
+        account_id: Optional[str] = None,
     ) -> str:
         """
         Generate an AI summary of emails from a specific time period.
@@ -264,11 +266,37 @@ def create_inbox_tools(user_id: Optional[str] = None):
             time_period: Time period to summarize (today, yesterday, last_week, last_month)
             importance: If True, only summarize important emails
             max_emails: Maximum number of emails to include in summary (default 25)
+            provider: Filter by email provider ('gmail' or 'outlook')
+            account_id: Specific account ID to summarize (optional)
 
         Returns:
             JSON string with summary and email details
         """
         try:
+            # Check for multiple accounts if provider is specified but account_id is not
+            if provider and not account_id:
+                accounts = _list_accounts(user_id=user_id)
+                provider_accounts = [
+                    acc for acc in accounts 
+                    if acc.get("provider", "").lower() == provider.lower()
+                ]
+                
+                if len(provider_accounts) > 1:
+                    return json.dumps({
+                        "requires_account_selection": True,
+                        "provider": provider,
+                        "accounts": provider_accounts,
+                        "message": f"I found multiple {provider} accounts. Which one would you like to summarize?",
+                        "original_params": {
+                            "time_period": time_period,
+                            "importance": importance,
+                            "max_emails": max_emails,
+                            "provider": provider
+                        }
+                    }, cls=DateTimeEncoder)
+                elif len(provider_accounts) == 1:
+                    account_id = provider_accounts[0].get("id")
+
             # Get LLM instance
             from agents.supervisor import get_llm
             llm = get_llm()
@@ -279,6 +307,8 @@ def create_inbox_tools(user_id: Optional[str] = None):
                 importance=importance,
                 max_results=max_emails,
                 user_id=user_id,
+                provider=provider,
+                account_id=account_id,
             )
 
             if not emails or not isinstance(emails, list):

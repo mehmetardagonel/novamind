@@ -720,10 +720,20 @@ async def chat(
         try:
             last_result = getattr(chat_service, "last_result", None) or {}
             emails_payload = last_result.get("display_emails")
-        except Exception:
+            if emails_payload:
+                logger.info(f"[CHAT_API] Returning {len(emails_payload)} emails to frontend")
+                logger.info(f"[CHAT_API] emails_payload type: {type(emails_payload)}")
+                if isinstance(emails_payload, list) and emails_payload:
+                    logger.info(f"[CHAT_API] First email sample: {list(emails_payload[0].keys()) if isinstance(emails_payload[0], dict) else type(emails_payload[0])}")
+            else:
+                logger.info(f"[CHAT_API] No display_emails in result. Result keys: {list(last_result.keys()) if isinstance(last_result, dict) else 'not a dict'}")
+        except Exception as e:
+            logger.warning(f"[CHAT_API] Error getting display_emails: {e}")
             emails_payload = None
 
-        return ChatResponse(response=ai_response, session_id=session_id, emails=emails_payload)
+        response_obj = ChatResponse(response=ai_response, session_id=session_id, emails=emails_payload)
+        logger.info(f"[CHAT_API] Final ChatResponse emails field: {response_obj.emails is not None}, count: {len(response_obj.emails) if response_obj.emails else 0}")
+        return response_obj
     except ValueError as e:
         logger.warning(f"Invalid chat input: {str(e)}")
         # User input validation error
