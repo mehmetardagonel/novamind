@@ -95,9 +95,9 @@
             <div class="email-header">
               <div class="sender-with-label">
                 <span class="email-sender">{{ email.sender }}</span>
-                <!-- Show "To:" field when in drafts view -->
+                <!-- Show "To:" field when in drafts or sent view -->
                 <span
-                  v-if="folder === 'drafts' && email.recipient"
+                  v-if="(folder === 'drafts' || folder === 'sent') && email.recipient"
                   class="email-recipient"
                 >
                   → {{ email.recipient }}
@@ -274,6 +274,10 @@
             <div class="sender-info">
               <div class="sender-details">
                 <div class="sender-name">{{ selectedEmail.sender }}</div>
+                <div v-if="folder === 'sent' && selectedEmail.recipient" class="recipient-info">
+                  <span class="recipient-label">To: </span>
+                  <span class="recipient-value">{{ selectedEmail.recipient }}</span>
+                </div>
                 <div class="email-date-full">
                   {{ formatFullDate(selectedEmail.date) }}
                 </div>
@@ -1565,6 +1569,22 @@ export default {
   font-weight: 600;
   color: var(--text-primary, #333);
   font-size: 1.1rem;
+}
+
+.recipient-info {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+}
+
+.recipient-label {
+  font-weight: 500;
+  color: var(--text-secondary, #666);
+}
+
+.recipient-value {
+  color: #1976d2;
+  font-weight: 500;
 }
 
 .email-date-full {
