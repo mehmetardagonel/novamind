@@ -501,6 +501,17 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                 return "outlook"
             return None
 
+        def _parse_sender(text: str) -> Optional[str]:
+            # Pattern 1: "from sender: email@example.com" or "from: email@example.com"
+            match = re.search(r"from\s*(?:sender)?[:\s]+([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", text)
+            if match:
+                return match.group(1)
+            # Pattern 2: "emails from email@example.com"
+            match = re.search(r"from\s+([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", text)
+            if match:
+                return match.group(1)
+            return None
+
         def _is_draft_list_request(text: str) -> bool:
             if not re.search(r"\bdraft(s)?\b", text):
                 return False
@@ -570,6 +581,7 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                     "time_period": _parse_time_period(current_lower),
                     "importance": "important" in current_lower,
                     "provider": _parse_provider(current_lower),
+                    "sender": _parse_sender(current_lower),
                 }
                 fetch_args = {k: v for k, v in fetch_args.items() if v is not None}
                 result = fetch_tool.invoke(fetch_args)
