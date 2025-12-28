@@ -1205,14 +1205,18 @@ def draft_agent_node(state: EmailAgentState) -> dict:
 
                         if parsed["mode"] != "direct" and is_generic_update:
                             logger.info(f"[DRAFT_AGENT] No update details provided, asking user for choice")
-                            ai_choice_prompt = "Would you like me to:\n1. Auto-generate the update based on context\n2. Let you provide the update yourself\n\nPlease enter 1 or 2:"
+                            ai_choice_prompt = "Would you like me to:\n1. Generate response with AI\n2. Let you provide the update yourself\n\nPlease enter 1 or 2:"
 
                             ai_choice = interrupt(ai_choice_prompt)
                             logger.info(f"[DRAFT_AGENT] User AI choice: {ai_choice}")
 
                             if ai_choice.strip() == "1":
-                                # User wants AI to generate - set instruction for AI
-                                parsed["instruction"] = f"Update this draft to be more professional and clear"
+                                # User wants AI to generate - ask for context first
+                                context_prompt = "Please provide context for the AI to generate the update.\n\nExamples:\n- 'make the mail a bit formal'\n- 'replace the time of the meeting with 18:00 PM'\n- 'add more details about the project'\n\nYour context:"
+                                context = interrupt(context_prompt)
+                                logger.info(f"[DRAFT_AGENT] User provided context: {context}")
+                                # Use the context to build instruction for AI
+                                parsed["instruction"] = context.strip()
                             elif ai_choice.strip() == "2":
                                 # User wants to provide content manually
                                 update_content_prompt = "Please provide the updated subject and body.\nFormat: subject: <subject>\nbody: <body>"
@@ -1734,6 +1738,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                     if 1 <= selection <= len(drafts):
                         selected = drafts[selection - 1]
                         operation = pending.get("operation")
+                        logger.info(f"[DRAFT_AGENT] Draft selection - operation={operation}, pending_keys={list(pending.keys())}")
 
                         if operation == "send":
                             return {
@@ -1751,10 +1756,16 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                         elif operation == "delete":
                             draft_id = selected.get("id")
                             subject = selected.get("subject", "(No subject)")
+                            # Get account_id from draft_pending to ensure deletion from correct account
+                            account_id = pending.get("selected_account_id")
 
                             # Delete the draft
                             from email_tools import delete_draft
-                            result = delete_draft(draft_id=draft_id, user_id=state.get("user_id"))
+                            result = delete_draft(
+                                draft_id=draft_id,
+                                user_id=state.get("user_id"),
+                                account_id=account_id
+                            )
 
                             if result.get("success"):
                                 return {
@@ -1911,12 +1922,18 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                             }
 
                         if result_dict.get("requires_selection"):
+                            drafts = result_dict.get("drafts", [])
+                            # Extract account_id from first draft for multi-account support
+                            account_id = drafts[0].get("account_id") if drafts else None
+                            operation_value = result_dict.get("operation", "update")
+                            logger.info(f"[DRAFT_AGENT] Setting draft_pending with operation={operation_value}, result_dict_keys={list(result_dict.keys())}")
                             return {
                                 "response": result_dict.get("message", "Please select a draft."),
                                 "draft_pending": DraftPendingInfo(
                                     awaiting="selection",
-                                    drafts_list=result_dict.get("drafts", []),
-                                    operation=result_dict.get("operation", "update"),
+                                    drafts_list=drafts,
+                                    operation=operation_value,
+                                    selected_account_id=account_id,
                                 ),
                                 "next_agent": "__end__",
                             }
@@ -2255,8 +2272,14 @@ class EmailAssistant:
             return "Please provide a message to get started."
 
         try:
-            # Create config with thread_id for checkpointer
-            config = {"configurable": {"thread_id": self.thread_id}}
+            # Create config with thread_id and user_id for checkpointer
+            # user_id is critical for multi-user state isolation (LangGraph best practice)
+            config = {
+                "configurable": {
+                    "thread_id": self.thread_id,
+                    "user_id": self.user_id or "default"
+                }
+            }
 
             # Check if we should resume from an interrupted state
             try:

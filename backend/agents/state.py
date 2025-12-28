@@ -54,6 +54,7 @@ class DraftPendingInfo(TypedDict, total=False):
     interrupt_reason: Optional[Literal["need_recipient", "need_subject_body", "need_ai_choice", "need_draft_selection", "need_update_details", "need_confirmation"]]
     selected_draft_id: Optional[str]  # Preserve draft ID being updated/sent/deleted
     selected_draft_recipient: Optional[str]  # Preserve recipient context across interrupts
+    selected_account_id: Optional[str]  # Preserve account ID for multi-account scenarios
 
     drafts_list: Optional[list]  # For multi-draft selection
     operation: Optional[Literal["send", "delete", "update"]]

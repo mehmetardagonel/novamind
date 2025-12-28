@@ -633,12 +633,15 @@ Maintain professional tone and structure."""
                     f"{i+1}. {d.get('subject', '(No subject)')[:40]}... ({d.get('date', 'Unknown')[:10]})"
                     for i, d in enumerate(drafts)
                 ])
-                return json.dumps({
+                result = {
                     "success": False,
                     "requires_selection": True,
                     "drafts": drafts,
+                    "operation": "delete",
                     "message": f"Found {len(drafts)} drafts for {recipient_email}:\n{draft_list}\nWhich one would you like to delete?"
-                })
+                }
+                logger.info(f"[TOOL] delete_draft_for_recipient returning with operation={result.get('operation')}")
+                return json.dumps(result)
 
             # Single draft - delete it
             draft = drafts[0]

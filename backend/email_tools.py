@@ -563,11 +563,18 @@ def get_drafts_for_recipient(to_email: str, user_id: str = None) -> List[Dict]:
 
             service = asyncio.run(get_user_gmail_service(user_id, account_id))
             drafts = get_gmail_drafts_by_recipient(to_email, service=service)
+            # Add account_id to each draft for multi-account support
+            results = []
+            for draft in drafts:
+                draft_dict = draft if isinstance(draft, dict) else draft.model_dump(mode='json')
+                draft_dict["account_id"] = account_id
+                draft_dict["provider"] = "gmail"
+                results.append(draft_dict)
+            return results
         else:
             drafts = get_gmail_drafts_by_recipient(to_email)
-
-        return [draft if isinstance(draft, dict) else draft.model_dump(mode='json')
-                for draft in drafts]
+            return [draft if isinstance(draft, dict) else draft.model_dump(mode='json')
+                    for draft in drafts]
     except Exception as e:
         logger.error(f"Error fetching drafts for recipient {to_email}: {str(e)}")
         return []
