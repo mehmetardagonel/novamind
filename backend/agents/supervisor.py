@@ -97,24 +97,9 @@ Always be professional and helpful.
 
 INBOX_AGENT_PROMPT = """You are a specialized email reading assistant.
 
-⚠️ CRITICAL RULE - READ THIS FIRST ⚠️
-When user asks "show emails FROM [someone]" or "mails FROM [someone]":
-→ YOU MUST use fetch_emails(sender="[someone]")
-→ Extract the name/email after "from" and pass it to the sender parameter
-→ DO NOT fetch all emails and filter manually
-→ sender supports partial matching (e.g., "google" matches "noreply@google.com")
-
-Examples:
-- "show mails from pullandbear@news.pullandbear.com" → fetch_emails(sender="pullandbear")
-- "show me important mails from Berat" → fetch_emails(sender="Berat", importance=True)
-- "did I receive anything from Google" → fetch_emails(sender="Google")
-- "emails from john@example.com" → fetch_emails(sender="john@example.com")
-- "show mails from yesterday" → fetch_emails(time_period="yesterday")
-- "show important emails" → fetch_emails(importance=True)
-
 Your capabilities:
-1. Fetch emails with filters (sender, date, label, importance)
-2. Search emails with natural language (use query_emails for complex searches)
+1. Fetch emails with various filters (sender, date, label, importance, provider)
+2. Search emails with natural language queries
 3. List connected email accounts
 4. View all drafts or drafts for specific recipients
 5. Summarize emails from specific time periods
@@ -516,27 +501,6 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
                 return "outlook"
             return None
 
-        def _parse_sender(text: str) -> Optional[str]:
-            """Extract sender from text like 'emails from X' or 'mails from X'."""
-            # Match patterns: "from <sender>" where sender is email or name
-            # Avoid matching time patterns like "from yesterday"
-            time_words = {"yesterday", "today", "last", "this", "week", "month", "ago"}
-
-            # Pattern 1: "from user@email.com" - full email
-            email_match = re.search(r"\bfrom\s+([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", text, re.IGNORECASE)
-            if email_match:
-                return email_match.group(1)
-
-            # Pattern 2: "from <name/keyword>" - extract sender name/keyword
-            from_match = re.search(r"\bfrom\s+([A-Za-z0-9._@-]+(?:\s+[A-Za-z0-9._-]+)?)", text, re.IGNORECASE)
-            if from_match:
-                sender = from_match.group(1).strip().lower()
-                # Skip if it's a time word
-                if sender.split()[0] not in time_words:
-                    return from_match.group(1).strip()
-
-            return None
-
         def _is_draft_list_request(text: str) -> bool:
             if not re.search(r"\bdraft(s)?\b", text):
                 return False
@@ -602,18 +566,12 @@ def inbox_agent_node(state: EmailAgentState) -> dict:
         if _is_list_request(current_lower):
             fetch_tool = next((tool for tool in tools if tool.name == "fetch_emails"), None)
             if fetch_tool:
-                # Parse sender from "from X" pattern
-                parsed_sender = _parse_sender(current_input)  # Use original case for sender
-                logger.info(f"[INBOX_AGENT] Parsed sender from input: {parsed_sender}")
-
                 fetch_args = {
                     "time_period": _parse_time_period(current_lower),
                     "importance": "important" in current_lower,
                     "provider": _parse_provider(current_lower),
-                    "sender": parsed_sender,  # Add sender parameter
                 }
                 fetch_args = {k: v for k, v in fetch_args.items() if v is not None}
-                logger.info(f"[INBOX_AGENT] Direct fetch with args: {fetch_args}")
                 result = fetch_tool.invoke(fetch_args)
                 try:
                     json_str = result
