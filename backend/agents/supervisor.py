@@ -1269,12 +1269,14 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                                 "response": update_result_dict.get("message", "Draft updated successfully"),
                                 "next_agent": "__end__",
                                 "draft_pending": None,
+                                "display_emails": None,
                             }
                         else:
                             return {
                                 "response": update_result_dict.get("message", "Failed to update draft"),
                                 "next_agent": "__end__",
                                 "draft_pending": None,
+                                "display_emails": None,
                             }
 
                     elif result_dict.get("success"):
@@ -1283,6 +1285,7 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                             "response": result_dict.get("message", "Draft updated successfully"),
                             "next_agent": "__end__",
                             "draft_pending": None,
+                            "display_emails": None,
                         }
                     else:
                         # Error
@@ -1290,6 +1293,7 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                             "response": result_dict.get("message", "Failed to update draft"),
                             "next_agent": "__end__",
                             "draft_pending": None,
+                            "display_emails": None,
                         }
 
         # ========================================================================
@@ -1311,6 +1315,7 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                         auto_generate=False,
                     ),
                     "next_agent": "__end__",
+                    "display_emails": None,
                 }
 
             if subject and body:
@@ -1327,11 +1332,13 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                                 "response": f"Draft created to {recipient} with subject '{subject}'",
                                 "next_agent": "__end__",
                                 "draft_pending": None,
+                                "display_emails": None,
                             }
                         return {
                             "response": f"Failed to create draft: {result_dict.get('message', 'Unknown error')}",
                             "next_agent": "__end__",
                             "draft_pending": None,
+                            "display_emails": None,
                         }
 
             return {
@@ -1348,6 +1355,7 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                     auto_generate=False,
                 ),
                 "next_agent": "__end__",
+                "display_emails": None,
             }
 
         # Handle pending draft completion
@@ -1402,6 +1410,7 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                         ),
                         "next_agent": "__end__",
                         "draft_pending": pending,
+                        "display_emails": None,
                     }
 
                 # Handle CANCEL
@@ -1410,6 +1419,7 @@ def draft_agent_node(state: EmailAgentState) -> dict:
                         "response": "Draft creation cancelled.",
                         "next_agent": "__end__",
                         "draft_pending": None,
+                        "display_emails": None,
                     }
 
                 # Handle AUTO-COMPLETE
@@ -1463,12 +1473,14 @@ Make it professional, clear, and appropriate. The body should include:
                                     "response": f"Draft created to {recipient} with subject '{subject}'",
                                     "next_agent": "__end__",
                                     "draft_pending": None,
+                                    "display_emails": None,
                                 }
                             else:
                                 return {
                                     "response": f"Failed to create draft: {result_dict.get('message', 'Unknown error')}",
                                     "next_agent": "__end__",
                                     "draft_pending": None,
+                                    "display_emails": None,
                                 }
 
                 # Handle MANUAL input request
@@ -1487,6 +1499,7 @@ Make it professional, clear, and appropriate. The body should include:
                             auto_generate=False,
                         ),
                         "next_agent": "__end__",
+                        "display_emails": None,
                     }
 
             elif awaiting == "subject_and_body":
@@ -1526,6 +1539,7 @@ Make it professional, clear, and appropriate. The body should include:
                         "response": response,
                         "next_agent": "__end__",
                         "draft_pending": updated_pending,
+                        "display_emails": None,
                     }
 
                 # Create the draft with manual input
@@ -1544,12 +1558,14 @@ Make it professional, clear, and appropriate. The body should include:
                                 "response": f"Draft created to {recipient} with subject '{subject}'",
                                 "next_agent": "__end__",
                                 "draft_pending": None,
+                                "display_emails": None,
                             }
                         else:
                             return {
                                 "response": f"Failed to create draft: {result_dict.get('message', 'Unknown error')}",
                                 "next_agent": "__end__",
                                 "draft_pending": None,
+                                "display_emails": None,
                             }
 
             elif awaiting == "recipient":
@@ -1560,6 +1576,7 @@ Make it professional, clear, and appropriate. The body should include:
                         "response": f"'{email_input}' doesn't look like a valid email address.\nPlease provide a valid email (e.g., john@example.com)",
                         "next_agent": "__end__",
                         "draft_pending": pending,
+                        "display_emails": None,
                     }
 
                 # Create the draft with the provided email
@@ -1603,6 +1620,7 @@ Make it professional and appropriate."""
                                 auto_generate=False,
                             ),
                             "next_agent": "__end__",
+                            "display_emails": None,
                         }
 
                 # Call create_draft tool
@@ -1620,12 +1638,14 @@ Make it professional and appropriate."""
                                 "response": f"Draft created to {email_input} with subject '{subject}'",
                                 "next_agent": "__end__",
                                 "draft_pending": None,
+                                "display_emails": None,
                             }
                         else:
                             return {
                                 "response": f"Failed to create draft: {result_dict.get('message', 'Unknown error')}",
                                 "next_agent": "__end__",
                                 "draft_pending": None,
+                                "display_emails": None,
                             }
 
             elif awaiting == "update_instruction":
@@ -1638,6 +1658,7 @@ Make it professional and appropriate."""
                         "response": "❌ No draft selected. Please try again.",
                         "next_agent": "__end__",
                         "draft_pending": None,
+                        "display_emails": None,
                     }
 
                 selected = drafts_list[0]
@@ -1659,12 +1680,14 @@ Make it professional and appropriate."""
                                 "response": f"✅ Draft updated: '{subject}'\n\nNew body:\n{new_body[:200]}...",
                                 "next_agent": "__end__",
                                 "draft_pending": None,
+                                "display_emails": None,
                             }
                         else:
                             return {
                                 "response": f"❌ Failed to update draft: {result_dict.get('message', 'Unknown error')}",
                                 "next_agent": "__end__",
                                 "draft_pending": None,
+                                "display_emails": None,
                             }
 
             elif awaiting == "reply_content":
@@ -1693,6 +1716,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                         return {
                             "response": "Failed to generate reply. Please type your message manually.",
                             "next_agent": "__end__",
+                            "display_emails": None,
                         }
 
                 if not reply_content:
@@ -1700,6 +1724,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                         "response": "What would you like to reply?\n\n*You can type your message or say 'generate it for me' to have AI write a reply.*",
                         "next_agent": "__end__",
                         "draft_pending": pending,
+                        "display_emails": None,
                     }
 
                 # Extract recipient email from sender
@@ -1765,6 +1790,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     operation="send",
                                 ),
                                 "next_agent": "__end__",
+                                "display_emails": None,
                             }
 
                         # Handle DELETE operation
@@ -1787,12 +1813,14 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     "response": f"✅ Draft deleted: '{subject}'",
                                     "next_agent": "__end__",
                                     "draft_pending": None,
+                                    "display_emails": None,
                                 }
                             else:
                                 return {
                                     "response": f"❌ Failed to delete draft: {result.get('message', 'Unknown error')}",
                                     "next_agent": "__end__",
                                     "draft_pending": None,
+                                    "display_emails": None,
                                 }
 
                         # Handle UPDATE operation
@@ -1810,6 +1838,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                         operation="update",
                                     ),
                                     "next_agent": "__end__",
+                                    "display_emails": None,
                                 }
 
                             # Call update_draft tool
@@ -1827,12 +1856,14 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                             "response": f"✅ Draft updated: '{subject}'\n\nNew body:\n{new_body[:200]}...",
                                             "next_agent": "__end__",
                                             "draft_pending": None,
+                                            "display_emails": None,
                                         }
                                     else:
                                         return {
                                             "response": f"❌ Failed to update draft: {result_dict.get('message', 'Unknown error')}",
                                             "next_agent": "__end__",
                                             "draft_pending": None,
+                                            "display_emails": None,
                                         }
 
         # Regular draft request - use LLM with tools
@@ -1884,6 +1915,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                         auto_generate=False,
                                     ),
                                     "next_agent": "__end__",
+                                    "display_emails": None,
                                 }
 
                             # ALWAYS present choice to user before creating draft
@@ -1901,6 +1933,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     auto_generate=False,
                                 ),
                                 "next_agent": "__end__",
+                                "display_emails": None,
                             }
 
                         result = tool.invoke(tool_args)
@@ -1934,6 +1967,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     auto_generate=False,
                                 ),
                                 "next_agent": "__end__",
+                                "display_emails": None,
                             }
 
                         if result_dict.get("requires_selection"):
@@ -1951,6 +1985,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     selected_account_id=account_id,
                                 ),
                                 "next_agent": "__end__",
+                                "display_emails": None,
                             }
 
                         if result_dict.get("requires_confirmation"):
@@ -1963,6 +1998,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                     recipient=result_dict.get("recipient"),
                                 ),
                                 "next_agent": "__end__",
+                                "display_emails": None,
                             }
 
                         if result_dict.get("success"):
@@ -1970,17 +2006,20 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                                 "response": result_dict.get("message", "Operation completed."),
                                 "next_agent": "__end__",
                                 "draft_pending": None,
+                                "display_emails": None,
                             }
 
                         return {
                             "response": result_dict.get("message", result),
                             "next_agent": "__end__",
+                            "display_emails": None,
                         }
 
         # No tool call - return LLM response
         return {
             "response": response.content or "I couldn't process that draft request.",
             "next_agent": "__end__",
+            "display_emails": None,
         }
 
     except GraphInterrupt:
@@ -1993,6 +2032,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
             "next_agent": "__end__",
             "error": str(e),
             "draft_pending": None,
+            "display_emails": None,
         }
 
 
@@ -2025,6 +2065,7 @@ def send_agent_node(state: EmailAgentState) -> dict:
                             "response": "Error: Could not find draft ID. The draft may not have been created properly.",
                             "next_agent": "__end__",
                             "draft_pending": None,
+                            "display_emails": None,
                         }
 
                     for tool in tools:
@@ -2038,12 +2079,14 @@ def send_agent_node(state: EmailAgentState) -> dict:
                                     "response": f"Email sent to {recipient}!",
                                     "next_agent": "__end__",
                                     "draft_pending": None,
+                                    "display_emails": None,
                                 }
                             else:
                                 return {
                                     "response": f"Failed to send: {result_dict.get('message', 'Unknown error')}",
                                     "next_agent": "__end__",
                                     "draft_pending": None,
+                                    "display_emails": None,
                                 }
 
             elif current_input in ["no", "n"]:
@@ -2051,6 +2094,7 @@ def send_agent_node(state: EmailAgentState) -> dict:
                     "response": "Operation cancelled. Draft not sent.",
                     "next_agent": "__end__",
                     "draft_pending": None,
+                    "display_emails": None,
                 }
 
         # Regular send request
@@ -2075,16 +2119,19 @@ def send_agent_node(state: EmailAgentState) -> dict:
                             return {
                                 "response": f"Email sent to {tool_args.get('recipient', 'recipient')}!",
                                 "next_agent": "__end__",
+                                "display_emails": None,
                             }
                         else:
                             return {
                                 "response": f"Failed to send: {result_dict.get('message', 'Unknown error')}",
                                 "next_agent": "__end__",
+                                "display_emails": None,
                             }
 
         return {
             "response": response.content or "I couldn't process that send request.",
             "next_agent": "__end__",
+            "display_emails": None,
         }
 
     except Exception as e:
@@ -2093,6 +2140,7 @@ def send_agent_node(state: EmailAgentState) -> dict:
             "response": f"Error sending email: {str(e)}",
             "next_agent": "__end__",
             "error": str(e),
+            "display_emails": None,
         }
 
 
@@ -2128,11 +2176,13 @@ def organization_agent_node(state: EmailAgentState) -> dict:
                         return {
                             "response": user_message,
                             "next_agent": "__end__",
+                            "display_emails": None,
                         }
 
         return {
             "response": response.content or "I couldn't process that organization request.",
             "next_agent": "__end__",
+            "display_emails": None,
         }
 
     except Exception as e:
@@ -2141,6 +2191,7 @@ def organization_agent_node(state: EmailAgentState) -> dict:
             "response": f"Error: {str(e)}",
             "next_agent": "__end__",
             "error": str(e),
+            "display_emails": None,
         }
 
 
@@ -2152,6 +2203,7 @@ def human_node(state: EmailAgentState) -> dict:
         "response": "I'm not sure what you'd like me to do. Could you please clarify your request?\n\nI can help you:\n- Read and search emails\n- Create and manage drafts\n- Send emails\n- Organize your inbox",
         "next_agent": "__end__",
         "requires_human_input": True,
+        "display_emails": None,
     }
 
 
