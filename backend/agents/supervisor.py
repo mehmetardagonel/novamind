@@ -2119,8 +2119,14 @@ def organization_agent_node(state: EmailAgentState) -> dict:
                 for tool in tools:
                     if tool.name == tool_call["name"]:
                         result = tool.invoke(tool_call["args"])
+                        # Parse JSON and extract user-friendly message
+                        try:
+                            result_dict = json.loads(result)
+                            user_message = result_dict.get("message", result)
+                        except (json.JSONDecodeError, TypeError):
+                            user_message = result
                         return {
-                            "response": result,
+                            "response": user_message,
                             "next_agent": "__end__",
                         }
 
