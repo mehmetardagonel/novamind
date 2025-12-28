@@ -340,6 +340,7 @@ What would you like to reply?
         return {
             "response": preview,
             "next_agent": "__end__",
+            "display_emails": None,
             "draft_pending": DraftPendingInfo(
                 awaiting="reply_content",
                 reply_to_email=email,
@@ -1716,6 +1717,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                             return {
                                 "response": f"Reply draft created!\n\n**To:** {recipient}\n**Subject:** {subject}\n\n**Your reply:**\n{reply_content}\n\nWould you like to send it? (Yes/No)",
                                 "next_agent": "__end__",
+                                "display_emails": None,
                                 "draft_pending": DraftPendingInfo(
                                     awaiting="confirmation",
                                     recipient=recipient,
@@ -1727,6 +1729,7 @@ Write a brief, professional reply. Return ONLY the reply text, no subject line o
                             return {
                                 "response": f"Failed to create reply draft: {result_dict.get('message', 'Unknown error')}",
                                 "next_agent": "__end__",
+                                "display_emails": None,
                                 "draft_pending": None,
                             }
 
