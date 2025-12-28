@@ -32,8 +32,9 @@
     </div>
 
     <!-- Search bar and refresh toolbar -->
-    <div v-if="!isInitialLoading && !authUrl && displayedEmails.length > 0" class="email-controls">
+    <div v-if="!isInitialLoading && !authUrl && !errorMessage" class="email-controls">
       <EmailSearchBar
+        v-if="folder === 'inbox'"
         v-model="currentSearchQuery"
         @search="handleSearch"
         @clear="handleClearSearch"
@@ -46,7 +47,7 @@
           :disabled="loading"
           title="Refresh emails"
         >
-          <span class="material-symbols-outlined">refresh</span>
+          <span class="material-symbols-outlined" :class="{ spinning: loading }">refresh</span>
           Refresh
         </button>
         <div v-if="isBackgroundLoading" class="background-loading">
@@ -85,12 +86,23 @@
             :class="{
               unread: email.isUnread,
               selected: email === selectedEmail,
+              'trash-item': isTrash,
             }"
             @click="!isTrash && selectEmail(email)"
           >
             <div class="email-header">
               <div class="sender-with-label">
-                <span class="email-sender">{{ email.sender }}</span>
+                <!-- Show recipient in Sent folder, sender everywhere else -->
+                <span class="email-sender" v-if="folder !== 'sent'">{{ email.sender }}</span>
+                <span class="email-sender" v-else>To: {{ email.recipient || email.to || 'Unknown' }}</span>
+
+                <!-- Show "To:" field when in drafts view -->
+                <span
+                  v-if="folder === 'drafts' && email.recipient"
+                  class="email-recipient"
+                >
+                  → {{ email.recipient }}
+                </span>
                 <span v-if="email.account_email" class="account-badge" :title="email.account_email">
                   {{ email.account_email }}
                 </span>
@@ -234,12 +246,16 @@
         </div>
 
         <div class="email-detail-content">
-          <h2 class="email-detail-subject">{{ selectedEmail.subject }}</h2>
+          <h2 v-if="!isDrafts" class="email-detail-subject">
+            {{ selectedEmail.subject }}
+          </h2>
 
           <div class="email-detail-meta">
             <div class="sender-info">
               <div class="sender-details">
-                <div class="sender-name">{{ selectedEmail.sender }}</div>
+                <!-- Show recipient in Sent folder, sender everywhere else -->
+                <div class="sender-name" v-if="folder !== 'sent'">{{ selectedEmail.sender }}</div>
+                <div class="sender-name" v-else>To: {{ selectedEmail.recipient || selectedEmail.to || 'Unknown' }}</div>
                 <div class="email-date-full">
                   {{ formatFullDate(selectedEmail.date) }}
                 </div>
@@ -250,7 +266,74 @@
             </div>
           </div>
 
+          <div v-if="isDrafts" class="draft-editor">
+            <div class="draft-row">
+              <label class="draft-label">To</label>
+              <input
+                class="draft-input"
+                v-model="draftForm.to"
+                @input="queueDraftSave"
+                placeholder="Recipient"
+              />
+            </div>
+            <div class="draft-row">
+              <label class="draft-label">Cc</label>
+              <input
+                class="draft-input"
+                v-model="draftForm.cc"
+                @input="queueDraftSave"
+                placeholder="Cc"
+              />
+            </div>
+            <div class="draft-row">
+              <label class="draft-label">Bcc</label>
+              <input
+                class="draft-input"
+                v-model="draftForm.bcc"
+                @input="queueDraftSave"
+                placeholder="Bcc"
+              />
+            </div>
+            <div class="draft-row">
+              <label class="draft-label">Subject</label>
+              <input
+                class="draft-input"
+                v-model="draftForm.subject"
+                @input="queueDraftSave"
+                placeholder="Subject"
+              />
+            </div>
+            <div class="draft-row">
+              <label class="draft-label">Body</label>
+              <textarea
+                class="draft-textarea"
+                v-model="draftForm.body"
+                @input="queueDraftSave"
+                placeholder="Write your message..."
+              ></textarea>
+            </div>
+            <div class="draft-status-row">
+              <span v-if="draftIsSaving" class="draft-status saving">
+                <span class="draft-spinner"></span>
+                Saving...
+              </span>
+              <span v-else-if="draftSaveError" class="draft-status error">
+                Save failed.
+              </span>
+              <span v-else-if="draftSaveStatus" class="draft-status success">
+                {{ draftSaveStatus }}
+              </span>
+              <button
+                v-if="draftSaveError"
+                class="draft-retry-btn"
+                @click="retryDraftSave"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
           <div
+            v-else
             class="email-body"
             v-html="sanitizeHtml(selectedEmail.body)"
           ></div>
@@ -274,12 +357,14 @@ import {
   fetchEmails,
   fetchUnifiedEmails,
   deleteEmail,
+  deleteDraft,
   setEmailStar,
   restoreEmail,
   fetchLabels,
   updateEmailLabels,
   getEmailsByLabel,
   searchEmails,
+  updateDraft,
 } from "../api/emails";
 import { useEmailCacheStore } from "../stores/emailCache";
 import EmailSearchBar from "./EmailSearchBar.vue";
@@ -308,6 +393,7 @@ export default {
     const selectedEmail = ref(null);
     const authUrl = ref("");
     const isTrash = computed(() => props.folder === "trash");
+    const isDrafts = computed(() => props.folder === "drafts");
 
     // Search state
     const isSearchMode = ref(false);
@@ -357,6 +443,21 @@ export default {
     const savingLabels = ref(false);
     const selectedLabelIds = ref([]);
 
+    // 🔹 draft editor state
+    const draftForm = ref({
+      to: "",
+      cc: "",
+      bcc: "",
+      subject: "",
+      body: "",
+    });
+    const draftIsSaving = ref(false);
+    const draftSaveStatus = ref("");
+    const draftSaveError = ref("");
+    const lastDraftPayload = ref(null);
+    const draftSaveTimer = ref(null);
+    const lastSelectedDraftId = ref(null);
+
     const decorateEmails = (list) => {
       // Ensure we have a valid array
       if (!Array.isArray(list)) {
@@ -383,13 +484,10 @@ export default {
       errorMessage.value = "";
       authUrl.value = "";
 
-      // Ensure cache is loaded from storage first
-      await emailCache.loadFromStorage();
-
       // Use standardized cache key
       const cacheKey = computedCacheKey.value;
 
-      // Check cache first (skip if force refresh)
+      // Check cache IMMEDIATELY (synchronously) if already initialized
       if (!force && emailCache.isFresh(cacheKey, CACHE_TTL)) {
         const cached = emailCache.getEntry(cacheKey);
         if (cached) {
@@ -401,11 +499,25 @@ export default {
         }
       }
 
-      // Start loading after cache check
-      loading.value = true;
+      // If no cache hit, ensure cache is loaded from storage before fetching
+      await emailCache.loadFromStorage();
 
-      // Only clear emails on initial load, not on refresh
-      if (!force) {
+      // Check again after loading from storage
+      if (!force && emailCache.isFresh(cacheKey, CACHE_TTL)) {
+        const cached = emailCache.getEntry(cacheKey);
+        if (cached) {
+          const cachedList = Array.isArray(cached.value) ? cached.value : [];
+          emails.value = decorateEmails(cachedList);
+          loading.value = false;
+          return;
+        }
+      }
+
+      // CRITICAL: If we already have emails (from cache in onMounted),
+      // don't show loading state - keep showing the cached emails while fetching fresh data
+      const hadEmails = emails.value.length > 0;
+      if (!hadEmails) {
+        loading.value = true;
         emails.value = [];
         selectedEmail.value = null;
       }
@@ -467,25 +579,30 @@ export default {
     };
 
     const refreshEmails = async () => {
-      // Clear current folder cache
-      await emailCache.invalidate(computedCacheKey.value);
+      loading.value = true;
+      try {
+        // Clear current folder cache
+        await emailCache.invalidate(computedCacheKey.value);
 
-      // Clear related search caches for this folder
-      const searchPrefix = `search:${props.folder}:`;
-      const allKeys = Object.keys(emailCache.entries);
-      for (const key of allKeys) {
-        if (key.startsWith(searchPrefix)) {
-          await emailCache.invalidate(key);
+        // Clear related search caches for this folder
+        const searchPrefix = `search:${props.folder}:`;
+        const allKeys = Object.keys(emailCache.entries);
+        for (const key of allKeys) {
+          if (key.startsWith(searchPrefix)) {
+            await emailCache.invalidate(key);
+          }
         }
-      }
 
-      // If in search mode, clear search
-      if (isSearchMode.value) {
-        handleClearSearch();
-      }
+        // If in search mode, clear search
+        if (isSearchMode.value) {
+          handleClearSearch();
+        }
 
-      // Force reload
-      await loadEmails({ force: true });
+        // Force reload
+        await loadEmails({ force: true });
+      } finally {
+        loading.value = false;
+      }
     };
 
     const authenticate = () => {
@@ -542,8 +659,14 @@ export default {
 
       try {
         const messageId = selectedEmail.value.message_id;
+        const draftId = selectedEmail.value.draft_id || messageId;
+        const accountId = selectedEmail.value.account_id || null;
 
-        await deleteEmail(messageId);
+        if (isDrafts.value) {
+          await deleteDraft(draftId, null, accountId);
+        } else {
+          await deleteEmail(messageId);
+        }
 
         emails.value = emails.value.filter(
           (email) => email.message_id !== messageId
@@ -581,25 +704,162 @@ export default {
       }
     };
 
-    onMounted(() => {
+    // 🔹 Draft editor functions
+    const hydrateDraftForm = (email) => {
+      draftForm.value = {
+        to: email?.recipient || "",
+        cc: email?.cc || "",
+        bcc: email?.bcc || "",
+        subject: email?.subject || "",
+        body: email?.body || "",
+      };
+      lastDraftPayload.value = { ...draftForm.value };
+    };
+
+    const normalizeDraftPayload = (form) => ({
+      to: form.to ?? "",
+      cc: form.cc ?? "",
+      bcc: form.bcc ?? "",
+      subject: form.subject ?? "",
+      body: form.body ?? "",
+    });
+
+    const queueDraftSave = () => {
+      if (!isDrafts.value || !selectedEmail.value) return;
+      draftSaveError.value = "";
+      draftSaveStatus.value = "Saving...";
+      if (draftSaveTimer.value) clearTimeout(draftSaveTimer.value);
+      draftSaveTimer.value = setTimeout(() => {
+        saveDraftEdits();
+      }, 800);
+    };
+
+    const saveDraftEdits = async () => {
+      if (!selectedEmail.value || !isDrafts.value) return;
+
+      const previousId = selectedEmail.value.message_id;
+      const draftId =
+        selectedEmail.value.draft_id || selectedEmail.value.message_id;
+      const accountId = selectedEmail.value.account_id || null;
+      if (!draftId) return;
+
+      const payload = normalizeDraftPayload(draftForm.value);
+      if (
+        lastDraftPayload.value &&
+        JSON.stringify(lastDraftPayload.value) === JSON.stringify(payload)
+      ) {
+        draftSaveStatus.value = "Saved";
+        return;
+      }
+
+      draftIsSaving.value = true;
+      draftSaveError.value = "";
+
+      try {
+        const response = await updateDraft(draftId, payload, null, accountId);
+        const newDraftId = response?.new_draft_id || draftId;
+        lastDraftPayload.value = { ...payload };
+        draftSaveStatus.value = "Saved";
+
+        lastSelectedDraftId.value = newDraftId;
+        const updated = {
+          ...selectedEmail.value,
+          message_id: newDraftId,
+          draft_id: newDraftId,
+          recipient: payload.to,
+          cc: payload.cc,
+          bcc: payload.bcc,
+          subject: payload.subject,
+          body: payload.body,
+        };
+        selectedEmail.value = updated;
+
+        emails.value = emails.value.map((email) =>
+          email.message_id === previousId ? updated : email
+        );
+      } catch (error) {
+        console.error("Failed to save draft:", error);
+        draftSaveError.value =
+          error.response?.data?.detail ||
+          error.message ||
+          "Failed to save draft.";
+        draftSaveStatus.value = "Save failed";
+      } finally {
+        draftIsSaving.value = false;
+      }
+    };
+
+    const retryDraftSave = () => {
+      saveDraftEdits();
+    };
+
+    onMounted(async () => {
+      // Pre-load cache from storage before first email load
+      await emailCache.loadFromStorage();
+
+      // CRITICAL: Check cache BEFORE calling loadEmails to avoid loading state
+      const cacheKey = computedCacheKey.value;
+      const cached = emailCache.getEntry(cacheKey);
+
+      // Show cached emails even if stale (better UX than showing loading)
+      if (cached && cached.value) {
+        const cachedList = Array.isArray(cached.value) ? cached.value : [];
+        if (cachedList.length > 0) {
+          emails.value = decorateEmails(cachedList);
+          loading.value = false;
+          // Fetch fresh data in background (will update silently)
+          loadEmails({ force: false });
+          return;
+        }
+      }
+
       loadEmails();
     });
 
     watch(
       () => props.folder,
-      () => {
+      async () => {
         // Clear search when folder changes
         if (isSearchMode.value) {
           handleClearSearch();
         }
+
+        // Check cache first to avoid loading state (even if stale)
+        const cacheKey = computedCacheKey.value;
+        const cached = emailCache.getEntry(cacheKey);
+        if (cached && cached.value) {
+          const cachedList = Array.isArray(cached.value) ? cached.value : [];
+          if (cachedList.length > 0) {
+            emails.value = decorateEmails(cachedList);
+            loading.value = false;
+            selectedEmail.value = null;
+            // Fetch fresh data in background
+            loadEmails({ force: false });
+            return;
+          }
+        }
+
         loadEmails();
       }
     );
 
     watch(
       () => route.query.label,
-      () => {
+      async () => {
         if (props.folder === "inbox") {
+          // Check cache first (even if stale)
+          const cacheKey = computedCacheKey.value;
+          const cached = emailCache.getEntry(cacheKey);
+          if (cached && cached.value) {
+            const cachedList = Array.isArray(cached.value) ? cached.value : [];
+            if (cachedList.length > 0) {
+              emails.value = decorateEmails(cachedList);
+              loading.value = false;
+              selectedEmail.value = null;
+              loadEmails({ force: false });
+              return;
+            }
+          }
           loadEmails();
         }
       }
@@ -608,13 +868,71 @@ export default {
     // Watch for account selection changes
     watch(
       () => props.selectedAccountId,
-      () => {
+      async () => {
         // Clear search when account changes
         if (isSearchMode.value) {
           handleClearSearch();
         }
         if (props.folder === "inbox") {
+          // Check cache first (even if stale)
+          const cacheKey = computedCacheKey.value;
+          const cached = emailCache.getEntry(cacheKey);
+          if (cached && cached.value) {
+            const cachedList = Array.isArray(cached.value) ? cached.value : [];
+            if (cachedList.length > 0) {
+              emails.value = decorateEmails(cachedList);
+              loading.value = false;
+              selectedEmail.value = null;
+              loadEmails({ force: false });
+              return;
+            }
+          }
           loadEmails();
+        }
+      }
+    );
+
+    // Watch selected email for draft hydration
+    watch(
+      () => selectedEmail.value,
+      (email) => {
+        if (isDrafts.value && email) {
+          if (lastSelectedDraftId.value !== email.message_id) {
+            draftSaveStatus.value = "";
+            draftSaveError.value = "";
+          }
+          hydrateDraftForm(email);
+          lastSelectedDraftId.value = email.message_id;
+        } else if (!email) {
+          draftForm.value = {
+            to: "",
+            cc: "",
+            bcc: "",
+            subject: "",
+            body: "",
+          };
+          draftSaveStatus.value = "";
+          draftSaveError.value = "";
+          lastSelectedDraftId.value = null;
+        }
+      }
+    );
+
+    // Watch isDrafts to clear draft form when leaving drafts view
+    watch(
+      () => isDrafts.value,
+      (nextIsDrafts) => {
+        if (!nextIsDrafts) {
+          draftForm.value = {
+            to: "",
+            cc: "",
+            bcc: "",
+            subject: "",
+            body: "",
+          };
+          draftSaveStatus.value = "";
+          draftSaveError.value = "";
+          lastSelectedDraftId.value = null;
         }
       }
     );
@@ -844,22 +1162,32 @@ export default {
       currentSearchQuery.value = query;
 
       isSearchMode.value = true;
-      searchLoading.value = false;
       searchError.value = '';
       selectedEmail.value = null;
-
-      // Ensure cache is loaded from storage first
-      await emailCache.loadFromStorage();
 
       // Folder-specific cache key (even though backend search is global)
       const cacheKey = `search:${props.folder}:${query}`;
 
+      // Check cache IMMEDIATELY (synchronously) if already initialized
+      if (emailCache.isFresh(cacheKey, CACHE_TTL)) {
+        const cached = emailCache.getEntry(cacheKey);
+        if (cached) {
+          // Ensure cached value is an array
+          const cachedList = Array.isArray(cached.value) ? cached.value : [];
+          searchResults.value = decorateEmails(cachedList);
+          searchLoading.value = false;
+          return;
+        }
+      }
+
+      // If no cache hit, ensure cache is loaded from storage
+      await emailCache.loadFromStorage();
+
       try {
-        // Check cache first
+        // Check again after loading from storage
         if (emailCache.isFresh(cacheKey, CACHE_TTL)) {
           const cached = emailCache.getEntry(cacheKey);
           if (cached) {
-            // Ensure cached value is an array
             const cachedList = Array.isArray(cached.value) ? cached.value : [];
             searchResults.value = decorateEmails(cachedList);
             searchLoading.value = false;
@@ -935,6 +1263,7 @@ export default {
       handleDelete,
       handleRestore,
       isTrash,
+      isDrafts,
       refreshEmails,
       formatDate,
       formatFullDate,
@@ -963,6 +1292,13 @@ export default {
       closeLabelMenu,
       saveLabelChanges,
       toggleLabelMenu,
+      // Draft editor
+      draftForm,
+      draftIsSaving,
+      draftSaveStatus,
+      draftSaveError,
+      queueDraftSave,
+      retryDraftSave,
     };
   },
 };
@@ -1195,9 +1531,13 @@ export default {
   transition: all 0.2s ease;
   box-shadow: none;
   border-left: 4px solid transparent;
-  position: relative; /* 🔹 needed for bottom-right restore */
-  padding-right: 4.5rem; /* 🔹 leave space for restore button */
-  padding-bottom: 1.75rem; /* 🔹 so preview doesn’t overlap button */
+  position: relative;
+}
+
+/* Extra padding only for trash items (for restore button) */
+.email-item.trash-item {
+  padding-right: 4.5rem;
+  padding-bottom: 1.75rem;
 }
 
 .email-item.unread {
@@ -1243,6 +1583,14 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Recipient (To) Field for Drafts */
+.email-recipient {
+  font-weight: 600;
+  color: #1976d2;
+  margin-left: 8px;
+  font-size: 1.05rem;
 }
 
 /* Account Badge */
@@ -1373,6 +1721,19 @@ export default {
   font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
 }
 
+.material-symbols-outlined.spinning {
+  animation: spin-icon 1s linear infinite;
+}
+
+@keyframes spin-icon {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .email-detail-content {
   flex: 1;
   overflow-y: auto;
@@ -1421,12 +1782,109 @@ export default {
   line-height: 1.6;
   color: var(--text-primary, #333);
   white-space: normal; /* allow wrapping */
-  word-break: break-word; /* long URLs won’t overflow */
+  word-break: break-word; /* long URLs won't overflow */
   font-size: 0.95rem;
 }
 .email-body a {
   text-decoration: underline;
   cursor: pointer;
+}
+
+/* Draft Editor Styles */
+.draft-editor {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.draft-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.draft-label {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  padding-top: 0.4rem;
+}
+
+.draft-input,
+.draft-textarea {
+  width: 100%;
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  background: var(--content-bg, #ffffff);
+  transition: border-color 0.2s ease;
+}
+
+.draft-input:focus,
+.draft-textarea:focus {
+  outline: none;
+  border-color: var(--primary-color, #6c63ff);
+}
+
+.draft-textarea {
+  min-height: 200px;
+  resize: vertical;
+  line-height: 1.5;
+  font-family: inherit;
+}
+
+.draft-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 28px;
+}
+
+.draft-status {
+  font-size: 0.9rem;
+}
+
+.draft-status.success {
+  color: #1a7f37;
+}
+
+.draft-status.error {
+  color: #b42318;
+}
+
+.draft-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #cbd5e1;
+  border-top-color: #475569;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+  animation: draft-spin 0.8s linear infinite;
+}
+
+.draft-retry-btn {
+  border: 1px solid var(--border-color, #e0e0e0);
+  background: var(--content-bg, #ffffff);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.draft-retry-btn:hover {
+  background: var(--hover-bg, #f0f4f8);
+}
+
+@keyframes draft-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 🔹 Bottom-right restore button */
@@ -1647,6 +2105,10 @@ export default {
   /* Email items - more padding for touch */
   .email-item {
     padding: 1.25rem 1rem;
+  }
+
+  /* Extra padding only for trash items on mobile */
+  .email-item.trash-item {
     padding-right: 5rem;
   }
 
@@ -1706,6 +2168,26 @@ export default {
     width: 44px;
     height: 44px;
   }
+
+  /* Draft editor mobile adjustments */
+  .draft-row {
+    grid-template-columns: 60px 1fr;
+    gap: 0.5rem;
+  }
+
+  .draft-label {
+    font-size: 0.85rem;
+  }
+
+  .draft-input,
+  .draft-textarea {
+    font-size: 1rem;
+    padding: 0.75rem;
+  }
+
+  .draft-textarea {
+    min-height: 150px;
+  }
 }
 
 /* Additional mobile optimizations for small screens */
@@ -1736,6 +2218,12 @@ export default {
   .sender-with-label {
     gap: 0.35rem;
     row-gap: 0.25rem;
+    flex-wrap: wrap;
+  }
+
+  .email-recipient {
+    font-size: 0.75rem;
+    margin-left: 0;
   }
 
   .account-badge {

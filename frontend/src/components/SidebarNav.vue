@@ -36,6 +36,7 @@ export default {
 
     // UPDATED: Added 'Favorites' and 'AI Assistant'
     const navItems = computed(() => [
+      { view: "compose", label: "Compose", icon: "edit", to: "/app/compose" },
       { view: "inbox", label: "Inbox", icon: "inbox", to: "/app/email/inbox" },
       { view: "sent", label: "Sent", icon: "send", to: "/app/email/sent" },
       {
@@ -113,7 +114,7 @@ export default {
 
 /* Active (chosen) item style */
 .nav-buttons button.active {
-  background-color: var(--primary-color-light, #f0f0ff);
+  background-color: color-mix(in srgb, var(--primary-color, #6c63ff) 15%, var(--bg-primary, #ffffff));
   color: var(--primary-color, #6c63ff);
   font-weight: 700;
   box-shadow: none;
@@ -121,7 +122,7 @@ export default {
 
 /* Keep active item solid on hover */
 .nav-buttons button.active:hover {
-  background-color: var(--primary-color-light, #f0f0ff);
+  background-color: color-mix(in srgb, var(--primary-color, #6c63ff) 15%, var(--bg-primary, #ffffff));
   color: var(--primary-color, #6c63ff);
 }
 </style>

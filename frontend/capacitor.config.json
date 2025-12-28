@@ -5,5 +5,21 @@
   "server": {
     "androidScheme": "https",
     "cleartext": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "launchAutoHide": true,
+      "launchFadeOutDuration": 500,
+      "backgroundColor": "#ffffff",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false,
+      "androidSpinnerStyle": "large",
+      "iosSpinnerStyle": "small",
+      "spinnerColor": "#6c63ff",
+      "splashFullScreen": true,
+      "splashImmersive": true
+    }
   }
 }

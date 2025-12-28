@@ -5,12 +5,12 @@
 </template>
 
 <script>
-import EmailListView from '../components/EmailListView.vue'
+import EmailListView from "../components/EmailListView.vue";
 
 export default {
-  name: 'TrashView',
-  components: { EmailListView }
-}
+  name: "TrashView",
+  components: { EmailListView },
+};
 </script>
 
 <style scoped>

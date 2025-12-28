@@ -1,67 +1,55 @@
 <template>
   <div class="compose-view adjusted-view">
-    <!-- Chat Split: Sidebar + Main -->
     <div class="chat-split">
-      <!-- Overlay (Outside sidebar for proper z-index) -->
+      <!-- Sidebar Overlay -->
       <div
-        class="chat-sidebar-overlay"
-        :class="{ visible: sidebarOpen }"
+        v-if="sidebarOpen"
+        class="sidebar-overlay"
         @click="sidebarOpen = false"
       ></div>
 
-      <!-- Chat Sidebar (Left) -->
-      <div class="chat-sidebar" :class="{ open: sidebarOpen }">
-        <div class="chat-sidebar-content">
-          <div class="chat-sidebar-header">
-            <h3>Chats</h3>
-            <button @click="handleNewChat" class="btn-new-chat">
-              <span class="material-symbols-outlined">add</span>
-              New
+      <aside class="chat-sidebar" :class="{ 'mobile-open': sidebarOpen }">
+        <div class="chat-sidebar-header">
+          <div class="chat-sidebar-title">Chats</div>
+          <button class="chat-new" @click="createChat" title="New chat">
+            + New
+          </button>
+        </div>
+
+        <div class="chat-list">
+          <div
+            v-for="c in chats"
+            :key="c.id"
+            class="chat-list-item"
+            :class="{ active: c.id === activeChatId }"
+            @click="setActiveChat(c.id)"
+          >
+            <div class="chat-list-item-content">
+              <div class="chat-list-item-title">{{ c.title }}</div>
+              <div class="chat-list-item-time">{{ formatChatTime(c.updatedAt || c.createdAt) }}</div>
+            </div>
+            <button
+              class="chat-delete"
+              title="Delete chat"
+              @click.stop="deleteChat(c.id)"
+            >
+              ×
             </button>
           </div>
-
-          <div class="chat-list">
-            <div
-              v-for="chat in chats"
-              :key="chat.id"
-              class="chat-list-item"
-              :class="{ active: chat.id === activeChatId }"
-              @click="handleChatSwitch(chat.id)"
-            >
-              <div class="chat-list-item-content">
-                <div class="chat-list-item-title">{{ chat.title }}</div>
-                <div class="chat-list-item-time">{{ formatChatTime(chat.updatedAt) }}</div>
-              </div>
-              <button
-                class="chat-delete-btn"
-                @click.stop="handleDeleteChat(chat.id)"
-                v-if="chats.length > 1"
-              >
-                ×
-              </button>
-            </div>
-
-            <div v-if="chats.length === 0" class="chat-list-empty">
-              <p>No chats yet</p>
-              <button @click="handleNewChat" class="btn-create-first">
-                Create your first chat
-              </button>
-            </div>
-          </div>
         </div>
-      </div>
+      </aside>
 
-      <!-- Chat Main (Right) -->
       <div class="chat-main">
-        <!-- Mobile: Hamburger menu -->
-        <button class="btn-toggle-sidebar" @click="sidebarOpen = !sidebarOpen">
-          <span class="material-symbols-outlined">{{ sidebarOpen ? 'close' : 'menu' }}</span>
+        <!-- Hamburger Menu Button (Mobile Only) -->
+        <button class="hamburger-btn" @click="sidebarOpen = !sidebarOpen">
+          <span class="material-symbols-outlined">
+            {{ sidebarOpen ? 'close' : 'menu' }}
+          </span>
         </button>
-
         <div class="chat-container">
           <div class="chat-history" ref="historyContainer">
             <div
-              v-for="(message, index) in chatHistory"
+              v-for="(message, index) in activeMessages"
               :key="index"
               class="message"
               :class="{
@@ -69,58 +57,34 @@
                 'user-message': message.role === 'user',
               }"
             >
-              <p v-if="message.text" class="message-text">{{ message.text }}</p>
+              <p
+                v-if="message.text"
+                class="message-text"
+                v-html="formatMessageText(message.text)"
+              ></p>
 
-              <div
-                v-if="message.emails && message.emails.length > 0"
-                class="emails-list"
+              <p
+                v-else-if="
+                  message.role === 'bot' &&
+                  message.emails &&
+                  message.emails.length > 0
+                "
+                class="message-text"
               >
-                <div
-                  v-for="(email, eIndex) in message.emails"
-                  :key="eIndex"
-                  class="email-block"
-                >
-                  <div class="email-header">📧 Email #{{ eIndex + 1 }}</div>
+                Here are the emails I found:
+              </p>
 
-                  <div class="email-field">
-                    <strong>From:</strong>
-                    {{ email.from || email.sender || "Unknown" }}
-                  </div>
-
-                  <div class="email-field">
-                    <strong>Subject:</strong> {{ email.subject || "(No subject)" }}
-                  </div>
-
-                  <div v-if="email.date || email.timestamp" class="email-field">
-                    <strong>Date:</strong> {{ email.date || email.timestamp }}
-                  </div>
-
-                  <div v-if="email.label" class="email-field email-label">
-                    <strong>Label:</strong>
-                    <span class="label-badge">{{ email.label }}</span>
-                  </div>
-
-                  <div
-                    v-if="email.is_important"
-                    class="email-field email-important"
-                  >
-                    ⭐ <strong>Important</strong>
-                  </div>
-
-                  <div class="email-separator"></div>
-
-                  <div class="email-field email-body">
-                    <strong>Body:</strong><br />
-                    <div
-                      class="email-body-content"
-                      v-html="formatBody(email.body)"
-                    ></div>
-                  </div>
-                </div>
-              </div>
+              <!-- ✅ Keep 1st file behavior (ChatEmailList) -->
+              <ChatEmailList
+                v-if="message.emails && message.emails.length > 0"
+                :emails="message.emails"
+              />
             </div>
 
-            <div v-if="isLoading" class="message ai-message loading-indicator">
+            <div
+              v-if="isLoading && !isVoiceActive"
+              class="message ai-message loading-indicator"
+            >
               <p>
                 <span class="dot">.</span>
                 <span class="dot">.</span>
@@ -128,97 +92,129 @@
               </p>
             </div>
 
-            <!-- Voice Thinking Indicator -->
-            <div v-if="isVoiceThinking" class="message ai-message voice-inline">
+            <div v-if="isVoiceActive" class="message ai-message voice-inline">
               <div class="voice-inline-row">
                 <span class="voice-inline-dot"></span>
                 <span class="voice-inline-label">
-                  Thinking{{ voiceDots }}
+                  {{ voiceStatusLabel }}{{ voiceDots }}
                 </span>
               </div>
               <div class="voice-inline-wave">
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
+                <span></span><span></span><span></span><span></span
+                ><span></span>
               </div>
             </div>
           </div>
 
           <div class="chat-input-area">
             <div class="input-wrapper">
-              <input
-                type="text"
-                placeholder="Type your prompt here..."
-                v-model="userPrompt"
-                @keyup.enter="sendMessage"
-                :disabled="isLoading || isListening"
-              />
+              <!-- ✅ 2nd UI behavior: swap input for voice bar -->
+              <template v-if="!isVoiceActive && !isRecording && !isListening">
+                <input
+                  type="text"
+                  placeholder="Type your prompt here..."
+                  v-model="userPrompt"
+                  @keyup.enter="sendMessage"
+                  :disabled="isLoading || isListening || !activeChat"
+                />
 
-              <!-- Send button -->
-              <button
-                class="inner-send"
-                @click="sendMessage"
-                :disabled="!userPrompt.trim() || isLoading || isListening"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  width="20"
-                  height="20"
+                <button
+                  class="inner-send"
+                  @click="sendMessage"
+                  :disabled="
+                    !userPrompt.trim() ||
+                    isLoading ||
+                    isListening ||
+                    !activeChat
+                  "
                 >
-                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
-                </svg>
-              </button>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    width="20"
+                    height="20"
+                  >
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
+                  </svg>
+                </button>
 
-              <!-- Voice button -->
-              <button
-                class="inner-voice"
-                @click="handleVoiceInput"
-                :disabled="isLoading"
-                :class="{ 'listening-active': isListening || isRecording }"
-              >
-                <span class="material-symbols-outlined mic-icon">mic</span>
-              </button>
+                <button
+                  class="inner-voice"
+                  @click="handleVoiceInput"
+                  :disabled="isLoading || !activeChat"
+                  :class="{ 'listening-active': isListening }"
+                >
+                  <span class="material-symbols-outlined mic-icon">
+                    {{ isRecording ? "stop" : "mic" }}
+                  </span>
+                </button>
+              </template>
+
+              <template v-else>
+                <div class="voice-bar" :class="{ recording: isRecording }">
+                  <div class="voice-bar-left">
+                    <div class="voice-pill">
+                      <span
+                        class="voice-pill-dot"
+                        :class="{ live: isRecording || isListening }"
+                      ></span>
+
+                      <div class="voice-pill-text">
+                        <div class="voice-pill-title">
+                          {{ voiceStatusLabel }}{{ voiceDots }}
+                        </div>
+                        <div class="voice-pill-sub">
+                          {{
+                            isRecording
+                              ? "Tap stop to finish"
+                              : isListening
+                              ? "Listening…"
+                              : "Processing audio…"
+                          }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="voice-bar-wave" aria-hidden="true">
+                    <span></span><span></span><span></span><span></span
+                    ><span></span><span></span><span></span><span></span
+                    ><span></span><span></span>
+                  </div>
+
+                  <button
+                    class="voice-bar-stop"
+                    @click="handleVoiceInput"
+                    :disabled="isLoading || !activeChat"
+                    :class="{ active: isRecording }"
+                    title="Stop recording"
+                  >
+                    <span class="material-symbols-outlined">
+                      {{ isRecording ? "stop" : "mic" }}
+                    </span>
+                  </button>
+                </div>
+              </template>
             </div>
           </div>
         </div>
       </div>
     </div>
-
-    <!-- Voice Overlay (Full Screen) - Only for Listening -->
-    <div v-if="isListening" class="voice-overlay" aria-live="polite">
-      <div class="voice-orb">
-        <span class="voice-orb-core"></span>
-        <span class="voice-orb-ring ring-1"></span>
-        <span class="voice-orb-ring ring-2"></span>
-        <span class="voice-orb-ring ring-3"></span>
-      </div>
-      <div class="voice-overlay-label">
-        Listening{{ voiceDots }}
-      </div>
-      <button
-        class="voice-overlay-stop"
-        @click="handleVoiceInput"
-      >
-        Stop
-      </button>
-    </div>
   </div>
 </template>
 
 <script>
-import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
+import { computed, ref, nextTick, onUnmounted, onMounted, watch } from "vue";
 import { useAuthStore } from "../stores/auth";
 import { useChatStore } from "../stores/chat";
-import { getApiUrl } from "../utils/platformHelper";
-import { recordUntilSilence } from "../utils/voiceRecorder";
-import { sendVoicePrompt } from "../api/voice";
+import { sendVoicePrompt } from "@/api/voice";
+import { recordUntilSilence } from "@/utils/voiceRecorder";
+import ChatEmailList from "@/components/ChatEmailList.vue";
 
 export default {
   name: "ComposeView",
+  components: { ChatEmailList },
   setup() {
     const authStore = useAuthStore();
     const chatStore = useChatStore();
@@ -226,32 +222,33 @@ export default {
     const userPrompt = ref("");
     const isLoading = ref(false);
     const historyContainer = ref(null);
-    const isListening = ref(false);
-    const listeningDots = ref("");
     const sidebarOpen = ref(false);
-    const isRecording = ref(false);
+
+    const isListening = ref(false);
     const isVoiceThinking = ref(false);
-    const isSpeaking = ref(false);
+    const listeningDots = ref("");
     const activeRecorder = ref(null);
     let dotInterval = null;
-    let audioPlayer = null;
+
+    const isRecording = ref(false);
+    const isSpeaking = ref(false);
+
+    const audioPlayer = new Audio();
     let currentAudioUrl = null;
 
-    const API_BASE_URL = getApiUrl();
+    const API_BASE_URL =
+      import.meta.env.VITE_API_URL || "http://localhost:8001";
     const normalizedBase = API_BASE_URL.endsWith("/")
       ? API_BASE_URL.slice(0, -1)
       : API_BASE_URL;
+
     const API_URL = `${normalizedBase}/chat`;
     const VOICE_RESPONSE_URL = `${normalizedBase}/voice/response`;
 
-    // Computed
     const chats = computed(() => chatStore.chats);
     const activeChatId = computed(() => chatStore.activeChatId);
     const activeChat = computed(() => chatStore.activeChat);
-
-    const chatHistory = computed(() => {
-      return activeChat.value?.messages || [];
-    });
+    const activeMessages = computed(() => activeChat.value?.messages || []);
 
     const isVoiceActive = computed(
       () => isListening.value || isVoiceThinking.value || isSpeaking.value
@@ -268,29 +265,63 @@ export default {
       isListening.value || isVoiceThinking.value ? listeningDots.value : ""
     );
 
-    // Initialize chat store
-    onMounted(async () => {
-      await chatStore.initialize();
-      scrollToBottom();
+    const formatBody = (text) => {
+      if (!text) return "";
+      return text.replace(/\n/g, "<br>");
+    };
 
-      // Initialize audio player for voice responses
-      audioPlayer = new Audio();
-      audioPlayer.addEventListener('ended', () => {
-        isSpeaking.value = false;
-        if (currentAudioUrl) {
-          URL.revokeObjectURL(currentAudioUrl);
-          currentAudioUrl = null;
-        }
-      });
-    });
+    const isImportantEmail = (email) => {
+      if (!email || typeof email !== "object") return false;
+      if (email.is_important) return true;
+      if (email.ml_prediction === "important") return true;
+      const labels = Array.isArray(email.label_ids) ? email.label_ids : [];
+      return labels.some(
+        (label) => String(label).toUpperCase() === "IMPORTANT"
+      );
+    };
 
-    // Watch active chat changes
-    watch(activeChatId, () => {
-      scrollToBottom();
-      sidebarOpen.value = false; // Close sidebar on mobile after switching
-    });
+    const formatMessageText = (text) => {
+      if (!text) return "";
+      const escaped = text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+      return escaped.replace(/\n/g, "<br>");
+    };
 
-    // Helper functions for email extraction
+    const formatChatTime = (dateString) => {
+      if (!dateString) return '';
+      const date = new Date(dateString);
+      const now = new Date();
+      const diff = now - date;
+
+      // Less than 1 minute
+      if (diff < 60000) return 'Just now';
+
+      // Less than 1 hour
+      if (diff < 3600000) {
+        const mins = Math.floor(diff / 60000);
+        return `${mins}m ago`;
+      }
+
+      // Less than 1 day
+      if (diff < 86400000) {
+        const hours = Math.floor(diff / 3600000);
+        return `${hours}h ago`;
+      }
+
+      // Less than 7 days
+      if (diff < 604800000) {
+        const days = Math.floor(diff / 86400000);
+        return `${days}d ago`;
+      }
+
+      // Older - show date
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+
     const isEmailArray = (parsed) => {
       if (!Array.isArray(parsed)) return false;
       if (parsed.length === 0) return true;
@@ -364,6 +395,15 @@ export default {
         .replace(/[:\s]+$/, "");
     };
 
+    // ✅ from 1st file (extra cleanup)
+    const stripEmailBlocks = (text) => {
+      if (!text) return "";
+      const marker = "# Email #1";
+      const idx = text.indexOf(marker);
+      if (idx === -1) return text;
+      return text.slice(0, idx).trim();
+    };
+
     const findBalancedJson = (text, startIndex, openChar, closeChar) => {
       let depth = 0;
       let inString = false;
@@ -418,29 +458,24 @@ export default {
         if (!payload) return false;
         result.emails = payload.emails;
         result.insights = payload.insights;
-        result.textBefore = cleanTextBeforeJson(text.slice(0, index || 0).trim());
+        result.textBefore = cleanTextBeforeJson(
+          text.slice(0, index || 0).trim()
+        );
         return true;
       };
 
-      // 1) Prefer fenced JSON blocks: ```json ... ```
       const fenceRegex = /```\s*json\s*([\s\S]*?)\s*```/gi;
       for (const match of text.matchAll(fenceRegex)) {
         const candidate = (match[1] || "").trim();
-        if (tryCandidate(candidate, match.index)) {
-          return result;
-        }
+        if (tryCandidate(candidate, match.index)) return result;
       }
 
-      // 2) Fallback: any fenced block that contains email array
       const anyFenceRegex = /```\s*([\s\S]*?)\s*```/g;
       for (const match of text.matchAll(anyFenceRegex)) {
         const candidate = (match[1] || "").trim();
-        if (tryCandidate(candidate, match.index)) {
-          return result;
-        }
+        if (tryCandidate(candidate, match.index)) return result;
       }
 
-      // 3) Direct parse if whole response is JSON
       const directPayload = tryParseEmailsJson(text.trim());
       if (directPayload) {
         result.emails = directPayload.emails;
@@ -448,15 +483,16 @@ export default {
         return result;
       }
 
-      // 4) Balanced JSON array substring
       const arrayMatch = findFirstBalancedJson(text, "[", "]");
       if (arrayMatch && tryCandidate(arrayMatch.candidate, arrayMatch.index)) {
         return result;
       }
 
-      // 5) Balanced JSON object substring
       const objectMatch = findFirstBalancedJson(text, "{", "}");
-      if (objectMatch && tryCandidate(objectMatch.candidate, objectMatch.index)) {
+      if (
+        objectMatch &&
+        tryCandidate(objectMatch.candidate, objectMatch.index)
+      ) {
         return result;
       }
 
@@ -464,75 +500,32 @@ export default {
       return result;
     };
 
-    const isImportantEmail = (email) => {
-      if (!email || typeof email !== "object") return false;
-      if (email.is_important) return true;
-      if (email.ml_prediction === "important") return true;
-      const labels = Array.isArray(email.label_ids) ? email.label_ids : [];
-      return labels.some((label) => String(label).toUpperCase() === "IMPORTANT");
-    };
-
-    // Format chat time
-    const formatChatTime = (dateString) => {
-      if (!dateString) return '';
-      const date = new Date(dateString);
-      const now = new Date();
-      const diff = now - date;
-
-      // Less than 1 minute
-      if (diff < 60000) return 'Just now';
-
-      // Less than 1 hour
-      if (diff < 3600000) {
-        const mins = Math.floor(diff / 60000);
-        return `${mins}m ago`;
-      }
-
-      // Less than 1 day
-      if (diff < 86400000) {
-        const hours = Math.floor(diff / 3600000);
-        return `${hours}h ago`;
-      }
-
-      // Less than 7 days
-      if (diff < 604800000) {
-        const days = Math.floor(diff / 86400000);
-        return `${days}d ago`;
-      }
-
-      // Older - show date
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    };
-
-    const formatBody = (text) => {
-      if (!text) return "";
-      return text.replace(/\n/g, "<br>");
-    };
-
     const scrollToBottom = () => {
       nextTick(() => {
         if (historyContainer.value) {
-          historyContainer.value.scrollTop = historyContainer.value.scrollHeight;
+          historyContainer.value.scrollTo({
+            top: historyContainer.value.scrollHeight,
+            behavior: "smooth",
+          });
         }
       });
     };
 
     const sendMessage = async () => {
-      if (!userPrompt.value.trim() || isLoading.value || !activeChat.value) return;
+      if (!activeChat.value) return;
+      if (!userPrompt.value.trim() || isLoading.value) return;
 
       const messageText = userPrompt.value.trim();
-      const currentChatId = activeChat.value.id;
+      const chatId = activeChat.value.id;
 
-      // Append user message
-      await chatStore.appendMessage(currentChatId, {
+      chatStore.appendMessage(chatId, {
         role: "user",
         text: messageText,
-        emails: null
+        emails: null,
       });
 
       userPrompt.value = "";
       scrollToBottom();
-
       isLoading.value = true;
 
       try {
@@ -548,36 +541,65 @@ export default {
           }),
         });
 
-        if (!response.ok) throw new Error("API request failed");
-
-        const data = await response.json();
-
-        // Update backend session ID if provided
-        if (data.session_id && data.session_id !== activeChat.value.sessionId) {
-          await chatStore.setSessionId(currentChatId, data.session_id);
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("API error response:", errorText);
+          throw new Error(`API request failed: ${response.status}`);
         }
 
-        // Extract emails from response
-        const extracted = extractJsonFromText(data.response);
+        const data = await response.json();
+        console.log("Chat response data:", data);
 
-        // Append bot response
-        await chatStore.appendMessage(currentChatId, {
+        if (data.session_id) {
+          chatStore.setSessionId(chatId, data.session_id);
+        }
+
+        const responseText = data.response || "";
+        const providedEmails = Array.isArray(data.emails) ? data.emails : null;
+
+        const extracted = providedEmails
+          ? { textBefore: "", emails: providedEmails, insights: null }
+          : extractJsonFromText(responseText);
+
+        let displayText = extracted.textBefore;
+
+        if (extracted.insights) {
+          displayText = displayText
+            ? `${displayText}\n\n${extracted.insights}`
+            : extracted.insights;
+        }
+
+        const cleanedResponse = stripJsonBlocks(
+          stripEmailBlocks(responseText)
+        ).trim();
+
+        if (!displayText && cleanedResponse) {
+          displayText = cleanedResponse;
+        }
+
+        if (!displayText && Array.isArray(extracted.emails)) {
+          displayText = extracted.emails.length
+            ? `Found ${extracted.emails.length} email(s).`
+            : "No emails found.";
+        } else if (!displayText) {
+          displayText = cleanedResponse || "I processed your request.";
+        }
+
+        chatStore.appendMessage(chatId, {
           role: "bot",
-          text: extracted.textBefore,
-          emails: extracted.json
+          text: displayText,
+          emails: extracted.emails,
         });
-
-        scrollToBottom();
       } catch (error) {
         console.error("Error:", error);
-        await chatStore.appendMessage(currentChatId, {
+        chatStore.appendMessage(chatId, {
           role: "bot",
           text: "Sorry, an error occurred connecting to the server. Please ensure the backend is running.",
-          emails: null
+          emails: null,
         });
-        scrollToBottom();
       } finally {
         isLoading.value = false;
+        scrollToBottom();
       }
     };
 
@@ -612,6 +634,14 @@ export default {
       }
     };
 
+    audioPlayer.addEventListener("ended", () => {
+      isSpeaking.value = false;
+      if (currentAudioUrl) {
+        URL.revokeObjectURL(currentAudioUrl);
+        currentAudioUrl = null;
+      }
+    });
+
     const handleVoiceInput = async () => {
       if (isLoading.value || !activeChat.value) return;
 
@@ -629,15 +659,15 @@ export default {
       try {
         const recorder = recordUntilSilence();
         activeRecorder.value = recorder;
+
         const audioBlob = await recorder.promise;
+
         activeRecorder.value = null;
         isRecording.value = false;
         isListening.value = false;
         isVoiceThinking.value = true;
 
-        if (!audioBlob || audioBlob.size === 0) {
-          return;
-        }
+        if (!audioBlob || audioBlob.size === 0) return;
 
         isLoading.value = true;
 
@@ -647,9 +677,13 @@ export default {
           userTranscript,
           assistantReply,
           responseId,
-        } = await sendVoicePrompt(audioBlob, activeChat.value?.sessionId || null);
+        } = await sendVoicePrompt(
+          audioBlob,
+          activeChat.value?.sessionId || null
+        );
 
         const chatId = activeChat.value.id;
+
         if (sessionId) {
           await chatStore.setSessionId(chatId, sessionId);
         }
@@ -658,14 +692,6 @@ export default {
           chatStore.appendMessage(chatId, {
             role: "user",
             text: userTranscript.trim(),
-            emails: null,
-          });
-        }
-
-        if (!userTranscript && !assistantReply && !replyAudio) {
-          chatStore.appendMessage(chatId, {
-            role: "bot",
-            text: "I didn't catch that. Please try again.",
             emails: null,
           });
         }
@@ -679,14 +705,14 @@ export default {
               const res = await fetch(
                 `${VOICE_RESPONSE_URL}/${encodeURIComponent(responseId)}`,
                 {
-                  headers: {
-                    "X-User-Id": authStore.user?.id,
-                  },
+                  headers: { "X-User-Id": authStore.user?.id },
                 }
               );
+
               if (res.ok) {
                 const payload = await res.json();
                 responseText = payload.response_text || responseText;
+
                 if (Array.isArray(payload.emails)) {
                   extracted = {
                     textBefore: payload.text_before || "",
@@ -706,17 +732,27 @@ export default {
           }
 
           let displayText = extracted.textBefore;
+
           if (extracted.insights) {
             displayText = displayText
               ? `${displayText}\n\n${extracted.insights}`
               : extracted.insights;
           }
+
+          const cleanedResponse = stripJsonBlocks(
+            stripEmailBlocks(responseText)
+          ).trim();
+
+          if (!displayText && cleanedResponse) {
+            displayText = cleanedResponse;
+          }
+
           if (!displayText && Array.isArray(extracted.emails)) {
             displayText = extracted.emails.length
               ? `Found ${extracted.emails.length} email(s).`
               : "No emails found.";
           } else if (!displayText) {
-            displayText = stripJsonBlocks(responseText).trim();
+            displayText = cleanedResponse;
           }
 
           chatStore.appendMessage(chatId, {
@@ -733,7 +769,7 @@ export default {
         scrollToBottom();
       } catch (error) {
         console.error("Voice request failed:", error);
-        alert("Voice request failed");
+        window.alert("Voice request failed");
       } finally {
         isRecording.value = false;
         isListening.value = false;
@@ -741,201 +777,253 @@ export default {
         isLoading.value = false;
         stopDotAnimation();
         activeRecorder.value = null;
+
         if (!isListening.value) {
           isSpeaking.value = false;
         }
       }
     };
 
-    const handleNewChat = async () => {
-      await chatStore.createChat();
-      sidebarOpen.value = false; // Close sidebar on mobile
-    };
-
-    const handleDeleteChat = async (chatId) => {
-      if (chats.value.length <= 1) return;
-
-      if (confirm('Delete this chat?')) {
-        await chatStore.deleteChat(chatId);
-      }
-    };
-
-    const handleChatSwitch = async (chatId) => {
-      await chatStore.setActiveChat(chatId);
-    };
-
     onUnmounted(() => {
       stopDotAnimation();
+      if (currentAudioUrl) {
+        URL.revokeObjectURL(currentAudioUrl);
+        currentAudioUrl = null;
+      }
+      audioPlayer.pause();
+      audioPlayer.src = "";
     });
+
+    onMounted(async () => {
+      await chatStore.initialize();
+      nextTick(scrollToBottom);
+    });
+
+    const clearChat = async () => {
+      await chatStore.clearAll();
+    };
+
+    const createChat = async () => {
+      await chatStore.createChat();
+      sidebarOpen.value = false; // Close sidebar on mobile
+      nextTick(scrollToBottom);
+    };
+
+    const deleteChat = async (chatId) => {
+      await chatStore.deleteChat(chatId);
+      nextTick(scrollToBottom);
+    };
+
+    const setActiveChat = async (chatId) => {
+      await chatStore.setActiveChat(chatId);
+      sidebarOpen.value = false; // Close sidebar on mobile
+      nextTick(scrollToBottom);
+    };
+
+    watch(
+      () => activeChatId.value,
+      () => {
+        nextTick(scrollToBottom);
+      }
+    );
 
     return {
       userPrompt,
       isLoading,
       isListening,
-      isRecording,
       isVoiceThinking,
-      isSpeaking,
       listeningDots,
-      chatHistory,
-      sendMessage,
-      formatBody,
-      historyContainer,
-      handleVoiceInput,
-      sidebarOpen,
+      isRecording,
+      isSpeaking,
+      isVoiceActive,
+      voiceStatusLabel,
+      voiceDots,
       chats,
       activeChatId,
-      handleNewChat,
-      handleDeleteChat,
-      handleChatSwitch,
-      formatChatTime
+      activeChat,
+      activeMessages,
+      sendMessage,
+      formatBody,
+      formatMessageText,
+      formatChatTime,
+      isImportantEmail,
+      historyContainer,
+      handleVoiceInput,
+      clearChat,
+      createChat,
+      deleteChat,
+      setActiveChat,
+      sidebarOpen,
     };
   },
 };
 </script>
 
 <style scoped>
+/* =========================================================
+   ComposeView (2nd UI)
+   - Uses MainApp theme variables (dark/light) automatically
+   - Keeps accent (#6c63ff)
+   ========================================================= */
+
 .compose-view {
+  --cv-primary: #6c63ff;
+  --cv-primary-light: rgba(108, 99, 255, 0.16);
+
+  --cv-app-bg: var(--app-bg, #f6f7f4);
+  --cv-content-bg: var(--content-bg, rgba(255, 255, 255, 0.9));
+  --cv-border: var(--border-color, rgba(17, 24, 39, 0.12));
+  --cv-border-light: var(--light-border-color, rgba(17, 24, 39, 0.08));
+  --cv-hover: var(--hover-bg, rgba(17, 24, 39, 0.05));
+  --cv-text: var(--text-primary, #1f2328);
+  --cv-text-2: var(--text-secondary, #667085);
+
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 0;
+  padding: 0 1.5rem 1.5rem 0;
+  font-family: "IBM Plex Sans", "Söhne", sans-serif;
+
+  background: radial-gradient(
+      circle at top right,
+      rgba(108, 99, 255, 0.14),
+      transparent 55%
+    ),
+    radial-gradient(
+      circle at bottom left,
+      rgba(17, 24, 39, 0.08),
+      transparent 45%
+    ),
+    var(--cv-app-bg);
 }
 
-/* Chat Split Layout */
+:global(.main-app.dark-theme) .compose-view {
+  background: radial-gradient(
+      circle at top right,
+      rgba(108, 99, 255, 0.22),
+      transparent 55%
+    ),
+    radial-gradient(
+      circle at bottom left,
+      rgba(255, 255, 255, 0.06),
+      transparent 45%
+    ),
+    var(--cv-app-bg);
+}
+
 .chat-split {
   display: flex;
+  gap: 12px;
   height: 100%;
-  position: relative;
+  min-height: 0;
 }
 
-/* ===== OVERLAY ===== */
-.chat-sidebar-overlay {
-  display: none;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.4);
-  z-index: 999;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-.chat-sidebar-overlay.visible {
-  display: block;
-  opacity: 1;
-}
-
-/* ===== CHAT SIDEBAR (Left) ===== */
 .chat-sidebar {
   width: 260px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%);
-  border-right: 1px solid #e0e6ed;
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
+  border: 1px solid var(--cv-border);
+  border-radius: 12px;
   overflow: hidden;
-  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.05);
-}
-
-.chat-sidebar-content {
+  background-color: var(--cv-content-bg);
   display: flex;
   flex-direction: column;
-  height: 100%;
+  min-height: 0;
 }
 
 .chat-sidebar-header {
-  padding: 1.25rem 1rem;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 12px;
+  border-bottom: none;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
+  justify-content: space-between;
+  background: var(--primary-color, #6c63ff);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--primary-color, #6c63ff) 20%, transparent);
 }
 
-.chat-sidebar-header h3 {
-  margin: 0;
-  font-size: 1.2rem;
+.chat-sidebar-title {
   font-weight: 700;
   color: white;
-  letter-spacing: 0.5px;
+  font-size: 1.1rem;
+  letter-spacing: 0.3px;
 }
 
-.btn-new-chat {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.5rem 0.9rem;
+.chat-new {
   background: rgba(255, 255, 255, 0.25);
   backdrop-filter: blur(10px);
   color: white;
   border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 6px 12px;
   border-radius: 8px;
   cursor: pointer;
   font-size: 0.85rem;
   font-weight: 600;
-  transition: all 0.2s;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s;
 }
 
-.btn-new-chat:hover {
+.chat-new:hover {
   background: rgba(255, 255, 255, 0.35);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-.btn-new-chat .material-symbols-outlined {
-  font-size: 18px;
-}
-
-/* Chat List */
 .chat-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0.5rem;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  background: var(--cv-content-bg, #ffffff);
 }
 
 .chat-list-item {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.85rem;
-  margin-bottom: 0.4rem;
+  gap: 8px;
+  padding: 10px 12px;
   border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-  position: relative;
   border: 1px solid transparent;
+  background: transparent;
+  color: var(--cv-text);
+  cursor: pointer;
+  text-align: left;
+  min-height: 56px;
+  box-sizing: border-box;
+  transition: all 0.2s;
 }
 
 .chat-list-item:hover {
-  background: linear-gradient(135deg, #f8f9ff 0%, #f0f2ff 100%);
-  border-color: #e0e6ff;
+  background: var(--hover-bg, #f5f5f5);
+  border-color: color-mix(in srgb, var(--primary-color, #6c63ff) 30%, transparent);
   transform: translateX(2px);
-  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.08);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--primary-color, #6c63ff) 8%, transparent);
 }
 
 .chat-list-item.active {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-color: #667eea;
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  background: var(--primary-color, #6c63ff);
+  border-color: var(--primary-color, #6c63ff);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--primary-color, #6c63ff) 30%, transparent);
 }
 
 .chat-list-item-content {
   flex: 1;
-  overflow: hidden;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .chat-list-item-title {
   font-size: 0.9rem;
   font-weight: 600;
-  color: #2d3748;
-  white-space: nowrap;
+  line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 0.25rem;
+  white-space: nowrap;
+  color: var(--cv-text);
   transition: color 0.2s;
 }
 
@@ -946,7 +1034,7 @@ export default {
 
 .chat-list-item-time {
   font-size: 0.75rem;
-  color: #718096;
+  color: var(--cv-text-2);
   transition: color 0.2s;
 }
 
@@ -954,191 +1042,117 @@ export default {
   color: rgba(255, 255, 255, 0.85);
 }
 
-.chat-delete-btn {
+.chat-delete {
   width: 28px;
   height: 28px;
-  border-radius: 50%;
   border: none;
+  border-radius: 50%;
   background: transparent;
-  color: #a0aec0;
-  font-size: 1.5rem;
-  line-height: 1;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text-secondary, #a0aec0);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
   transition: all 0.2s;
-  flex-shrink: 0;
+  opacity: 0.7;
 }
 
-.chat-list-item:hover .chat-delete-btn {
+.chat-list-item:hover .chat-delete {
   opacity: 1;
 }
 
-.chat-list-item.active .chat-delete-btn {
-  color: rgba(255, 255, 255, 0.8);
-  opacity: 1;
-}
-
-.chat-delete-btn:hover {
-  background: rgba(239, 68, 68, 0.15);
+.chat-delete:hover {
+  background: color-mix(in srgb, #ef4444 15%, transparent);
   color: #ef4444;
   transform: scale(1.1);
 }
 
-.chat-list-item.active .chat-delete-btn:hover {
+.chat-list-item.active .chat-delete {
+  color: rgba(255, 255, 255, 0.8);
+  opacity: 1;
+}
+
+.chat-list-item.active .chat-delete:hover {
   background: rgba(255, 255, 255, 0.2);
   color: white;
 }
 
-.chat-list-empty {
-  text-align: center;
-  padding: 2rem 1rem;
-  color: var(--text-secondary, #666);
-}
-
-.btn-create-first {
-  margin-top: 1rem;
-  padding: 0.5rem 1rem;
-  background: var(--primary-color, #6c63ff);
-  color: white;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-
-/* ===== CHAT MAIN (Right) ===== */
 .chat-main {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-}
-
-.btn-toggle-sidebar {
-  display: none; /* Hidden on desktop */
+  min-width: 0;
+  min-height: 0;
 }
 
 .chat-container {
   display: flex;
   flex-direction: column;
   flex-grow: 1;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border: 1px solid var(--cv-border);
+  border-radius: 18px;
   overflow: hidden;
-  background-color: var(--content-bg);
-  margin: 0 1.5rem 1.5rem 0;
+  background: color-mix(in srgb, var(--cv-content-bg) 78%, transparent);
+  backdrop-filter: blur(12px);
+  height: 100%;
 }
 
-/* Scrollable messages */
 .chat-history {
   flex-grow: 1;
-  padding: 1rem 1rem 0.75rem;
+  padding: 1.75rem 1.5rem 1rem;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
-/* Message bubbles */
 .message {
-  max-width: 70%;
-  padding: 10px 14px;
-  border-radius: 18px;
-  line-height: 1.5;
-  font-size: 0.95rem;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  max-width: 760px;
+  width: fit-content;
+  padding: 0;
+  border-radius: 16px;
+  line-height: 1.55;
+  font-size: 0.96rem;
+  box-shadow: none;
   word-wrap: break-word;
 }
 
 .user-message {
   align-self: flex-end;
-  background-color: var(--primary-color);
+  background-color: var(--cv-primary);
   color: #fff;
-  border-bottom-right-radius: 4px;
+  padding: 10px 14px;
+  border-bottom-right-radius: 6px;
 }
 
 .ai-message {
   align-self: flex-start;
-  background-color: var(--hover-bg);
-  color: var(--text-primary);
-  border: 1px solid var(--light-border-color);
-  border-bottom-left-radius: 4px;
+  background-color: transparent;
+  color: var(--cv-text);
+  border: none;
+  border-bottom-left-radius: 6px;
 }
 
 .message-text {
   margin: 0;
-}
-
-/* Email cards */
-.emails-list {
-  margin-top: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-}
-
-.email-block {
-  background: #ffffff;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  padding: 10px 12px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  text-align: left;
-  color: #333;
-}
-
-.email-header {
-  font-weight: 600;
-  color: var(--primary-color);
-  border-bottom: 1px solid #eee;
-  padding-bottom: 4px;
-  margin-bottom: 6px;
-  font-size: 0.88rem;
-}
-
-.email-field {
-  margin-bottom: 4px;
-  font-size: 0.88rem;
-  line-height: 1.4;
-}
-
-.email-separator {
-  height: 1px;
-  background: #eee;
-  margin: 6px 0;
-}
-
-.label-badge {
-  background-color: #e3f2fd;
-  color: #1976d2;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 0.8rem;
-  font-weight: 500;
-}
-
-.email-important {
-  color: #d32f2f;
-  background-color: #ffebee;
-  padding: 3px 6px;
-  border-radius: 4px;
   display: inline-block;
+  padding: 10px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--cv-border-light);
+  background: rgba(17, 24, 39, 0.04);
+  color: var(--cv-text);
 }
 
-.email-body-content {
-  background: #f9f9f9;
-  padding: 7px;
-  border-radius: 4px;
-  margin-top: 4px;
-  font-family: "Courier New", Courier, monospace;
-  font-size: 0.84rem;
-  white-space: pre-wrap;
-  color: #444;
+:global(.main-app.dark-theme) .compose-view .message-text {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.user-message .message-text {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
 }
 
 /* Loading dots */
@@ -1165,13 +1179,12 @@ export default {
   }
 }
 
-/* Bottom input area */
 .chat-input-area {
   padding: 0.75rem 1rem 1rem;
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--cv-border);
   display: flex;
   align-items: center;
-  background-color: var(--content-bg);
+  background-color: var(--cv-content-bg);
 }
 
 .input-wrapper {
@@ -1182,17 +1195,17 @@ export default {
 .input-wrapper input {
   width: 100%;
   padding: 10px 90px 10px 14px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--cv-border);
   border-radius: 999px;
   font-size: 0.96rem;
-  background-color: var(--content-bg);
-  color: var(--text-primary);
+  background-color: var(--cv-content-bg);
+  color: var(--cv-text);
   outline: none;
 }
 
 .input-wrapper input:focus {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 2px rgba(124, 77, 255, 0.15);
+  border-color: var(--cv-primary);
+  box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.18);
 }
 
 .inner-send,
@@ -1209,13 +1222,317 @@ export default {
   justify-content: center;
 }
 
-/* Voice Overlay - Full Screen */
+.inner-send {
+  right: 50px;
+  color: var(--cv-primary);
+}
+
+.inner-voice {
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-color: var(--cv-primary);
+  color: #fff;
+}
+
+.inner-voice.listening-active {
+  background-color: var(--cv-primary);
+  color: #fff;
+  box-shadow: 0 0 0 4px rgba(108, 99, 255, 0.2);
+}
+
+.inner-voice:disabled,
+.inner-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mic-icon.material-symbols-outlined {
+  font-size: 20px;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+/* Voice inline */
+.voice-inline {
+  align-self: flex-start;
+  background: rgba(17, 24, 39, 0.06);
+  border: 1px solid rgba(17, 24, 39, 0.1);
+  padding: 10px 14px;
+  border-radius: 14px;
+  max-width: 320px;
+}
+
+:global(.main-app.dark-theme) .compose-view .voice-inline {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--cv-border);
+}
+
+.voice-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--cv-text);
+}
+
+.voice-inline-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--cv-primary);
+  box-shadow: 0 0 0 6px rgba(108, 99, 255, 0.12);
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+.voice-inline-wave {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+  height: 18px;
+}
+
+.voice-inline-wave span {
+  width: 4px;
+  height: 100%;
+  background: rgba(108, 99, 255, 0.8);
+  border-radius: 999px;
+  animation: voice-wave 1s ease-in-out infinite;
+}
+
+.voice-inline-wave span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.voice-inline-wave span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+.voice-inline-wave span:nth-child(4) {
+  animation-delay: 0.45s;
+}
+.voice-inline-wave span:nth-child(5) {
+  animation-delay: 0.6s;
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+}
+
+@keyframes voice-wave {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* Voice bar */
+.voice-bar {
+  width: 100%;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--cv-border);
+  background: var(--cv-content-bg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 12px;
+  gap: 12px;
+}
+
+.voice-bar.recording {
+  border-color: rgba(108, 99, 255, 0.55);
+  box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.18);
+}
+
+.voice-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+}
+
+.voice-pill-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cv-text) 55%, transparent);
+}
+
+.voice-pill-dot.live {
+  background: var(--cv-primary);
+  box-shadow: 0 0 0 6px rgba(108, 99, 255, 0.18);
+  animation: voice-dot-pulse 1.35s ease-in-out infinite;
+}
+
+@keyframes voice-dot-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(108, 99, 255, 0.12);
+  }
+  50% {
+    transform: scale(1.16);
+    box-shadow: 0 0 0 9px rgba(108, 99, 255, 0.16);
+  }
+}
+
+.voice-pill-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.voice-pill-title {
+  font-weight: 650;
+  font-size: 0.92rem;
+  color: var(--cv-text);
+}
+
+.voice-pill-sub {
+  margin-top: 2px;
+  font-size: 0.78rem;
+  color: var(--cv-text-2);
+}
+
+.voice-bar-wave {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 18px;
+  min-width: 110px;
+  padding-right: 4px;
+}
+
+.voice-bar-wave span {
+  width: 3px;
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(108, 99, 255, 0.78);
+  transform-origin: bottom;
+  transform: scaleY(0.22);
+  opacity: 0.85;
+  animation-name: voice-pulse-bar;
+  animation-timing-function: cubic-bezier(0.2, 0.7, 0.2, 1);
+  animation-iteration-count: infinite;
+}
+
+.voice-bar-wave span:nth-child(1) {
+  animation-delay: 0s;
+  animation-duration: 1.05s;
+}
+.voice-bar-wave span:nth-child(2) {
+  animation-delay: 0.18s;
+  animation-duration: 1.32s;
+}
+.voice-bar-wave span:nth-child(3) {
+  animation-delay: 0.07s;
+  animation-duration: 0.92s;
+}
+.voice-bar-wave span:nth-child(4) {
+  animation-delay: 0.26s;
+  animation-duration: 1.44s;
+}
+.voice-bar-wave span:nth-child(5) {
+  animation-delay: 0.12s;
+  animation-duration: 1.1s;
+}
+.voice-bar-wave span:nth-child(6) {
+  animation-delay: 0.33s;
+  animation-duration: 1.58s;
+}
+.voice-bar-wave span:nth-child(7) {
+  animation-delay: 0.09s;
+  animation-duration: 0.98s;
+}
+.voice-bar-wave span:nth-child(8) {
+  animation-delay: 0.21s;
+  animation-duration: 1.26s;
+}
+.voice-bar-wave span:nth-child(9) {
+  animation-delay: 0.04s;
+  animation-duration: 1.38s;
+}
+.voice-bar-wave span:nth-child(10) {
+  animation-delay: 0.29s;
+  animation-duration: 1.62s;
+}
+
+.voice-bar:not(.recording) .voice-bar-wave span {
+  opacity: 0.45;
+  transform: scaleY(0.18);
+  animation-play-state: paused;
+}
+
+@keyframes voice-pulse-bar {
+  0% {
+    transform: scaleY(0.18);
+    opacity: 0.55;
+  }
+  18% {
+    transform: scaleY(0.85);
+    opacity: 0.95;
+  }
+  38% {
+    transform: scaleY(0.28);
+    opacity: 0.7;
+  }
+  56% {
+    transform: scaleY(0.68);
+    opacity: 0.92;
+  }
+  78% {
+    transform: scaleY(0.24);
+    opacity: 0.68;
+  }
+  100% {
+    transform: scaleY(0.18);
+    opacity: 0.55;
+  }
+}
+
+.voice-bar-stop {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  background: var(--cv-primary);
+  color: #fff;
+  flex: 0 0 auto;
+}
+
+.voice-bar-stop.active {
+  background: rgba(220, 38, 38, 0.95);
+}
+
+.voice-bar-stop:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Overlay (from 1st file) */
 .voice-overlay {
   position: fixed;
   inset: 0;
   background: radial-gradient(
       circle at top,
-      rgba(16, 163, 127, 0.25),
+      rgba(108, 99, 255, 0.25),
       transparent 60%
     ),
     rgba(9, 11, 13, 0.9);
@@ -1241,10 +1558,10 @@ export default {
   border-radius: 50%;
   background: radial-gradient(
     circle,
-    rgba(16, 163, 127, 1),
-    rgba(16, 163, 127, 0.65)
+    rgba(108, 99, 255, 1),
+    rgba(108, 99, 255, 0.65)
   );
-  box-shadow: 0 0 24px rgba(16, 163, 127, 0.55);
+  box-shadow: 0 0 24px rgba(108, 99, 255, 0.55);
   animation: orb-core 1.6s ease-in-out infinite;
 }
 
@@ -1253,36 +1570,31 @@ export default {
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  border: 2px solid rgba(16, 163, 127, 0.35);
+  border: 2px solid rgba(108, 99, 255, 0.35);
   animation: orb-ring 2.4s ease-out infinite;
 }
 
 .voice-orb-ring.ring-2 {
   animation-delay: 0.5s;
 }
-
 .voice-orb-ring.ring-3 {
   animation-delay: 1s;
 }
 
 .voice-overlay-label {
   color: #f3f4f6;
-  font-size: 1.5rem;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  margin-top: 8px;
-  text-align: center;
+  font-size: 1rem;
+  letter-spacing: 0.3px;
 }
 
 .voice-overlay-stop {
   background: transparent;
   color: #f3f4f6;
   border: 1px solid rgba(255, 255, 255, 0.3);
-  padding: 10px 24px;
+  padding: 8px 18px;
   border-radius: 999px;
   cursor: pointer;
   font-weight: 600;
-  font-size: 1rem;
   transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
@@ -1312,127 +1624,25 @@ export default {
   }
 }
 
-/* Voice Inline Thinking Badge */
-.voice-inline {
-  align-self: flex-start;
-  background: rgba(17, 24, 39, 0.06);
-  border: 1px solid rgba(17, 24, 39, 0.1);
-  padding: 10px 14px;
-  border-radius: 14px;
-  max-width: 320px;
-}
-
-.voice-inline-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.voice-inline-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #10a37f;
-  box-shadow: 0 0 0 6px rgba(16, 163, 127, 0.12);
-  animation: voice-pulse 1.2s ease-in-out infinite;
-}
-
-.voice-inline-label {
-  font-size: 0.95rem;
-  font-weight: 500;
-}
-
-.voice-inline-wave {
-  display: flex;
-  gap: 4px;
-  margin-top: 8px;
-  height: 18px;
-  align-items: flex-end;
-}
-
-.voice-inline-wave span {
-  width: 4px;
-  height: 100%;
-  background: rgba(16, 163, 127, 0.8);
-  border-radius: 999px;
-  animation: voice-wave 1s ease-in-out infinite;
-}
-
-.voice-inline-wave span:nth-child(2) {
-  animation-delay: 0.15s;
-}
-
-.voice-inline-wave span:nth-child(3) {
-  animation-delay: 0.3s;
-}
-
-.voice-inline-wave span:nth-child(4) {
-  animation-delay: 0.45s;
-}
-
-.voice-inline-wave span:nth-child(5) {
-  animation-delay: 0.6s;
-}
-
-@keyframes voice-pulse {
-  0%, 100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.15);
-  }
-}
-
-@keyframes voice-wave {
-  0%, 100% {
-    transform: scaleY(0.35);
-  }
-  50% {
-    transform: scaleY(1);
-  }
-}
-
-.inner-voice.listening-active {
-  background-color: #10a37f;
-  color: #fff;
-  box-shadow: 0 0 0 4px rgba(16, 163, 127, 0.2);
-}
-
-.inner-send {
-  right: 50px;
-  color: var(--primary-color);
-}
-
-.inner-voice {
-  right: 10px;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background-color: var(--primary-color);
-  color: #fff;
-}
-
-.inner-voice:disabled,
-.inner-send:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.mic-icon.material-symbols-outlined {
-  font-size: 20px;
-  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
-}
-
 /* ===== MOBILE RESPONSIVE ===== */
+.hamburger-btn {
+  display: none; /* Hidden on desktop */
+}
+
+.sidebar-overlay {
+  display: none;
+}
+
 @media (max-width: 768px) {
-  .chat-split {
-    flex-direction: row;
+  .compose-view {
+    padding: 0;
   }
 
-  /* Sidebar: Full-screen overlay on mobile */
+  .chat-split {
+    gap: 0;
+  }
+
+  /* Hide sidebar by default on mobile */
   .chat-sidebar {
     position: fixed;
     left: 0;
@@ -1443,18 +1653,27 @@ export default {
     z-index: 1000;
     transform: translateX(-100%);
     transition: transform 0.3s ease;
-    box-shadow: 4px 0 24px rgba(102, 126, 234, 0.15);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.15);
   }
 
-  .chat-sidebar.open {
+  .chat-sidebar.mobile-open {
     transform: translateX(0);
   }
 
-  /* Show hamburger button on mobile */
-  .btn-toggle-sidebar {
+  /* Overlay */
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+  }
+
+  /* Show hamburger button */
+  .hamburger-btn {
     display: flex;
     position: absolute;
-    top: 1rem;
+    top: 5rem;
     left: 1rem;
     z-index: 10;
     width: 48px;
@@ -1470,27 +1689,80 @@ export default {
     transition: all 0.2s;
   }
 
-  .btn-toggle-sidebar:active {
+  .hamburger-btn:active {
     transform: scale(0.95);
   }
 
-  .btn-toggle-sidebar .material-symbols-outlined {
+  .hamburger-btn .material-symbols-outlined {
     font-size: 24px;
   }
 
+  /* Full width chat main */
   .chat-main {
     width: 100%;
-    flex: 1;
   }
 
   .chat-container {
-    margin: 0;
     border-radius: 0;
-    border: none;
+    border-left: none;
+    border-right: none;
+  }
+
+  .chat-history {
+    padding: 1rem 0.75rem;
+    padding-bottom: 2rem;
   }
 
   .message {
-    max-width: 85%;
+    max-width: 90%;
+  }
+
+  /* Mobile keyboard fix - keep input visible */
+  .chat-input-area {
+    position: sticky;
+    bottom: 0;
+    padding: 0.75rem 0.75rem;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    background-color: var(--cv-content-bg);
+    z-index: 10;
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08);
+  }
+
+  .voice-bar {
+    padding: 0 8px;
+  }
+
+  .voice-pill-text {
+    font-size: 0.85rem;
+  }
+
+  .voice-bar-wave {
+    min-width: 80px;
+  }
+
+  /* Mobile chat list optimizations */
+  .chat-list {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .chat-list-item {
+    min-height: 64px;
+    padding: 12px 14px;
+  }
+
+  .chat-list-item-title {
+    font-size: 0.95rem;
+  }
+
+  .chat-list-item-time {
+    font-size: 0.8rem;
+  }
+
+  .chat-delete {
+    opacity: 1;
+    width: 32px;
+    height: 32px;
   }
 }
 
@@ -1499,20 +1771,41 @@ export default {
     width: 90%;
   }
 
-  .btn-toggle-sidebar {
-    top: 0.75rem;
-    left: 0.75rem;
-    width: 40px;
-    height: 40px;
+  .hamburger-btn {
+    width: 42px;
+    height: 42px;
   }
 
   .chat-history {
-    padding: 0.75rem;
+    padding: 0.75rem 0.5rem;
+    padding-bottom: 2.5rem;
+  }
+
+  /* Enhanced keyboard fix for small devices */
+  .chat-input-area {
+    padding: 0.5rem;
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
   }
 
   .message {
     font-size: 0.9rem;
-    max-width: 90%;
+  }
+
+  .voice-pill-title {
+    font-size: 0.85rem;
+  }
+
+  .voice-pill-sub {
+    font-size: 0.7rem;
+  }
+
+  .chat-list-item {
+    min-height: 60px;
+    padding: 10px 12px;
+  }
+
+  .chat-list-item-title {
+    font-size: 0.88rem;
   }
 }
 </style>

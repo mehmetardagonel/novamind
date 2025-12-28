@@ -1,331 +1,324 @@
-import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import apiClient from '@/api/client'
+import { computed, ref } from 'vue'
 import { useAuthStore } from './auth'
 
-export const useChatStore = defineStore('chat', () => {
-  const authStore = useAuthStore()
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001'
+const normalizedBase = API_BASE_URL.endsWith('/') ? API_BASE_URL.slice(0, -1) : API_BASE_URL
+const CHAT_API_URL = `${normalizedBase}/chat/sessions`
 
-  // State
+function newId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function makeTitle(text) {
+  const trimmed = (text || '').trim()
+  if (!trimmed) return 'New chat'
+  return trimmed.length > 40 ? `${trimmed.slice(0, 40)}...` : trimmed
+}
+
+export const useChatStore = defineStore('chat', () => {
   const chats = ref([])
   const activeChatId = ref(null)
   const isLoading = ref(false)
   const isInitialized = ref(false)
 
-  // Computed
-  const activeChat = computed(() => {
-    return chats.value.find((c) => c.id === activeChatId.value) || null
-  })
+  const activeChat = computed(() => chats.value.find((c) => c.id === activeChatId.value) || null)
 
-  // Initialize - load chats from database
-  const initialize = async () => {
-    if (isInitialized.value) return
-
-    try {
-      if (authStore.isAuthenticated) {
-        await loadFromDatabase()
-      }
-
-      // Create first chat if none exist
-      if (chats.value.length === 0) {
-        await createChat()
-      }
-
-      // Load messages for active chat
-      if (activeChat.value && !activeChat.value.messages) {
-        await loadChatMessages(activeChat.value.id)
-      }
-
-      isInitialized.value = true
-    } catch (error) {
-      console.error('Failed to initialize chat store:', error)
-      // Create a fallback local chat
-      await createLocalChat()
-      isInitialized.value = true
+  // Get auth headers for API calls
+  const getHeaders = () => {
+    const authStore = useAuthStore()
+    return {
+      'Content-Type': 'application/json',
+      'X-User-Id': authStore.user?.id || ''
     }
   }
 
-  // Load all chats from database
+  // Load all chat sessions from database
   const loadFromDatabase = async () => {
+    if (isLoading.value) return false
+    isLoading.value = true
+
     try {
-      const response = await apiClient.get('/chat/sessions', {
-        headers: { 'X-User-Id': authStore.user?.id }
+      const response = await fetch(CHAT_API_URL, {
+        method: 'GET',
+        headers: getHeaders()
       })
 
-      const sessionsData = response.data
-
-      if (Array.isArray(sessionsData) && sessionsData.length > 0) {
-        chats.value = sessionsData.map(session => ({
-          id: session.id,
-          title: session.title || 'New chat',
-          sessionId: session.backend_session_id || null,
-          messages: null, // Lazy loaded
-          createdAt: session.created_at,
-          updatedAt: session.updated_at
-        }))
-
-        // Set first chat as active
-        if (!activeChatId.value && chats.value.length > 0) {
-          activeChatId.value = chats.value[0].id
-        }
+      if (!response.ok) {
+        console.error('Failed to load chat sessions:', response.status)
+        return false
       }
-    } catch (error) {
-      console.error('Failed to load chats from database:', error)
-      throw error
+
+      const sessions = await response.json()
+
+      // Convert API format to local format
+      chats.value = sessions.map(s => ({
+        id: s.id,
+        title: s.title,
+        sessionId: s.backend_session_id, // Backend ChatService session ID
+        messages: [], // Will be loaded on demand
+        createdAt: s.created_at,
+        updatedAt: s.updated_at
+      }))
+
+      // Set active chat to first one if exists
+      if (chats.value.length > 0 && !activeChatId.value) {
+        activeChatId.value = chats.value[0].id
+      }
+
+      isInitialized.value = true
+      return true
+    } catch (e) {
+      console.error('[chat store] loadFromDatabase failed:', e)
+      return false
+    } finally {
+      isLoading.value = false
     }
   }
 
-  // Load messages for a specific chat
+  // Load messages for a specific chat session
   const loadChatMessages = async (chatId) => {
-    const chat = chats.value.find(c => c.id === chatId)
-    if (!chat) return
-
-    // Already loaded
-    if (chat.messages) return
-
     try {
-      const response = await apiClient.get(`/chat/sessions/${chatId}`, {
-        headers: { 'X-User-Id': authStore.user?.id }
+      const response = await fetch(`${CHAT_API_URL}/${chatId}`, {
+        method: 'GET',
+        headers: getHeaders()
       })
 
-      const sessionData = response.data
+      if (!response.ok) {
+        console.error('Failed to load chat messages:', response.status)
+        return false
+      }
 
-      if (sessionData.messages && Array.isArray(sessionData.messages)) {
-        chat.messages = sessionData.messages.map(msg => ({
-          role: msg.role,
-          text: msg.text,
-          emails: msg.emails || null
+      const sessionData = await response.json()
+      const chat = chats.value.find(c => c.id === chatId)
+
+      if (chat) {
+        // Convert API messages to local format
+        chat.messages = sessionData.messages.map(m => ({
+          role: m.role,
+          text: m.text,
+          emails: m.emails
         }))
-      } else {
-        // No messages yet, add welcome message
-        chat.messages = [{
+        chat.sessionId = sessionData.backend_session_id
+      }
+
+      return true
+    } catch (e) {
+      console.error('[chat store] loadChatMessages failed:', e)
+      return false
+    }
+  }
+
+  // Create a new chat session in database
+  const createChat = async () => {
+    const tempId = newId()
+    const now = new Date().toISOString()
+
+    // Add optimistically with welcome message
+    const newChat = {
+      id: tempId,
+      title: 'New chat',
+      sessionId: null,
+      messages: [
+        {
           role: 'bot',
           text: 'Hello! How can I help you manage your emails today?',
           emails: null
-        }]
-      }
-    } catch (error) {
-      console.error('Failed to load chat messages:', error)
-      // Fallback to welcome message
-      chat.messages = [{
-        role: 'bot',
-        text: 'Hello! How can I help you manage your emails today?',
-        emails: null
-      }]
-    }
-  }
-
-  // Create new chat
-  const createChat = async () => {
-    const newChat = {
-      id: `chat_${Date.now()}`,
-      title: 'New chat',
-      sessionId: null,
-      messages: [{
-        role: 'bot',
-        text: 'Hello! How can I help you manage your emails today?',
-        emails: null
-      }],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }
-
-    // Add to state immediately (optimistic update)
-    chats.value.unshift(newChat)
-    activeChatId.value = newChat.id
-
-    // Save to database if authenticated
-    if (authStore.isAuthenticated) {
-      try {
-        const response = await apiClient.post('/chat/sessions', {
-          title: newChat.title
-        }, {
-          headers: { 'X-User-Id': authStore.user?.id }
-        })
-
-        // Update with server ID
-        const chat = chats.value.find(c => c.id === newChat.id)
-        if (chat && response.data.id) {
-          chat.id = response.data.id
-          activeChatId.value = response.data.id
         }
-      } catch (error) {
-        console.error('Failed to save chat to database:', error)
-        // Keep local chat even if DB fails
+      ],
+      createdAt: now,
+      updatedAt: now
+    }
+
+    chats.value = [newChat, ...chats.value]
+    activeChatId.value = tempId
+
+    try {
+      // Create in database
+      const response = await fetch(CHAT_API_URL, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ title: 'New chat' })
+      })
+
+      if (response.ok) {
+        const created = await response.json()
+        // Update local chat with real ID
+        newChat.id = created.id
+        newChat.createdAt = created.created_at
+        newChat.updatedAt = created.updated_at
+        activeChatId.value = created.id
+
+        // Add welcome message to database
+        await addMessageToDatabase(created.id, {
+          role: 'bot',
+          text: 'Hello! How can I help you manage your emails today?',
+          emails: null
+        })
       }
+    } catch (e) {
+      console.error('[chat store] createChat API call failed:', e)
+      // Keep local chat even if API fails
     }
 
     return newChat
   }
 
-  // Create local-only chat (fallback)
-  const createLocalChat = async () => {
-    const newChat = {
-      id: `local_${Date.now()}`,
-      title: 'New chat',
-      sessionId: null,
-      messages: [{
-        role: 'bot',
-        text: 'Hello! How can I help you manage your emails today?',
-        emails: null
-      }],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+  // Add message to database (async, don't block UI)
+  const addMessageToDatabase = async (chatId, message) => {
+    try {
+      await fetch(`${CHAT_API_URL}/${chatId}/messages`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          role: message.role,
+          text: message.text,
+          emails: message.emails
+        })
+      })
+    } catch (e) {
+      console.error('[chat store] addMessageToDatabase failed:', e)
     }
-
-    chats.value.push(newChat)
-    activeChatId.value = newChat.id
-    return newChat
   }
 
-  // Delete chat
+  // Delete a chat session
   const deleteChat = async (chatId) => {
-    const index = chats.value.findIndex(c => c.id === chatId)
-    if (index === -1) return
+    const wasActive = activeChatId.value === chatId
+    const remaining = chats.value.filter((c) => c.id !== chatId)
+    chats.value = remaining
 
-    // Remove from state immediately
-    chats.value.splice(index, 1)
-
-    // Delete from database if authenticated and not local chat
-    if (authStore.isAuthenticated && !chatId.startsWith('local_')) {
-      try {
-        await apiClient.delete(`/chat/sessions/${chatId}`, {
-          headers: { 'X-User-Id': authStore.user?.id }
-        })
-      } catch (error) {
-        console.error('Failed to delete chat from database:', error)
-      }
+    // Try to delete from database
+    try {
+      await fetch(`${CHAT_API_URL}/${chatId}`, {
+        method: 'DELETE',
+        headers: getHeaders()
+      })
+    } catch (e) {
+      console.error('[chat store] deleteChat API call failed:', e)
     }
 
-    // If deleted active chat, switch to another
-    if (activeChatId.value === chatId) {
-      if (chats.value.length > 0) {
-        activeChatId.value = chats.value[0].id
-        if (!chats.value[0].messages) {
-          await loadChatMessages(chats.value[0].id)
-        }
-      } else {
-        // Create new chat if deleted the last one
-        await createChat()
-      }
+    // Always create a new chat if the active chat was deleted
+    if (wasActive) {
+      await createChat()
+      return
     }
   }
 
-  // Set active chat
+  // Set active chat and load its messages if needed
   const setActiveChat = async (chatId) => {
-    const chat = chats.value.find(c => c.id === chatId)
-    if (!chat) return
+    if (chatId === activeChatId.value) return
+    if (!chats.value.some((c) => c.id === chatId)) return
 
     activeChatId.value = chatId
 
-    // Lazy load messages if not loaded
-    if (!chat.messages) {
+    // Load messages if not loaded yet
+    const chat = chats.value.find(c => c.id === chatId)
+    if (chat && chat.messages.length === 0) {
       await loadChatMessages(chatId)
     }
   }
 
-  // Append message to chat
-  const appendMessage = async (chatId, message) => {
-    const chat = chats.value.find(c => c.id === chatId)
+  // Append message locally and save to database
+  const appendMessage = (chatId, message) => {
+    const chat = chats.value.find((c) => c.id === chatId)
     if (!chat) return
 
-    // Ensure messages array exists
-    if (!chat.messages) {
-      chat.messages = []
-    }
-
-    // Add message immediately (optimistic)
     chat.messages.push(message)
     chat.updatedAt = new Date().toISOString()
 
-    // Auto-generate title from first user message
+    // Update title if first user message
     if (message.role === 'user' && chat.title === 'New chat') {
-      const title = message.text.substring(0, 40) + (message.text.length > 40 ? '...' : '')
-      chat.title = title
-
-      if (authStore.isAuthenticated && !chatId.startsWith('local_')) {
-        updateSessionTitle(chatId, title)
-      }
+      chat.title = makeTitle(message.text)
+      // Update title in database
+      updateSessionTitle(chatId, chat.title)
     }
 
-    // Save to database if authenticated
-    if (authStore.isAuthenticated && !chatId.startsWith('local_')) {
-      addMessageToDatabase(chatId, message)
-    }
+    // Save message to database (async, don't block)
+    addMessageToDatabase(chatId, message)
   }
 
-  // Add message to database (non-blocking)
-  const addMessageToDatabase = async (chatId, message) => {
-    try {
-      await apiClient.post(`/chat/sessions/${chatId}/messages`, {
-        role: message.role,
-        text: message.text,
-        emails: message.emails
-      }, {
-        headers: { 'X-User-Id': authStore.user?.id }
-      })
-    } catch (error) {
-      console.error('Failed to save message to database:', error)
-      // Continue anyway - message is already in local state
-    }
-  }
-
-  // Update session title
+  // Update session title in database
   const updateSessionTitle = async (chatId, title) => {
     try {
-      await apiClient.patch(`/chat/sessions/${chatId}`, {
-        title
-      }, {
-        headers: { 'X-User-Id': authStore.user?.id }
+      await fetch(`${CHAT_API_URL}/${chatId}`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({ title })
       })
-    } catch (error) {
-      console.error('Failed to update session title:', error)
+    } catch (e) {
+      console.error('[chat store] updateSessionTitle failed:', e)
     }
   }
 
   // Set backend session ID
   const setSessionId = async (chatId, sessionId) => {
-    const chat = chats.value.find(c => c.id === chatId)
+    const chat = chats.value.find((c) => c.id === chatId)
     if (!chat) return
 
     chat.sessionId = sessionId
+    chat.updatedAt = new Date().toISOString()
 
-    if (authStore.isAuthenticated && !chatId.startsWith('local_')) {
-      try {
-        await apiClient.patch(`/chat/sessions/${chatId}`, {
-          backend_session_id: sessionId
-        }, {
-          headers: { 'X-User-Id': authStore.user?.id }
-        })
-      } catch (error) {
-        console.error('Failed to update session ID:', error)
-      }
+    // Update in database
+    try {
+      await fetch(`${CHAT_API_URL}/${chatId}`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({ backend_session_id: sessionId })
+      })
+    } catch (e) {
+      console.error('[chat store] setSessionId API call failed:', e)
     }
   }
 
   // Clear all chats
   const clearAll = async () => {
-    const chatIds = [...chats.value.map(c => c.id)]
-
-    for (const chatId of chatIds) {
-      await deleteChat(chatId)
+    // Delete all chats from database
+    for (const chat of chats.value) {
+      try {
+        await fetch(`${CHAT_API_URL}/${chat.id}`, {
+          method: 'DELETE',
+          headers: getHeaders()
+        })
+      } catch (e) {
+        console.error('[chat store] clearAll delete failed:', e)
+      }
     }
 
-    // Create fresh chat
+    chats.value = []
+    activeChatId.value = null
     await createChat()
   }
 
+  // Initialize store
+  const initialize = async () => {
+    if (isInitialized.value) return
+
+    const authStore = useAuthStore()
+    if (!authStore.user?.id) {
+      console.warn('[chat store] No user ID, skipping database load')
+      // Create a local chat if no user
+      await createChat()
+      return
+    }
+
+    const loaded = await loadFromDatabase()
+
+    if (!loaded || chats.value.length === 0) {
+      // No chats found, create first one
+      await createChat()
+    } else if (activeChatId.value) {
+      // Load messages for active chat
+      await loadChatMessages(activeChatId.value)
+    }
+  }
+
   return {
-    // State
     chats,
     activeChatId,
+    activeChat,
     isLoading,
     isInitialized,
-
-    // Computed
-    activeChat,
-
-    // Actions
     initialize,
     loadFromDatabase,
     loadChatMessages,
@@ -334,7 +327,6 @@ export const useChatStore = defineStore('chat', () => {
     setActiveChat,
     appendMessage,
     setSessionId,
-    updateSessionTitle,
     clearAll
   }
 })

@@ -1,51 +1,53 @@
 <template>
   <div class="main-app" :class="themeClass">
-    <!-- Mobile overlay -->
-    <div class="sidebar-overlay" :class="{ active: isSidebarOpen }" @click="toggleSidebar"></div>
+    <!-- Overlay for mobile sidebar -->
+    <div
+      v-if="isSidebarOpen"
+      class="sidebar-overlay"
+      @click="toggleSidebar"
+    ></div>
 
-    <div class="sidebar" :class="{ open: isSidebarOpen }">
-      <div class="sidebar-top">
-        <div class="sidebar-header">
-          <div class="logo-icon-container">
-            <div class="logo-svg novamind-logo">
-              <svg
-                fill="none"
-                viewBox="0 0 48 48"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
-                  fill="currentColor"
-                ></path>
-              </svg>
-            </div>
+    <div class="sidebar" :class="{ 'mobile-visible': isSidebarOpen }">
+      <div class="sidebar-header">
+        <div class="logo-icon-container">
+          <div class="logo-svg novamind-logo">
+            <svg
+              fill="none"
+              viewBox="0 0 48 48"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
+                fill="currentColor"
+              ></path>
+            </svg>
           </div>
-          <h2>Novamind.AI</h2>
         </div>
-        <p class="welcome-text">Welcome Back!</p>
-
-        <button class="compose-button" @click="goToCompose">
-          <span class="material-symbols-outlined">smart_toy</span>
-          AI Assistant
-        </button>
+        <h2>Novamind.AI</h2>
       </div>
+      <p class="welcome-text">Welcome Back!</p>
 
-      <div class="sidebar-nav-wrapper">
-        <SidebarNav />
-      </div>
+      <button class="compose-button" @click="goToAssistant">
+        <span class="material-symbols-outlined">smart_toy</span>
+        AI Assistant
+      </button>
 
-      <div class="sidebar-bottom">
-        <button class="logout-button" @click="exitApp">
-          <span class="material-symbols-outlined">logout</span>
-          Logout
-        </button>
-      </div>
+      <SidebarNav />
+
+      <button class="logout-button" @click="exitApp">
+        <span class="material-symbols-outlined">logout</span>
+        Logout
+      </button>
     </div>
 
     <div class="main-content">
       <div class="main-header">
-        <!-- Mobile hamburger menu -->
-        <button class="hamburger-menu" @click="toggleSidebar">
+        <!-- Hamburger Menu Button (mobile only) -->
+        <button
+          class="hamburger-menu-btn"
+          @click="toggleSidebar"
+          title="Toggle Menu"
+        >
           <span class="material-symbols-outlined">menu</span>
         </button>
 
@@ -53,11 +55,10 @@
 
         <!-- Account Selector (only show on inbox) -->
         <div v-if="isInboxView" class="account-selector">
-          <span class="material-symbols-outlined selector-icon">account_circle</span>
-          <select
-            v-model="selectedAccountId"
-            class="account-dropdown"
+          <span class="material-symbols-outlined selector-icon"
+            >account_circle</span
           >
+          <select v-model="selectedAccountId" class="account-dropdown">
             <option :value="null">All Accounts</option>
             <option
               v-for="account in accounts"
@@ -89,11 +90,11 @@
 
 <script>
 import { useAuthStore } from "../stores/auth";
+import { useAccountsStore } from "../stores/accounts";
 import { onMounted, computed, ref } from "vue";
+import { storeToRefs } from "pinia";
 import { useRouter, useRoute } from "vue-router";
 import SidebarNav from "../components/SidebarNav.vue";
-import { fetchEmailAccounts } from "../api/accounts";
-
 export default {
   name: "MainApp",
   components: {
@@ -101,10 +102,11 @@ export default {
   },
   setup() {
     const authStore = useAuthStore();
+    const accountsStore = useAccountsStore();
+    const { accounts } = storeToRefs(accountsStore);
     const router = useRouter();
     const route = useRoute();
     const isDarkTheme = ref(false);
-    const accounts = ref([]);
     const selectedAccountId = ref(null);
     const isSidebarOpen = ref(false);
 
@@ -123,7 +125,7 @@ export default {
 
     // Check if we're on inbox view
     const isInboxView = computed(() => {
-      return route.path.includes('/email/inbox') || route.path === '/app';
+      return route.path.includes("/email/inbox") || route.path === "/app";
     });
 
     onMounted(async () => {
@@ -134,12 +136,8 @@ export default {
         return;
       }
 
-      // Load email accounts for account selector (Gmail + Outlook)
-      try {
-        accounts.value = await fetchEmailAccounts();
-      } catch (error) {
-        console.error("Failed to load email accounts:", error);
-      }
+      // Load email accounts for account selector
+      await accountsStore.fetchAccounts();
 
       // Check if user just completed OAuth
       const storedPath = sessionStorage.getItem("oauth_redirect_path");
@@ -163,6 +161,7 @@ export default {
 
         sessionStorage.removeItem("chat_history");
         sessionStorage.removeItem("chat_session_id");
+        sessionStorage.removeItem("novamind_chat_v1");
         // Redirect to login page
         router.push("/login");
 
@@ -175,16 +174,18 @@ export default {
       }
     };
 
-    const goToCompose = () => {
-      router.push("/app/compose");
+    const goToAssistant = () => {
+      router.push("/app/assistant");
     };
 
     // NEW: Computed property for the header title
     const currentPageTitle = computed(() => {
       const path = route.path;
 
-      if (path.startsWith("/app/compose")) {
+      if (path.startsWith("/app/assistant")) {
         return "AI Email Assistant";
+      } else if (path.startsWith("/app/compose")) {
+        return "Compose";
       } else if (path.includes("/email/inbox")) {
         const labelName = route.query.labelName;
         if (labelName) {
@@ -209,6 +210,8 @@ export default {
         return "Trash";
       } else if (path.includes("/email/labels")) {
         return "Labels";
+      } else if (path.includes("/accounts")) {
+        return "Accounts";
       }
       // Fallback for an email detail view (e.g., /app/email/inbox/123)
       else if (path.match(/\/email\/\w+\/\d+/)) {
@@ -225,7 +228,7 @@ export default {
 
     return {
       exitApp,
-      goToCompose,
+      goToAssistant,
       currentPageTitle, // Expose the new title to the template
       isDarkTheme,
       toggleTheme,
@@ -284,6 +287,7 @@ export default {
   /* --- Typography Palette (DARK MODE) --- */
   --text-primary: #f0f0f0; /* White/light grey for main text */
   --text-secondary: #aaaaaa; /* Medium grey for secondary text */
+  --primary-color-light: rgba(108, 99, 255, 0.18);
 }
 
 /* * SIDEBAR */
@@ -296,47 +300,7 @@ export default {
   flex-direction: column;
   border-right: 1px solid var(--border-color);
   z-index: 10;
-  height: 100vh;
-  overflow: hidden;
-}
-
-.sidebar-top {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
   gap: 1rem;
-}
-
-.sidebar-nav-wrapper {
-  flex: 1;
-  overflow-y: auto;
-  margin: 0.5rem 0 0 0;
-  min-height: 0;
-}
-
-/* Scrollbar styling for sidebar nav */
-.sidebar-nav-wrapper::-webkit-scrollbar {
-  width: 6px;
-}
-
-.sidebar-nav-wrapper::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.sidebar-nav-wrapper::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 3px;
-}
-
-.sidebar-nav-wrapper::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
-}
-
-.sidebar-bottom {
-  flex-shrink: 0;
-  padding-top: 0.5rem;
-  margin-top: 0.5rem;
-  border-top: 1px solid var(--border-color);
 }
 
 /* * SIDEBAR HEADER (was .user-info) */
@@ -417,6 +381,7 @@ export default {
 
 /* * LOGOUT BUTTON */
 .logout-button {
+  margin-top: auto;
   background-color: transparent;
   border: none;
   box-shadow: none;
@@ -500,6 +465,7 @@ export default {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  margin-left: auto;
   margin-right: 1rem;
 }
 
@@ -521,8 +487,7 @@ export default {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.5rem center;
-  min-width: 150px;
-  max-width: 200px;
+  min-width: 200px;
 }
 
 .account-dropdown:hover {
@@ -545,107 +510,90 @@ export default {
 /* * CONTENT VIEW WRAPPER */
 .content-view-wrapper {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: hidden;
   /* Removed the conditional padding logic as the header is now always present */
 }
 
-/* * HAMBURGER MENU BUTTON */
-.hamburger-menu {
-  display: none; /* Hidden by default on desktop */
-  background: transparent;
+/* * HAMBURGER MENU & MOBILE SIDEBAR */
+.hamburger-menu-btn {
+  display: none; /* Hidden on desktop */
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
   border: none;
-  color: var(--text-primary);
-  cursor: pointer;
-  padding: 8px;
+  background-color: transparent;
   border-radius: 8px;
-  transition: background 0.2s;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background-color 0.2s ease;
 }
 
-.hamburger-menu:hover {
+.hamburger-menu-btn:hover {
   background-color: var(--hover-bg);
 }
 
-.hamburger-menu .material-symbols-outlined {
+.hamburger-menu-btn .material-symbols-outlined {
   font-size: 24px;
 }
 
-/* * SIDEBAR OVERLAY (for mobile) */
+/* Sidebar overlay for mobile */
 .sidebar-overlay {
   display: none;
   position: fixed;
   top: 0;
   left: 0;
-  width: 100%;
-  height: 100%;
+  right: 0;
+  bottom: 0;
   background-color: rgba(0, 0, 0, 0.5);
   z-index: 998;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.3s ease;
 }
 
-.sidebar-overlay.active {
-  display: block;
-  opacity: 1;
-  pointer-events: auto;
-}
+/* Mobile styles */
+@media (max-width: 768px) {
+  .hamburger-menu-btn {
+    display: flex; /* Show on mobile */
+  }
 
-/* ========== RESPONSIVE DESIGN - MOBILE & TABLET ========== */
-
-/* Tablet and below (≤1024px) */
-@media (max-width: 1024px) {
   .sidebar {
     position: fixed;
+    left: 0;
     top: 0;
-    left: -250px; /* Hidden by default */
-    height: 100vh;
+    bottom: 0;
+    width: 280px;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
     z-index: 999;
-    transition: left 0.3s ease;
     box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
   }
 
-  .sidebar.open {
-    left: 0; /* Slide in when open */
+  .sidebar.mobile-visible {
+    transform: translateX(0);
   }
 
-  .hamburger-menu {
-    display: flex; /* Show hamburger on tablet/mobile */
-    align-items: center;
-    justify-content: center;
+  .sidebar-overlay {
+    display: block;
   }
 
-  .main-header h1 {
-    font-size: 1.4rem;
+  .main-content {
+    width: 100%;
   }
 
-  .account-selector {
-    margin-right: 0.5rem;
-  }
-
-  .account-dropdown {
-    min-width: 150px;
-    font-size: 0.85rem;
-  }
-}
-
-/* Mobile (≤768px) */
-@media (max-width: 768px) {
   .main-header {
     padding: 1rem;
     gap: 0.5rem;
   }
 
   .main-header h1 {
-    font-size: 1.2rem;
-    flex-shrink: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-size: 1.25rem;
+    flex-grow: 0;
   }
 
-  /* Make account selector smaller on mobile */
   .account-selector {
+    display: flex; /* Show on mobile */
+    margin-left: 0;
     margin-right: 0.5rem;
+    flex-shrink: 0;
   }
 
   .selector-icon {
@@ -653,63 +601,11 @@ export default {
   }
 
   .account-dropdown {
-    padding: 0.4rem 1.5rem 0.4rem 0.6rem;
-    font-size: 0.8rem;
-    min-width: 120px;
+    min-width: auto;
     max-width: 150px;
-  }
-
-  .theme-toggle-btn {
-    padding: 6px;
-  }
-
-  /* Adjust sidebar width for mobile */
-  .sidebar {
-    width: 280px;
-    left: -280px;
-  }
-
-  .sidebar-header h2 {
-    font-size: 1.3rem;
-  }
-
-  .compose-button {
-    padding: 10px;
-    font-size: 14px;
-  }
-
-  .nav-buttons button {
-    padding: 12px 16px;
-    font-size: 15px;
-  }
-}
-
-/* Small Mobile (≤480px) */
-@media (max-width: 480px) {
-  .sidebar {
-    width: 85%; /* Use percentage for very small screens */
-    max-width: 280px;
-    left: -100%;
-  }
-
-  .main-header h1 {
-    font-size: 1.1rem;
-  }
-
-  /* Further reduce account dropdown on very small screens */
-  .account-dropdown {
-    padding: 0.35rem 1.2rem 0.35rem 0.5rem;
-    font-size: 0.75rem;
-    min-width: 100px;
-    max-width: 120px;
-  }
-
-  .hamburger-menu .material-symbols-outlined {
-    font-size: 22px;
-  }
-
-  .theme-toggle-btn .material-symbols-outlined {
-    font-size: 20px;
+    font-size: 0.8rem;
+    padding: 0.4rem 1.5rem 0.4rem 0.5rem;
+    background-position: right 0.3rem center;
   }
 }
 </style>

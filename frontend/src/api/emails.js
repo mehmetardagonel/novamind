@@ -15,15 +15,15 @@ async function resolveUserId(explicitUserId) {
     const { data, error } = await supabase.auth.getUser();
 
     if (error) {
-      console.warn("[emails.js] Supabase getUser error:", error);
-      return "default-user";
+      throw error;
     }
 
     const userId = data?.user?.id;
-    return userId || "default-user";
+    if (!userId) throw new Error("No Supabase user id");
+    return userId;
   } catch (e) {
-    console.warn("[emails.js] Supabase getUser threw:", e);
-    return "default-user";
+    console.warn("[emails.js] Supabase getUser failed:", e);
+    throw e;
   }
 }
 
@@ -113,6 +113,7 @@ export const fetchEmails = async (folder = "inbox", userId, filters = {}) => {
     // Allow both true and false for unread
     if (filters.unread !== undefined)
       params.append("unread", String(filters.unread));
+    if (filters.cursor) params.append("cursor", filters.cursor);
 
     if (filters.labels && filters.labels.length > 0) {
       filters.labels.forEach((label) => params.append("labels", label));
@@ -209,6 +210,7 @@ export const fetchUnifiedEmails = async (userId, accountId = null, filters = {},
   if (filters.labels && filters.labels.length > 0) {
     filters.labels.forEach((label) => params.append("labels", label));
   }
+  if (filters.cursor) params.append("cursor", filters.cursor);
   if (filters.newer_than_days != null) {
     params.append("newer_than_days", String(filters.newer_than_days));
   }
@@ -245,6 +247,16 @@ export const deleteEmail = async (messageId, userId) => {
   return res.data;
 };
 
+export const deleteDraft = async (draftId, userId, accountId = null) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const headers = { "X-User-Id": resolvedUserId };
+  if (accountId) headers["X-Account-Id"] = accountId;
+  const res = await apiClient.delete(`/emails/drafts/${draftId}`, {
+    headers,
+  });
+  return res.data;
+};
+
 export const restoreEmail = async (messageId, userId) => {
   const resolvedUserId = await resolveUserId(userId);
   const res = await apiClient.post(
@@ -264,6 +276,67 @@ export const setEmailStar = async (messageId, starred, userId) => {
     starred, // ✅ send true/false directly
     {
       headers: { "X-User-Id": resolvedUserId },
+    }
+  );
+  return res.data;
+};
+
+export const sendEmail = async (
+  { to, subject, body, accountId = null, provider = "gmail" },
+  userId
+) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const payload = { to, subject, body };
+
+  if (provider === "outlook") {
+    const res = await apiClient.post("/outlook/send", payload, {
+      headers: {
+        "X-User-Id": resolvedUserId,
+        "X-Account-Id": accountId,
+      },
+    });
+    return res.data;
+  }
+
+  const res = await apiClient.post("/send-email", payload, {
+    headers: {
+      "X-User-Id": resolvedUserId,
+      ...(accountId ? { "X-Account-Id": accountId } : {}),
+    },
+  });
+  return res.data;
+};
+
+export const updateDraft = async (
+  draftId,
+  { to, cc, bcc, subject, body },
+  userId,
+  accountId = null
+) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const headers = { "X-User-Id": resolvedUserId };
+  if (accountId) headers["X-Account-Id"] = accountId;
+  const res = await apiClient.patch(
+    `/emails/drafts/${draftId}`,
+    { to, cc, bcc, subject, body },
+    { headers }
+  );
+  return res.data;
+};
+
+export const saveDraft = async (
+  { to, subject, body, accountId = null },
+  userId
+) => {
+  const resolvedUserId = await resolveUserId(userId);
+  const res = await apiClient.post(
+    "/emails/drafts",
+    { to, subject, body },
+    {
+      headers: {
+        "X-User-Id": resolvedUserId,
+        ...(accountId ? { "X-Account-Id": accountId } : {}),
+      },
     }
   );
   return res.data;
@@ -300,6 +373,23 @@ export const searchBySender = (sender, userId) =>
 export const searchBySubject = (subject, userId) =>
   fetchEmails("inbox", userId, { subject_contains: subject });
 
+/**
+ * ============================================================
+ *   EMAIL SEARCH (Gmail + Outlook Unified)
+ * ============================================================
+ */
+
+/**
+ * Search emails across Gmail and Outlook accounts using Gmail search operators.
+ *
+ * @param {string} query - Search query with Gmail operators (e.g., "from:google subject:jobs is:unread")
+ * @param {string} userId - User ID (optional, will be resolved from Supabase if not provided)
+ * @param {Object} options - Search options
+ * @param {string} options.provider - "gmail" or "outlook" (optional - searches both if not specified)
+ * @param {string} options.accountId - Specific account ID to search (optional)
+ * @param {number} options.maxResults - Maximum results to return (default: 50)
+ * @returns {Promise<Object>} Search results with emails array and metadata
+ */
 export const searchEmails = async (query, userId, options = {}) => {
   const resolvedUserId = await resolveUserId(userId);
 
@@ -383,8 +473,12 @@ export default {
   getTrashEmails,
   fetchUnifiedEmails,
   deleteEmail,
+  deleteDraft,
   restoreEmail,
   setEmailStar,
+  sendEmail,
+  updateDraft,
+  saveDraft,
   getTodayEmails,
   getUnreadEmails,
   getEmailsByLabel,

@@ -9,21 +9,33 @@ export const useEmailCacheStore = defineStore("emailCache", () => {
   const inFlight = new Map();
   let isInitialized = false;
 
+  let loadPromise = null;
+
   // Load cached data from persistent storage
   async function loadFromStorage() {
-    if (isInitialized) return;
+    // If already initialized, return immediately (synchronous)
+    if (isInitialized) return Promise.resolve();
 
-    try {
-      const { value } = await Preferences.get({ key: STORAGE_KEY });
-      if (value) {
-        const stored = JSON.parse(value);
-        Object.assign(entries, stored);
+    // If currently loading, return the existing promise
+    if (loadPromise) return loadPromise;
+
+    // Start loading
+    loadPromise = (async () => {
+      try {
+        const { value } = await Preferences.get({ key: STORAGE_KEY });
+        if (value) {
+          const stored = JSON.parse(value);
+          Object.assign(entries, stored);
+        }
+      } catch (error) {
+        console.warn("[emailCache] Failed to load from storage:", error);
       }
-    } catch (error) {
-      console.warn("[emailCache] Failed to load from storage:", error);
-    }
 
-    isInitialized = true;
+      isInitialized = true;
+      loadPromise = null;
+    })();
+
+    return loadPromise;
   }
 
   // Save current cache to persistent storage
