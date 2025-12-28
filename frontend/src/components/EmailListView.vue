@@ -470,10 +470,14 @@ export default {
         const isStarred = Array.isArray(labels) && labels.includes("STARRED");
         const isUnread = Array.isArray(labels) && labels.includes("UNREAD");
 
+        // If in important folder, override ml_prediction to show as IMPORTANT
+        const ml_prediction = props.folder === 'important' ? 'important' : email.ml_prediction;
+
         return {
           ...email,
           isStarred,
           isUnread,
+          ml_prediction,
         };
       });
     };
