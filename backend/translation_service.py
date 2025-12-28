@@ -6,13 +6,18 @@ Uses googletrans for translation and langdetect for language detection.
 Implements in-memory caching to avoid repeated API calls.
 """
 
+import asyncio
 import hashlib
 import logging
+import concurrent.futures
 from typing import Dict, Optional
 from googletrans import Translator
 from langdetect import detect, LangDetectException
 
 logger = logging.getLogger(__name__)
+
+# Thread pool for running async translations in sync context
+_translation_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="translator")
 
 
 class TranslationService:
@@ -20,7 +25,8 @@ class TranslationService:
 
     def __init__(self):
         """Initialize translation service with caching"""
-        self.translator = Translator()
+        # Note: We create fresh Translator instances per-thread in _run_async_translation
+        # to avoid httpx client conflicts between threads
         self.cache = {}  # In-memory cache: {content_hash: translated_text}
         logger.info("✅ Translation Service initialized")
 
@@ -54,6 +60,31 @@ class TranslationService:
             logger.error(f"Unexpected error in language detection: {e}")
             return 'en'
 
+    def _run_async_translation(self, text: str, source_lang: str) -> str:
+        """
+        Run async translation in a new event loop (for use in thread).
+
+        Args:
+            text: Text to translate
+            source_lang: Source language code
+
+        Returns:
+            Translated text or raises exception
+        """
+        async def do_translate():
+            # Create a fresh translator for this thread to avoid httpx client issues
+            translator = Translator()
+            result = await translator.translate(text, src=source_lang, dest='en')
+            return result.text
+
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(do_translate())
+        finally:
+            loop.close()
+
     def translate_to_english(self, text: str, source_lang: str = 'tr') -> str:
         """
         Translate text to English with caching
@@ -68,25 +99,39 @@ class TranslationService:
         if not text or not text.strip():
             return text
 
+        # Truncate very long texts to avoid translation API issues
+        max_length = 5000
+        truncated_text = text[:max_length] if len(text) > max_length else text
+
         # Check cache first
-        cache_key = self._get_cache_key(text)
+        cache_key = self._get_cache_key(truncated_text)
         if cache_key in self.cache:
             logger.debug(f"Translation cache hit for text hash: {cache_key[:8]}...")
             return self.cache[cache_key]
 
         try:
-            # Translate using googletrans
-            translated = self.translator.translate(text, src=source_lang, dest='en')
-            translated_text = translated.text
+            # Run async translation in a separate thread to avoid event loop conflicts
+            # This is necessary because googletrans 4.x uses async httpx
+            future = _translation_executor.submit(
+                self._run_async_translation,
+                truncated_text,
+                source_lang
+            )
+            # Wait for translation with timeout
+            translated_text = future.result(timeout=10.0)
 
             # Cache the result
             self.cache[cache_key] = translated_text
-            logger.debug(f"Translated ({source_lang} → en): {text[:50]}... → {translated_text[:50]}...")
+            logger.debug(f"Translated ({source_lang} → en): {truncated_text[:50]}... → {translated_text[:50]}...")
 
             return translated_text
 
+        except concurrent.futures.TimeoutError:
+            logger.warning(f"Translation timed out for text: {truncated_text[:50]}...")
+            logger.warning("Falling back to original text")
+            return text
         except Exception as e:
-            logger.warning(f"Translation failed for text: {text[:50]}... Error: {e}")
+            logger.warning(f"Translation failed for text: {truncated_text[:50]}... Error: {e}")
             logger.warning("Falling back to original text")
             return text
 
